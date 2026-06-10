@@ -1,0 +1,66 @@
+from src.agents.testing.no_network import create_no_network_harness
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from src.agents.runner import create_agent_runner, run_agent
+from src.agents.core_types import create_agent, create_agent_run_request
+
+func run_tool_agent_example_impl() {
+	harness_result := create_no_network_harness({
+		"tool": {
+			"name": "echo_tool"
+		}
+	})
+	if harness_result["ok"] == false {
+		return {
+			"ok": false,
+			"requires_network": false,
+			"error": harness_result["error"]
+		}
+	}
+
+	harness := harness_result
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "mock-provider",
+			"model": "mock-model",
+			"output_text": "tool-agent-offline",
+			"status_code": 200,
+			"tool_calls": [
+				{
+					"name": "echo_tool",
+					"input": {
+						"content": "tool-example-content"
+					}
+				}
+			]
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "example-tool-agent",
+		"name": "Example Tool Agent"
+	})
+	run_request := create_agent_run_request("Use the tool", {
+		"run_id": "run-example-tool",
+		"session_id": "session-example-tool"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"tool_registry": harness["tool_registry"]
+	})
+
+	return {
+		"ok": true,
+		"requires_network": false,
+		"scenario": "tool_agent",
+		"result": result
+	}
+}
+
+export run_tool_agent_example := run_tool_agent_example_impl

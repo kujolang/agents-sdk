@@ -1,0 +1,434 @@
+from src.agents.errors import create_agent_error
+
+func dict_get_or(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_dict(value) {
+	if type(value) == "dict" {
+		return value
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func event_dedupe_key(event_payload) {
+	event_map := normalize_dict(event_payload)
+	request_id := normalize_string(dict_get_or(event_map, "request_id", ""), "")
+	attempt := to_string(dict_get_or(event_map, "attempt", ""))
+	status_code := to_string(dict_get_or(event_map, "status_code", ""))
+	error_code := normalize_string(dict_get_or(event_map, "error_code", ""), "")
+
+	return request_id + "|" + attempt + "|" + status_code + "|" + error_code
+}
+
+func safe_invoke_hook(hook_fn, event_payload) {
+	if type(hook_fn) != "function" {
+		return false
+	}
+
+	try {
+		hook_fn(event_payload)
+	} except err {
+		return false
+	}
+
+	return true
+}
+
+func build_hook_wrapper(adapter_hook, agent_hook, seen_map) {
+	return func(event_payload) {
+		key := event_dedupe_key(event_payload)
+		if has_key(seen_map, key) {
+			return {
+				"deduped": true,
+				"called_adapter": false,
+				"called_agent": false
+			}
+		}
+		seen_map[key] := true
+
+		called_adapter := safe_invoke_hook(adapter_hook, event_payload)
+		called_agent := safe_invoke_hook(agent_hook, event_payload)
+
+		return {
+			"deduped": false,
+			"called_adapter": called_adapter,
+			"called_agent": called_agent
+		}
+	}
+}
+
+func to_int_or(value, fallback) {
+	parsed := fallback
+	try {
+		parsed = to_int(to_string(value))
+	} except err {
+		return fallback
+	}
+	return parsed
+}
+
+func to_float_or(value, fallback) {
+	parsed := fallback
+	try {
+		parsed = to_float(to_string(value))
+	} except err {
+		return fallback
+	}
+	return parsed
+}
+
+func map_merge(base, overrides) {
+	base_map := normalize_dict(base)
+	override_map := normalize_dict(overrides)
+	result := {}
+	for key in keys(base_map) {
+		result[key] := base_map[key]
+	}
+	for key in keys(override_map) {
+		result[key] := override_map[key]
+	}
+	return result
+}
+
+func normalize_usage_payload(usage_input, ai_response) {
+	usage_map := normalize_dict(usage_input)
+
+	input_tokens := to_int_or(dict_get_or(usage_map, "input_tokens", dict_get_or(usage_map, "prompt_tokens", 0)), 0)
+	output_tokens := to_int_or(dict_get_or(usage_map, "output_tokens", dict_get_or(usage_map, "completion_tokens", 0)), 0)
+	total_tokens := to_int_or(dict_get_or(usage_map, "total_tokens", input_tokens + output_tokens), input_tokens + output_tokens)
+
+	estimated_cost_cents := to_float_or(dict_get_or(usage_map, "cost_cents", dict_get_or(ai_response, "estimated_cost_cents", 0.0)), 0.0)
+
+	return {
+		"input_tokens": input_tokens,
+		"output_tokens": output_tokens,
+		"total_tokens": total_tokens,
+		"cost_cents": estimated_cost_cents
+	}
+}
+
+func extract_usage_metrics_impl(model_result) {
+	result_map := normalize_dict(model_result)
+	usage_payload := normalize_usage_payload(dict_get_or(result_map, "usage", {}), normalize_dict(dict_get_or(result_map, "raw", {})))
+
+	return {
+		"input_tokens": dict_get_or(usage_payload, "input_tokens", 0),
+		"output_tokens": dict_get_or(usage_payload, "output_tokens", 0),
+		"total_tokens": dict_get_or(usage_payload, "total_tokens", 0),
+		"cost_cents": dict_get_or(usage_payload, "cost_cents", 0.0)
+	}
+}
+
+func normalize_agent_error_kind_from_ai(error_code) {
+	code := normalize_string(error_code, "internal_error")
+	if code == "model_error" {
+		return "model_error"
+	}
+	if code == "structured_output_invalid" {
+		return "structured_output_invalid"
+	}
+	if code == "timeout" || code == "deadline_exceeded" {
+		return "timeout"
+	}
+	if code == "request_budget_exceeded" || code == "governance_budget_exceeded" {
+		return "budget_exceeded"
+	}
+	if code == "invalid_request" {
+		return "invalid_request"
+	}
+	if code == "network_error" || code == "provider_error" || code == "auth_error" || code == "http_error" {
+		return "provider_error"
+	}
+	return "internal_error"
+}
+
+func create_ai_sdk_adapter_impl(options) {
+	options_map := normalize_dict(options)
+	return {
+		"type": "AiSdkAdapter",
+		"adapter_name": normalize_string(dict_get_or(options_map, "adapter_name", "ai_sdk"), "ai_sdk"),
+		"client": dict_get_or(options_map, "client", null),
+		"chat_completion_fn": dict_get_or(options_map, "chat_completion_fn", null),
+		"chat_completion_stream_fn": dict_get_or(options_map, "chat_completion_stream_fn", null),
+		"hooks": normalize_dict(dict_get_or(options_map, "hooks", {})),
+		"metadata": normalize_dict(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func build_observability_hooks_impl(adapter_hooks, agent_hooks) {
+	adapter_map := normalize_dict(adapter_hooks)
+	agent_map := normalize_dict(agent_hooks)
+
+	start_seen := {}
+	complete_seen := {}
+	retry_seen := {}
+
+	return {
+		"on_request_start": build_hook_wrapper(dict_get_or(adapter_map, "on_request_start", null), dict_get_or(agent_map, "on_request_start", null), start_seen),
+		"on_request_complete": build_hook_wrapper(dict_get_or(adapter_map, "on_request_complete", null), dict_get_or(agent_map, "on_request_complete", null), complete_seen),
+		"on_retry": build_hook_wrapper(dict_get_or(adapter_map, "on_retry", null), dict_get_or(agent_map, "on_retry", null), retry_seen)
+	}
+}
+
+func apply_observability_hooks_to_options_impl(request_options, adapter_hooks, agent_hooks) {
+	merged_options := map_merge({}, request_options)
+	merged_hooks := build_observability_hooks_impl(adapter_hooks, agent_hooks)
+	merged_options["on_request_start"] := dict_get_or(merged_hooks, "on_request_start", null)
+	merged_options["on_request_complete"] := dict_get_or(merged_hooks, "on_request_complete", null)
+	merged_options["on_retry"] := dict_get_or(merged_hooks, "on_retry", null)
+
+	return merged_options
+}
+
+func build_ai_request_options_impl(agent, run_options) {
+	agent_map := normalize_dict(agent)
+	base_options := normalize_dict(dict_get_or(agent_map, "model_policy", {}))
+	output_schema := dict_get_or(agent_map, "output_schema", null)
+	if type(output_schema) == "dict" {
+		base_options["structured_output_schema"] := output_schema
+	}
+
+	return map_merge(base_options, run_options)
+}
+
+func enforce_structured_output_contract(result_payload, request_options) {
+	result_map := normalize_dict(result_payload)
+	if dict_get_or(result_map, "ok", false) == false {
+		return result_map
+	}
+
+	options_map := normalize_dict(request_options)
+	schema := normalize_dict(dict_get_or(options_map, "structured_output_schema", null))
+	if len(keys(schema)) == 0 {
+		return result_map
+	}
+
+	raw_payload := normalize_dict(dict_get_or(result_map, "raw", {}))
+	structured_output := dict_get_or(raw_payload, "structured_output", null)
+	if type(structured_output) != "dict" {
+		error_payload := create_agent_error("structured_output_invalid", "Structured output schema was requested but structured output payload is missing.", {
+			"details": {
+				"schema_required": true
+			}
+		})
+		return {
+			"ok": false,
+			"provider": dict_get_or(result_map, "provider", ""),
+			"status_code": dict_get_or(result_map, "status_code", 0),
+			"error": error_payload,
+			"raw": raw_payload
+		}
+	}
+
+	required_fields := normalize_array(dict_get_or(schema, "required", []))
+	missing_fields := []
+	for field_name in required_fields {
+		if has_key(structured_output, field_name) == 0 {
+			missing_fields := push(missing_fields, field_name)
+		}
+	}
+
+	if len(missing_fields) > 0 {
+		error_payload := create_agent_error("structured_output_invalid", "Structured output is missing required schema fields.", {
+			"details": {
+				"missing_fields": missing_fields
+			}
+		})
+		return {
+			"ok": false,
+			"provider": dict_get_or(result_map, "provider", ""),
+			"status_code": dict_get_or(result_map, "status_code", 0),
+			"error": error_payload,
+			"raw": raw_payload
+		}
+	}
+
+	return result_map
+}
+
+func map_ai_response_impl(ai_response, request_options) {
+	if type(ai_response) != "dict" {
+		error_payload := create_agent_error("model_error", "Model adapter returned a non-dict response.", {
+			"details": {
+				"response_type": type(ai_response)
+			}
+		})
+		return {
+			"ok": false,
+			"error": error_payload,
+			"raw": ai_response
+		}
+	}
+
+	if dict_get_or(ai_response, "ok", false) {
+		usage_payload := normalize_usage_payload(dict_get_or(ai_response, "usage", {}), ai_response)
+		success_result := {
+			"ok": true,
+			"provider": normalize_string(dict_get_or(ai_response, "provider", ""), ""),
+			"request_id": normalize_string(dict_get_or(ai_response, "request_id", ""), ""),
+			"model": normalize_string(dict_get_or(ai_response, "model", ""), ""),
+			"output_text": normalize_string(dict_get_or(ai_response, "output_text", ""), ""),
+			"tool_calls": dict_get_or(ai_response, "tool_calls", []),
+			"usage": usage_payload,
+			"budget_usage": extract_usage_metrics_impl({
+				"usage": usage_payload,
+				"raw": ai_response
+			}),
+			"status_code": dict_get_or(ai_response, "status_code", 0),
+			"emitted_events": dict_get_or(ai_response, "emitted_events", []),
+			"raw": ai_response
+		}
+		return enforce_structured_output_contract(success_result, request_options)
+	}
+
+	ai_error := normalize_dict(dict_get_or(ai_response, "error", {}))
+	ai_error_code := normalize_string(dict_get_or(ai_error, "code", "internal_error"), "internal_error")
+	agent_error_kind := normalize_agent_error_kind_from_ai(ai_error_code)
+	error_payload := create_agent_error(agent_error_kind, normalize_string(dict_get_or(ai_error, "message", "Model request failed."), "Model request failed."), {
+		"retryable": dict_get_or(ai_error, "retryable", false),
+		"status_code": dict_get_or(ai_response, "status_code", 0),
+		"details": {
+			"provider": dict_get_or(ai_response, "provider", ""),
+			"provider_error_code": ai_error_code
+		}
+	})
+
+	return {
+		"ok": false,
+		"provider": normalize_string(dict_get_or(ai_response, "provider", ""), ""),
+		"status_code": dict_get_or(ai_response, "status_code", 0),
+		"error": error_payload,
+		"raw": ai_response
+	}
+}
+
+func call_chat_impl(adapter, messages, request_options) {
+	adapter_map := normalize_dict(adapter)
+	chat_fn := dict_get_or(adapter_map, "chat_completion_fn", null)
+	if type(chat_fn) != "function" {
+		return {
+			"ok": false,
+			"error": create_agent_error("invalid_config", "chat_completion_fn is required on the AI SDK adapter.", {}),
+			"raw": {}
+		}
+	}
+
+	client := dict_get_or(adapter_map, "client", null)
+	adapter_hooks := normalize_dict(dict_get_or(adapter_map, "hooks", {}))
+	agent_hooks := normalize_dict(dict_get_or(normalize_dict(request_options), "hooks", {}))
+	request_options_with_hooks := apply_observability_hooks_to_options_impl(request_options, adapter_hooks, agent_hooks)
+	response := {}
+	try {
+		response = chat_fn(client, messages, request_options_with_hooks)
+	} except err {
+		return {
+			"ok": false,
+			"error": create_agent_error("model_error", "chat_completion_fn raised an exception.", {
+				"details": {
+					"error": to_string(err)
+				}
+			}),
+			"raw": {
+				"exception": to_string(err)
+			}
+		}
+	}
+
+	return map_ai_response_impl(response, request_options)
+}
+
+func call_chat_stream_impl(adapter, messages, request_options, on_event) {
+	adapter_map := normalize_dict(adapter)
+	stream_fn := dict_get_or(adapter_map, "chat_completion_stream_fn", null)
+	if type(stream_fn) != "function" {
+		return {
+			"ok": false,
+			"error": create_agent_error("invalid_config", "chat_completion_stream_fn is required on the AI SDK adapter.", {}),
+			"raw": {}
+		}
+	}
+
+	event_handler := on_event
+	if type(event_handler) != "function" {
+		event_handler = func(event) {
+			return
+		}
+	}
+
+	client := dict_get_or(adapter_map, "client", null)
+	adapter_hooks := normalize_dict(dict_get_or(adapter_map, "hooks", {}))
+	agent_hooks := normalize_dict(dict_get_or(normalize_dict(request_options), "hooks", {}))
+	request_options_with_hooks := apply_observability_hooks_to_options_impl(request_options, adapter_hooks, agent_hooks)
+	response := {}
+	try {
+		response = stream_fn(client, messages, request_options_with_hooks, event_handler)
+	} except err {
+		return {
+			"ok": false,
+			"error": create_agent_error("model_error", "chat_completion_stream_fn raised an exception.", {
+				"details": {
+					"error": to_string(err)
+				}
+			}),
+			"raw": {
+				"exception": to_string(err)
+			}
+		}
+	}
+
+	return map_ai_response_impl(response, request_options)
+}
+
+func describe_ai_adapter_module_impl() {
+	return {
+		"module": "agents.ai.adapter",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_ai_sdk_adapter",
+			"build_ai_request_options",
+			"to_agent_model_result",
+			"extract_usage_metrics",
+			"enforce_structured_output_contract",
+			"build_observability_hooks",
+			"apply_observability_hooks_to_options",
+			"call_chat",
+			"call_chat_stream"
+		]
+	}
+}
+
+export create_ai_sdk_adapter := create_ai_sdk_adapter_impl
+export build_ai_request_options := build_ai_request_options_impl
+export to_agent_model_result := map_ai_response_impl
+export extract_usage_metrics := extract_usage_metrics_impl
+export enforce_structured_output_contract := enforce_structured_output_contract
+export build_observability_hooks := build_observability_hooks_impl
+export apply_observability_hooks_to_options := apply_observability_hooks_to_options_impl
+export call_chat := call_chat_impl
+export call_chat_stream := call_chat_stream_impl
+export describe_ai_adapter_module := describe_ai_adapter_module_impl

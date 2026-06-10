@@ -1,0 +1,271 @@
+from src.agents.runtime.clock_ids import create_runtime_services, next_runtime_id, runtime_now_iso
+
+func dict_get_or(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	if type(value) == "dict" {
+		return value
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned := {}
+		for key in keys(source) {
+			cloned[key] := clone_value(source[key])
+		}
+		return cloned
+	}
+
+	if type(value) == "array" {
+		cloned := []
+		for item in value {
+			cloned = push(cloned, clone_value(item))
+		}
+		return cloned
+	}
+
+	return value
+}
+
+func array_contains(values_input, expected) {
+	values := normalize_array(values_input)
+	for value in values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func stream_event_kind_values_impl() {
+	return [
+		"model_delta",
+		"tool_call_requested",
+		"tool_call_started",
+		"tool_call_completed",
+		"tool_call_failed",
+		"approval_required",
+		"approval_resolved",
+		"handoff_started",
+		"handoff_completed",
+		"handoff_failed",
+		"artifact_created",
+		"guardrail_blocked",
+		"run_terminal"
+	]
+}
+
+func stream_required_fields_impl() {
+	return [
+		"type",
+		"event_id",
+		"kind",
+		"run_id",
+		"agent_id",
+		"session_id",
+		"step_id",
+		"timestamp",
+		"sequence",
+		"payload",
+		"metadata"
+	]
+}
+
+func create_agent_stream_event_impl(kind_input, payload_input, options) {
+	options_map := normalize_dict(options)
+	payload := normalize_dict(payload_input)
+	runtime_services := dict_get_or(options_map, "runtime_services", create_runtime_services({}))
+
+	kind := normalize_string(kind_input, "model_delta")
+	if array_contains(stream_event_kind_values_impl(), kind) == false {
+		payload["requested_kind"] := kind
+		kind = "model_delta"
+	}
+
+	event_id := normalize_string(dict_get_or(options_map, "event_id", ""), "")
+	if event_id == "" {
+		id_result := next_runtime_id(runtime_services, "sev")
+		event_id = normalize_string(dict_get_or(id_result, "id", "sev-0"), "sev-0")
+		runtime_services = dict_get_or(id_result, "runtime_services", runtime_services)
+	}
+
+	return {
+		"type": "AgentStreamEvent",
+		"event_id": event_id,
+		"kind": kind,
+		"run_id": normalize_string(dict_get_or(options_map, "run_id", ""), ""),
+		"agent_id": normalize_string(dict_get_or(options_map, "agent_id", ""), ""),
+		"session_id": normalize_string(dict_get_or(options_map, "session_id", ""), ""),
+		"step_id": normalize_string(dict_get_or(options_map, "step_id", ""), ""),
+		"timestamp": normalize_string(dict_get_or(options_map, "timestamp", ""), runtime_now_iso(runtime_services)),
+		"sequence": normalize_non_negative_int(dict_get_or(options_map, "sequence", 0), 0),
+		"payload": payload,
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {})),
+		"runtime_services": runtime_services
+	}
+}
+
+func validate_stream_event_shape_impl(event_input) {
+	event_map := normalize_dict(event_input)
+	errors := []
+
+	for field_name in stream_required_fields_impl() {
+		if has_key(event_map, field_name) == 0 {
+			errors = push(errors, {
+				"field": field_name,
+				"message": "Missing required stream event field."
+			})
+		}
+	}
+
+	kind := normalize_string(dict_get_or(event_map, "kind", ""), "")
+	if kind == "" || array_contains(stream_event_kind_values_impl(), kind) == false {
+		errors = push(errors, {
+			"field": "kind",
+			"message": "Stream event kind must be supported."
+		})
+	}
+
+	return {
+		"ok": len(errors) == 0,
+		"errors": errors
+	}
+}
+
+func map_stream_kind_from_ai_event(ai_event_input) {
+	ai_event := normalize_dict(ai_event_input)
+	event_type := normalize_string(dict_get_or(ai_event, "type", ""), "")
+
+	if event_type == "delta" || event_type == "token" || event_type == "text_delta" {
+		return "model_delta"
+	}
+	if event_type == "tool_call_requested" {
+		return "tool_call_requested"
+	}
+	if event_type == "tool_call_started" {
+		return "tool_call_started"
+	}
+	if event_type == "tool_call_completed" {
+		return "tool_call_completed"
+	}
+	if event_type == "tool_call_failed" {
+		return "tool_call_failed"
+	}
+	if event_type == "approval_required" {
+		return "approval_required"
+	}
+	if event_type == "approval_resolved" || event_type == "approval_approved" || event_type == "approval_denied" {
+		return "approval_resolved"
+	}
+	if event_type == "handoff_started" {
+		return "handoff_started"
+	}
+	if event_type == "handoff_completed" {
+		return "handoff_completed"
+	}
+	if event_type == "handoff_failed" {
+		return "handoff_failed"
+	}
+	if event_type == "artifact_created" {
+		return "artifact_created"
+	}
+	if event_type == "guardrail_blocked" {
+		return "guardrail_blocked"
+	}
+	if event_type == "done" || event_type == "completed" || event_type == "final" {
+		return "run_terminal"
+	}
+
+	return "model_delta"
+}
+
+func map_ai_sdk_stream_event_impl(ai_event_input, context_input) {
+	ai_event := normalize_dict(ai_event_input)
+	context := normalize_dict(context_input)
+	kind := map_stream_kind_from_ai_event(ai_event)
+	payload := clone_value(ai_event)
+
+	if kind == "model_delta" {
+		delta_text := normalize_string(dict_get_or(ai_event, "delta", dict_get_or(ai_event, "text", "")), "")
+		payload = {
+			"delta": delta_text,
+			"raw_event": clone_value(ai_event)
+		}
+	}
+
+	if kind == "run_terminal" {
+		payload = {
+			"finish_reason": normalize_string(dict_get_or(ai_event, "finish_reason", dict_get_or(ai_event, "reason", "stream_done")), "stream_done"),
+			"raw_event": clone_value(ai_event)
+		}
+	}
+
+	return create_agent_stream_event_impl(kind, payload, {
+		"run_id": normalize_string(dict_get_or(context, "run_id", ""), ""),
+		"agent_id": normalize_string(dict_get_or(context, "agent_id", ""), ""),
+		"session_id": normalize_string(dict_get_or(context, "session_id", ""), ""),
+		"step_id": normalize_string(dict_get_or(context, "step_id", ""), ""),
+		"sequence": normalize_non_negative_int(dict_get_or(context, "sequence", 0), 0),
+		"runtime_services": dict_get_or(context, "runtime_services", create_runtime_services({})),
+		"metadata": clone_value(dict_get_or(context, "metadata", {}))
+	})
+}
+
+func describe_streaming_events_module_impl() {
+	return {
+		"module": "agents.streaming.events",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"stream_event_kind_values",
+			"stream_required_fields",
+			"create_agent_stream_event",
+			"validate_stream_event_shape",
+			"map_ai_sdk_stream_event"
+		]
+	}
+}
+
+export stream_event_kind_values := stream_event_kind_values_impl
+export stream_required_fields := stream_required_fields_impl
+export create_agent_stream_event := create_agent_stream_event_impl
+export validate_stream_event_shape := validate_stream_event_shape_impl
+export map_ai_sdk_stream_event := map_ai_sdk_stream_event_impl
+export describe_streaming_events_module := describe_streaming_events_module_impl

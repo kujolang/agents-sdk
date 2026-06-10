@@ -1,0 +1,71 @@
+test_setup {
+	from src.agents.errors import agent_error_kind_values, is_retryable_error_kind
+	from src.agents.errors import create_agent_error, normalize_agent_error, create_error_result
+}
+
+test "error kind registry includes required baseline kinds" {
+	kinds := agent_error_kind_values()
+	kind_map := {}
+	for kind in kinds {
+		kind_map[kind] := true
+	}
+
+	assert_equal(len(kinds), 18)
+	assert_equal(has_key(kind_map, "invalid_config"), 1)
+	assert_equal(has_key(kind_map, "tool_not_found"), 1)
+	assert_equal(has_key(kind_map, "approval_denied"), 1)
+	assert_equal(has_key(kind_map, "structured_output_invalid"), 1)
+	assert_equal(has_key(kind_map, "internal_error"), 1)
+}
+
+test "create_agent_error builds structured deterministic payload" {
+	error_payload := create_agent_error("tool_input_invalid", "Tool input is invalid.", {
+		"run_id": "run-123",
+		"step_id": "step-3",
+		"tool_name": "write_file",
+		"status_code": 400,
+		"details": {"field": "path"}
+	})
+
+	assert_equal(error_payload["type"], "AgentError")
+	assert_equal(error_payload["kind"], "tool_input_invalid")
+	assert_equal(error_payload["code"], "tool_input_invalid")
+	assert_equal(error_payload["message"], "Tool input is invalid.")
+	assert_false(error_payload["retryable"])
+	assert_equal(error_payload["details"]["field"], "path")
+	assert_equal(error_payload["run_id"], "run-123")
+	assert_equal(error_payload["step_id"], "step-3")
+	assert_equal(error_payload["tool_name"], "write_file")
+	assert_equal(error_payload["status_code"], 400)
+}
+
+test "invalid error kind falls back to internal_error with requested_kind detail" {
+	error_payload := create_agent_error("not_a_real_kind", "Unknown failure", {})
+	assert_equal(error_payload["kind"], "internal_error")
+	assert_equal(error_payload["details"]["requested_kind"], "not_a_real_kind")
+}
+
+test "normalize_agent_error supports string and dict inputs" {
+	from_string := normalize_agent_error("plain error", "model_error")
+	assert_equal(from_string["kind"], "model_error")
+	assert_equal(from_string["message"], "plain error")
+
+	from_dict := normalize_agent_error({
+		"kind": "timeout",
+		"message": "Deadline reached",
+		"details": {"deadline_ms": 1000}
+	}, "internal_error")
+	assert_equal(from_dict["kind"], "timeout")
+	assert_equal(from_dict["details"]["deadline_ms"], 1000)
+}
+
+test "retryability helper and error result contract are stable" {
+	assert_true(is_retryable_error_kind("provider_error"))
+	assert_false(is_retryable_error_kind("approval_denied"))
+
+	result := create_error_result("denied", "failed", {"phase": "approval"})
+	assert_false(result["ok"])
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "internal_error")
+	assert_equal(result["metadata"]["phase"], "approval")
+}

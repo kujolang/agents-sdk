@@ -1,0 +1,232 @@
+test_setup {
+	from src.agents.artifacts.store import artifact_kind_values, create_artifact_id, create_artifact
+	from src.agents.artifacts.store import create_artifact_store_interface, artifact_store_create, artifact_store_get, artifact_store_list
+	from src.agents.artifacts.store import create_in_memory_artifact_store, create_file_artifact_store, reset_in_memory_artifact_store
+}
+
+test "artifact contracts normalize id kind and bytes" {
+	kinds := artifact_kind_values()
+	kind_map := {}
+	for kind in kinds {
+		kind_map[kind] := true
+	}
+	assert_equal(type(kinds), "array")
+	assert_equal(has_key(kind_map, "markdown"), 1)
+
+	artifact_id := create_artifact_id("artifact-123", {
+		"prefix": "ignored"
+	})
+	assert_equal(artifact_id["type"], "ArtifactId")
+	assert_equal(artifact_id["value"], "artifact-123")
+
+	artifact := create_artifact({
+		"artifact_id": artifact_id,
+		"artifact_kind": "not-a-kind",
+		"content": "hello",
+		"producer_run_id": "run-1",
+		"producer_step_id": "step-1",
+		"producer_tool_name": "tool-a"
+	})
+	assert_equal(artifact["type"], "Artifact")
+	assert_equal(artifact["artifact_id"], "artifact-123")
+	assert_equal(artifact["artifact_kind"], "other")
+	assert_equal(artifact["bytes"], 5)
+	assert_equal(artifact["producer_run_id"], "run-1")
+}
+
+test "artifact store wrappers return not_implemented without callbacks" {
+	store := create_artifact_store_interface({
+		"name": "empty"
+	})
+
+	create_result := artifact_store_create(store, {
+		"artifact_kind": "markdown",
+		"content": "# Test"
+	})
+	assert_equal(create_result["ok"], false)
+	assert_equal(create_result["error"]["kind"], "not_implemented")
+
+	get_result := artifact_store_get(store, "artifact-1")
+	assert_equal(get_result["ok"], false)
+	assert_equal(get_result["error"]["kind"], "not_implemented")
+
+	list_result := artifact_store_list(store, {})
+	assert_equal(list_result["ok"], false)
+	assert_equal(list_result["error"]["kind"], "not_implemented")
+}
+
+test "artifact store wrappers delegate to callbacks" {
+	store := create_artifact_store_interface({
+		"name": "delegating",
+		"create_artifact_fn": func(store_map, artifact) {
+			return {
+				"ok": true,
+				"created": true,
+				"artifact": artifact
+			}
+		},
+		"get_artifact_fn": func(store_map, artifact_id) {
+			return {
+				"ok": true,
+				"artifact": {
+					"artifact_id": artifact_id,
+					"artifact_kind": "text"
+				}
+			}
+		},
+		"list_artifacts_fn": func(store_map, options) {
+			return {
+				"ok": true,
+				"artifacts": [],
+				"count": 0,
+				"total_count": 0
+			}
+		}
+	})
+
+	create_result := artifact_store_create(store, {
+		"artifact_kind": "report",
+		"content": "report body"
+	})
+	assert_equal(create_result["ok"], true)
+	assert_equal(create_result["artifact"]["artifact_kind"], "report")
+
+	get_result := artifact_store_get(store, create_artifact_id("artifact-cb", {}))
+	assert_equal(get_result["ok"], true)
+	assert_equal(get_result["artifact"]["artifact_id"], "artifact-cb")
+
+	list_result := artifact_store_list(store, {})
+	assert_equal(list_result["ok"], true)
+	assert_equal(list_result["count"], 0)
+}
+
+test "in-memory artifact store supports create get list and filtering" {
+	store_id := "art-001-store"
+	reset_result := reset_in_memory_artifact_store({
+		"store_id": store_id
+	})
+	assert_equal(reset_result["ok"], true)
+
+	store := create_in_memory_artifact_store({
+		"store_id": store_id
+	})
+
+	first := artifact_store_create(store, {
+		"artifact_kind": "markdown",
+		"title": "Run report",
+		"content": "# Report",
+		"producer_run_id": "run-a"
+	})
+	second := artifact_store_create(store, {
+		"artifact_kind": "json",
+		"artifact_id": "artifact-explicit",
+		"content": "{\"ok\":true}",
+		"producer_run_id": "run-b"
+	})
+
+	assert_equal(first["ok"], true)
+	assert_equal(second["ok"], true)
+	assert_equal(first["artifact"]["artifact_id"], "art-001-store-artifact-1")
+	assert_equal(second["artifact"]["artifact_id"], "artifact-explicit")
+
+	get_first := artifact_store_get(store, "art-001-store-artifact-1")
+	assert_equal(get_first["ok"], true)
+	assert_equal(get_first["artifact"]["artifact_kind"], "markdown")
+
+	all_results := artifact_store_list(store, {})
+	assert_equal(all_results["ok"], true)
+	assert_equal(all_results["count"], 2)
+	assert_equal(len(all_results["artifacts"]), 2)
+
+	kind_filtered := artifact_store_list(store, {
+		"artifact_kind": "json"
+	})
+	assert_equal(kind_filtered["ok"], true)
+	assert_equal(kind_filtered["count"], 1)
+	assert_equal(kind_filtered["artifacts"][0]["artifact_id"], "artifact-explicit")
+
+	run_filtered := artifact_store_list(store, {
+		"producer_run_id": "run-a"
+	})
+	assert_equal(run_filtered["ok"], true)
+	assert_equal(run_filtered["count"], 1)
+	assert_equal(run_filtered["artifacts"][0]["artifact_id"], "art-001-store-artifact-1")
+
+	paged := artifact_store_list(store, {
+		"offset": 1,
+		"limit": 1
+	})
+	assert_equal(paged["ok"], true)
+	assert_equal(paged["count"], 2)
+	assert_equal(len(paged["artifacts"]), 1)
+	assert_equal(paged["artifacts"][0]["artifact_id"], "artifact-explicit")
+}
+
+test "file artifact store persists content and exposes deterministic file references" {
+	store := create_file_artifact_store({
+		"store_id": "file-art-002",
+		"root_path": "/tmp",
+		"file_extension": ".txt"
+	})
+
+	created := artifact_store_create(store, {
+		"artifact_id": "report-002",
+		"artifact_kind": "report",
+		"content": "file-backed artifact",
+		"producer_run_id": "run-file-1"
+	})
+
+	assert_equal(created["ok"], true)
+	assert_equal(created["artifact"]["metadata"]["store_kind"], "file")
+	assert_equal(contains(created["artifact"]["metadata"]["file_path"], "/tmp/report-002.txt") >= 0, true)
+
+	loaded := artifact_store_get(store, "report-002")
+	assert_equal(loaded["ok"], true)
+	assert_equal(loaded["artifact"]["content"], "file-backed artifact")
+
+	listed := artifact_store_list(store, {})
+	assert_equal(listed["ok"], true)
+	assert_equal(listed["count"], 1)
+	assert_equal(listed["artifacts"][0]["artifact_id"], "report-002")
+}
+
+test "file artifact store rejects traversal-like artifact ids" {
+	store := create_file_artifact_store({
+		"store_id": "file-art-traversal",
+		"root_path": "/tmp"
+	})
+
+	created := artifact_store_create(store, {
+		"artifact_id": "../escape",
+		"artifact_kind": "text",
+		"content": "nope"
+	})
+
+	assert_equal(created["ok"], false)
+	assert_equal(created["error"]["kind"], "invalid_path")
+}
+
+test "artifact store enforces kind allowlist and byte limits" {
+	store := create_file_artifact_store({
+		"store_id": "file-art-limits",
+		"root_path": "/tmp",
+		"allowed_kinds": ["json"],
+		"max_artifact_bytes": 5
+	})
+
+	wrong_kind := artifact_store_create(store, {
+		"artifact_id": "kind-block",
+		"artifact_kind": "markdown",
+		"content": "# blocked"
+	})
+	assert_equal(wrong_kind["ok"], false)
+	assert_equal(wrong_kind["error"]["kind"], "validation_error")
+
+	oversized := artifact_store_create(store, {
+		"artifact_id": "size-block",
+		"artifact_kind": "json",
+		"content": "{\"too\":\"large\"}"
+	})
+	assert_equal(oversized["ok"], false)
+	assert_equal(oversized["error"]["kind"], "budget_exceeded")
+}

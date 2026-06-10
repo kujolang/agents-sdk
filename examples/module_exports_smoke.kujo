@@ -1,0 +1,8 @@
+from src.agents.index import describe_module_tree
+
+func main() {
+	summary := describe_module_tree()
+	print(to_json(summary))
+}
+
+main()

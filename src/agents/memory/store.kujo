@@ -1,0 +1,639 @@
+func key_in_dict(obj, expected_key) {
+	if type(obj) != "dict" {
+		return false
+	}
+
+	for key in keys(obj) {
+		if key == expected_key {
+			return true
+		}
+	}
+
+	return false
+}
+
+func unwrap_dict(value) {
+	if type(value) != "dict" {
+		return value
+	}
+
+	if key_in_dict(value, "_self") {
+		inner := value["_self"]
+		if type(inner) == "dict" {
+			return inner
+		}
+	}
+
+	return value
+}
+
+func dict_get_or(obj, key, default_value) {
+	source := unwrap_dict(obj)
+	if type(source) != "dict" {
+		return default_value
+	}
+	if key_in_dict(source, key) {
+		return source[key]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	unwrapped := unwrap_dict(value)
+	if type(unwrapped) == "dict" {
+		return unwrapped
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_bool(value, fallback) {
+	if type(value) == "bool" {
+		return value
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func normalize_memory_scope_kind(value_input) {
+	kind := normalize_string(value_input, "session")
+	if kind == "session" || kind == "user" || kind == "project" {
+		return kind
+	}
+	return "session"
+}
+
+func normalize_string_array(values_input) {
+	values := normalize_array(values_input)
+	normalized := []
+
+	for value in values {
+		resolved := normalize_string(value, "")
+		if resolved != "" {
+			normalized = push(normalized, resolved)
+		}
+	}
+
+	return normalized
+}
+
+func array_contains(values_input, expected) {
+	values := normalize_array(values_input)
+	for value in values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		cloned_dict := {}
+		for key in keys(value) {
+			cloned_dict[key] := clone_value(value[key])
+		}
+		return cloned_dict
+	}
+
+	if type(value) == "array" {
+		cloned_array := []
+		for item in value {
+			cloned_array = push(cloned_array, clone_value(item))
+		}
+		return cloned_array
+	}
+
+	return value
+}
+
+func merge_dicts(base_input, patch_input) {
+	base := normalize_dict(base_input)
+	patch := normalize_dict(patch_input)
+	merged := clone_value(base)
+
+	for key in keys(patch) {
+		merged[key] := patch[key]
+	}
+
+	return merged
+}
+
+func create_memory_scope_impl(scope_kind_input, scope_id_input, options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "MemoryScope",
+		"scope_kind": normalize_memory_scope_kind(scope_kind_input),
+		"scope_id": normalize_string(scope_id_input, "default"),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_memory_provenance_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "MemoryProvenance",
+		"source": normalize_string(dict_get_or(options_map, "source", "runtime"), "runtime"),
+		"source_id": normalize_string(dict_get_or(options_map, "source_id", ""), ""),
+		"recorded_at": normalize_string(dict_get_or(options_map, "recorded_at", ""), ""),
+		"confidence": normalize_non_negative_int(dict_get_or(options_map, "confidence", 0), 0),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_memory_entry_impl(options) {
+	options_map := normalize_dict(options)
+	scope_map := normalize_dict(dict_get_or(options_map, "scope", {}))
+
+	scope_kind := normalize_memory_scope_kind(dict_get_or(options_map, "scope_kind", dict_get_or(scope_map, "scope_kind", "session")))
+	scope_id := normalize_string(dict_get_or(options_map, "scope_id", dict_get_or(scope_map, "scope_id", "default")), "default")
+
+	return {
+		"type": "MemoryEntry",
+		"entry_id": normalize_string(dict_get_or(options_map, "entry_id", "mem-entry-default"), "mem-entry-default"),
+		"scope": create_memory_scope_impl(scope_kind, scope_id, {
+			"metadata": dict_get_or(scope_map, "metadata", {})
+		}),
+		"content": normalize_string(dict_get_or(options_map, "content", ""), ""),
+		"tags": normalize_string_array(dict_get_or(options_map, "tags", [])),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {})),
+		"provenance": create_memory_provenance_impl(dict_get_or(options_map, "provenance", {})),
+		"created_at": normalize_string(dict_get_or(options_map, "created_at", ""), ""),
+		"updated_at": normalize_string(dict_get_or(options_map, "updated_at", ""), "")
+	}
+}
+
+func create_memory_query_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "MemoryQuery",
+		"scope_kind": normalize_memory_scope_kind(dict_get_or(options_map, "scope_kind", "session")),
+		"scope_id": normalize_string(dict_get_or(options_map, "scope_id", "default"), "default"),
+		"text": normalize_string(dict_get_or(options_map, "text", ""), ""),
+		"tags": normalize_string_array(dict_get_or(options_map, "tags", [])),
+		"limit": normalize_non_negative_int(dict_get_or(options_map, "limit", 50), 50),
+		"offset": normalize_non_negative_int(dict_get_or(options_map, "offset", 0), 0),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func build_memory_query_provenance_summary_impl(entries_input, query_input) {
+	entries := normalize_array(entries_input)
+	query := normalize_dict(query_input)
+	sources := []
+	entries_with_provenance := 0
+
+	for entry in entries {
+		entry_map := normalize_dict(entry)
+		provenance := normalize_dict(dict_get_or(entry_map, "provenance", {}))
+		source := normalize_string(dict_get_or(provenance, "source", ""), "")
+		if source != "" {
+			entries_with_provenance = entries_with_provenance + 1
+			if array_contains(sources, source) == false {
+				sources = push(sources, source)
+			}
+		}
+	}
+
+	return {
+		"type": "MemoryQueryProvenance",
+		"entries_with_provenance": entries_with_provenance,
+		"sources": sources,
+		"scope_kind": normalize_memory_scope_kind(dict_get_or(query, "scope_kind", "session")),
+		"scope_id": normalize_string(dict_get_or(query, "scope_id", "default"), "default")
+	}
+}
+
+func direct_option_value(options_input, expected_key, default_value) {
+	if type(options_input) != "dict" {
+		return default_value
+	}
+
+	for key in keys(options_input) {
+		if key == expected_key {
+			return options_input[key]
+		}
+	}
+
+	return default_value
+}
+
+func create_memory_query_result_impl(options) {
+	options_map := options
+	query := create_memory_query_impl(direct_option_value(options_map, "query", {}))
+	entries := normalize_array(direct_option_value(options_map, "entries", []))
+	count := normalize_non_negative_int(direct_option_value(options_map, "count", len(entries)), len(entries))
+	total_count := normalize_non_negative_int(direct_option_value(options_map, "total_count", count), count)
+	provenance := direct_option_value(options_map, "provenance", build_memory_query_provenance_summary_impl(entries, query))
+
+	return {
+		"type": "MemoryQueryResult",
+		"ok": normalize_bool(direct_option_value(options_map, "ok", true), true),
+		"query": query,
+		"entries": clone_value(entries),
+		"count": count,
+		"total_count": total_count,
+		"provenance": clone_value(provenance),
+		"metadata": clone_value(direct_option_value(options_map, "metadata", {}))
+	}
+}
+
+func create_memory_store_interface_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "MemoryStore",
+		"name": normalize_string(dict_get_or(options_map, "name", "MemoryStore"), "MemoryStore"),
+		"write_memory_fn": dict_get_or(options_map, "write_memory_fn", null),
+		"read_memory_fn": dict_get_or(options_map, "read_memory_fn", null),
+		"query_memory_fn": dict_get_or(options_map, "query_memory_fn", null),
+		"delete_memory_fn": dict_get_or(options_map, "delete_memory_fn", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func ensure_memory_store_impl(store_input) {
+	store := normalize_dict(store_input)
+	if normalize_string(dict_get_or(store, "type", ""), "") == "MemoryStore" {
+		return store
+	}
+
+	return create_memory_store_interface_impl({})
+}
+
+func not_implemented_result(operation_name) {
+	return {
+		"ok": false,
+		"error": {
+			"kind": "not_implemented",
+			"message": "Memory store operation is not implemented.",
+			"details": {
+				"operation": normalize_string(operation_name, "unknown")
+			}
+		}
+	}
+}
+
+func memory_store_write_impl(store_input, entry_input) {
+	store := ensure_memory_store_impl(store_input)
+	write_fn := dict_get_or(store, "write_memory_fn", null)
+	if type(write_fn) != "function" {
+		return not_implemented_result("write_memory")
+	}
+
+	return write_fn(store, create_memory_entry_impl(entry_input))
+}
+
+func memory_store_read_impl(store_input, entry_id_input) {
+	store := ensure_memory_store_impl(store_input)
+	read_fn := dict_get_or(store, "read_memory_fn", null)
+	if type(read_fn) != "function" {
+		return not_implemented_result("read_memory")
+	}
+
+	entry_id := normalize_string(entry_id_input, "")
+	return read_fn(store, entry_id)
+}
+
+func memory_store_query_impl(store_input, query_input) {
+	store := ensure_memory_store_impl(store_input)
+	query_fn := dict_get_or(store, "query_memory_fn", null)
+	if type(query_fn) != "function" {
+		return not_implemented_result("query_memory")
+	}
+	query := create_memory_query_impl(query_input)
+	result := query_fn(store, query)
+	entries := normalize_array(dict_get_or(result, "entries", []))
+	count := normalize_non_negative_int(dict_get_or(result, "count", len(entries)), len(entries))
+	total_count := normalize_non_negative_int(dict_get_or(result, "total_count", count), count)
+	provenance := dict_get_or(result, "provenance", build_memory_query_provenance_summary_impl(entries, query))
+
+	return {
+		"type": "MemoryQueryResult",
+		"ok": normalize_bool(dict_get_or(result, "ok", true), true),
+		"query": query,
+		"entries": clone_value(entries),
+		"count": count,
+		"total_count": total_count,
+		"provenance": clone_value(provenance),
+		"metadata": clone_value(dict_get_or(result, "metadata", {}))
+	}
+}
+
+func memory_store_delete_impl(store_input, entry_id_input) {
+	store := ensure_memory_store_impl(store_input)
+	delete_fn := dict_get_or(store, "delete_memory_fn", null)
+	if type(delete_fn) != "function" {
+		return not_implemented_result("delete_memory")
+	}
+
+	entry_id := normalize_string(entry_id_input, "")
+	return delete_fn(store, entry_id)
+}
+
+func noop_write_memory_fn_impl(store_map, entry_input) {
+	return {
+		"ok": true,
+		"persisted": false,
+		"entry": clone_value(entry_input)
+	}
+}
+
+func noop_read_memory_fn_impl(store_map, entry_id) {
+	return {
+		"ok": false,
+		"entry": null
+	}
+}
+
+func noop_query_memory_fn_impl(store_map, query) {
+	return {
+		"ok": true,
+		"entries": [],
+		"count": 0
+	}
+}
+
+func noop_delete_memory_fn_impl(store_map, entry_id) {
+	return {
+		"ok": false,
+		"deleted": false
+	}
+}
+
+func create_noop_memory_store_impl(options) {
+	options_map := normalize_dict(options)
+	metadata := merge_dicts(normalize_dict(dict_get_or(options_map, "metadata", {})), {
+		"store_kind": "noop"
+	})
+
+	return create_memory_store_interface_impl({
+		"name": normalize_string(dict_get_or(options_map, "name", "NoopMemory"), "NoopMemory"),
+		"write_memory_fn": noop_write_memory_fn_impl,
+		"read_memory_fn": noop_read_memory_fn_impl,
+		"query_memory_fn": noop_query_memory_fn_impl,
+		"delete_memory_fn": noop_delete_memory_fn_impl,
+		"metadata": metadata
+	})
+}
+
+IN_MEMORY_MEMORY_STORES := {}
+
+func resolve_in_memory_store_id(store_input) {
+	store_map := normalize_dict(store_input)
+	metadata := normalize_dict(dict_get_or(store_map, "metadata", {}))
+	store_id := normalize_string(dict_get_or(metadata, "store_id", ""), "")
+	if store_id != "" {
+		return store_id
+	}
+
+	return normalize_string(dict_get_or(store_map, "name", "in-memory-memory-store"), "in-memory-memory-store")
+}
+
+func default_in_memory_state() {
+	return {
+		"entries_by_id": {},
+		"ordered_entry_ids": [],
+		"next_entry_number": 1
+	}
+}
+
+func ensure_in_memory_state(store_id_input) {
+	store_id := normalize_string(store_id_input, "in-memory-memory-store")
+	if key_in_dict(IN_MEMORY_MEMORY_STORES, store_id) {
+		return normalize_dict(dict_get_or(IN_MEMORY_MEMORY_STORES, store_id, {}))
+	}
+
+	state := default_in_memory_state()
+	IN_MEMORY_MEMORY_STORES[store_id] := state
+	return state
+}
+
+func save_in_memory_state(store_id_input, state_input) {
+	store_id := normalize_string(store_id_input, "in-memory-memory-store")
+	IN_MEMORY_MEMORY_STORES[store_id] := normalize_dict(state_input)
+}
+
+func in_memory_write_memory_fn_impl(store_map, entry_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_state(store_id)
+	entries_by_id := normalize_dict(dict_get_or(state, "entries_by_id", {}))
+	ordered_entry_ids := normalize_array(dict_get_or(state, "ordered_entry_ids", []))
+	next_entry_number := normalize_non_negative_int(dict_get_or(state, "next_entry_number", 1), 1)
+	entry := clone_value(entry_input)
+	entry_id := normalize_string(dict_get_or(entry, "entry_id", ""), "")
+	created := false
+
+	if entry_id == "" || entry_id == "mem-entry-default" {
+		entry_id = store_id + "-entry-" + to_string(next_entry_number)
+		next_entry_number = next_entry_number + 1
+		created = true
+	}
+
+	if key_in_dict(entries_by_id, entry_id) == false {
+		created = true
+		ordered_entry_ids = push(ordered_entry_ids, entry_id)
+	}
+
+	entry["entry_id"] := entry_id
+	entry["updated_at"] := normalize_string(dict_get_or(entry, "updated_at", ""), "")
+	entries_by_id[entry_id] := entry
+	state["entries_by_id"] := entries_by_id
+	state["ordered_entry_ids"] := ordered_entry_ids
+	state["next_entry_number"] := next_entry_number
+	save_in_memory_state(store_id, state)
+
+	return {
+		"ok": true,
+		"created": created,
+		"entry": clone_value(entry)
+	}
+}
+
+func in_memory_read_memory_fn_impl(store_map, entry_id_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_state(store_id)
+	entries_by_id := normalize_dict(dict_get_or(state, "entries_by_id", {}))
+	entry_id := normalize_string(entry_id_input, "")
+
+	if entry_id != "" && key_in_dict(entries_by_id, entry_id) {
+		entry_value := dict_get_or(entries_by_id, entry_id, null)
+		if type(entry_value) == "dict" {
+			return {
+				"ok": true,
+				"entry": clone_value(entry_value)
+			}
+		}
+	}
+
+	return {
+		"ok": false,
+		"entry": null
+	}
+}
+
+func in_memory_query_memory_fn_impl(store_map, query_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_state(store_id)
+	entries_by_id := normalize_dict(dict_get_or(state, "entries_by_id", {}))
+	ordered_entry_ids := normalize_array(dict_get_or(state, "ordered_entry_ids", []))
+	query := create_memory_query_impl(query_input)
+	query_scope_kind := normalize_memory_scope_kind(dict_get_or(query, "scope_kind", "session"))
+	query_scope_id := normalize_string(dict_get_or(query, "scope_id", "default"), "default")
+	limit := normalize_non_negative_int(dict_get_or(query, "limit", 50), 50)
+	offset := normalize_non_negative_int(dict_get_or(query, "offset", 0), 0)
+	filtered := []
+
+	for entry_id in ordered_entry_ids {
+		if key_in_dict(entries_by_id, entry_id) {
+			entry_value := dict_get_or(entries_by_id, entry_id, null)
+			if type(entry_value) == "dict" {
+				entry := normalize_dict(entry_value)
+				scope := normalize_dict(dict_get_or(entry, "scope", {}))
+				entry_scope_kind := normalize_memory_scope_kind(dict_get_or(scope, "scope_kind", "session"))
+				entry_scope_id := normalize_string(dict_get_or(scope, "scope_id", "default"), "default")
+
+				if entry_scope_kind == query_scope_kind && entry_scope_id == query_scope_id {
+					filtered = push(filtered, clone_value(entry))
+				}
+			}
+		}
+	}
+
+	count := len(filtered)
+	items := []
+	index := offset
+	max_items := offset + limit
+	if max_items > count {
+		max_items = count
+	}
+
+	while index < max_items {
+		items = push(items, filtered[index])
+		index = index + 1
+	}
+
+	return {
+		"ok": true,
+		"entries": items,
+		"count": count
+	}
+}
+
+func in_memory_delete_memory_fn_impl(store_map, entry_id_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_state(store_id)
+	entries_by_id := normalize_dict(dict_get_or(state, "entries_by_id", {}))
+	entry_id := normalize_string(entry_id_input, "")
+
+	if entry_id != "" && key_in_dict(entries_by_id, entry_id) {
+		entries_by_id[entry_id] := null
+		state["entries_by_id"] := entries_by_id
+		save_in_memory_state(store_id, state)
+		return {
+			"ok": true,
+			"deleted": true
+		}
+	}
+
+	return {
+		"ok": false,
+		"deleted": false
+	}
+}
+
+func create_in_memory_memory_store_impl(options) {
+	options_map := normalize_dict(options)
+	store_id := normalize_string(dict_get_or(options_map, "store_id", "in-memory-memory-store"), "in-memory-memory-store")
+	metadata := merge_dicts(normalize_dict(dict_get_or(options_map, "metadata", {})), {
+		"store_kind": "in_memory",
+		"store_id": store_id
+	})
+
+	ensure_in_memory_state(store_id)
+
+	return create_memory_store_interface_impl({
+		"name": normalize_string(dict_get_or(options_map, "name", "InMemoryMemoryStore"), "InMemoryMemoryStore"),
+		"write_memory_fn": in_memory_write_memory_fn_impl,
+		"read_memory_fn": in_memory_read_memory_fn_impl,
+		"query_memory_fn": in_memory_query_memory_fn_impl,
+		"delete_memory_fn": in_memory_delete_memory_fn_impl,
+		"metadata": metadata
+	})
+}
+
+func reset_in_memory_memory_store_impl(options) {
+	options_map := normalize_dict(options)
+	store_id := normalize_string(dict_get_or(options_map, "store_id", "in-memory-memory-store"), "in-memory-memory-store")
+	IN_MEMORY_MEMORY_STORES[store_id] := default_in_memory_state()
+
+	return {
+		"ok": true,
+		"store_id": store_id
+	}
+}
+
+func describe_memory_store_module_impl() {
+	return {
+		"module": "agents.memory.store",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_memory_scope",
+			"create_memory_provenance",
+			"create_memory_entry",
+			"create_memory_query",
+			"create_memory_query_result",
+			"create_memory_store_interface",
+			"create_noop_memory_store",
+			"create_in_memory_memory_store",
+			"reset_in_memory_memory_store",
+			"memory_store_write",
+			"memory_store_read",
+			"memory_store_query",
+			"memory_store_delete"
+		]
+	}
+}
+
+export create_memory_scope := create_memory_scope_impl
+export create_memory_provenance := create_memory_provenance_impl
+export create_memory_entry := create_memory_entry_impl
+export create_memory_query := create_memory_query_impl
+export create_memory_query_result := create_memory_query_result_impl
+export create_memory_store_interface := create_memory_store_interface_impl
+export create_noop_memory_store := create_noop_memory_store_impl
+export create_in_memory_memory_store := create_in_memory_memory_store_impl
+export reset_in_memory_memory_store := reset_in_memory_memory_store_impl
+export memory_store_write := memory_store_write_impl
+export memory_store_read := memory_store_read_impl
+export memory_store_query := memory_store_query_impl
+export memory_store_delete := memory_store_delete_impl
+export describe_memory_store_module := describe_memory_store_module_impl

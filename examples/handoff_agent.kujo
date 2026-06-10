@@ -1,0 +1,77 @@
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from src.agents.runner import create_agent_runner, run_agent
+from src.agents.core_types import create_agent, create_agent_run_request
+
+func run_handoff_agent_example_impl() {
+	fake_chat := func(client, messages, request_options) {
+		first_content := ""
+		if len(messages) > 0 {
+			first_message := messages[0]
+			if type(first_message) == "dict" {
+				first_content = to_string(first_message["content"])
+			}
+		}
+
+		if first_content == "Writer target instructions." {
+			return {
+				"ok": true,
+				"provider": "mock-provider",
+				"model": "mock-model",
+				"output_text": "handoff-writer-output",
+				"status_code": 200
+			}
+		}
+
+		return {
+			"ok": true,
+			"provider": "mock-provider",
+			"model": "mock-model",
+			"output_text": "handoff-planner-output",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+
+	planner_agent := create_agent({
+		"id": "example-planner-agent",
+		"name": "Example Planner Agent",
+		"instructions": "Planner source instructions.",
+		"policy": {
+			"handoff": {
+				"target_agent_id": "example-writer-agent",
+				"reason": "Writer should finalize tone.",
+				"request_id": "example-handoff-request"
+			}
+		}
+	})
+	writer_agent := create_agent({
+		"id": "example-writer-agent",
+		"name": "Example Writer Agent",
+		"instructions": "Writer target instructions."
+	})
+
+	runner := create_agent_runner({
+		"ai_adapter": adapter,
+		"handoff_registry": {
+			"example-writer-agent": writer_agent
+		}
+	})
+	run_request := create_agent_run_request("Plan then hand off", {
+		"run_id": "run-example-handoff",
+		"session_id": "session-example-handoff"
+	})
+
+	result := run_agent(runner, planner_agent, run_request, {})
+
+	return {
+		"ok": true,
+		"requires_network": false,
+		"scenario": "handoff_agent",
+		"result": result
+	}
+}
+
+export run_handoff_agent_example := run_handoff_agent_example_impl

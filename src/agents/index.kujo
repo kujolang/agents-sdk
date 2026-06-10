@@ -1,0 +1,60 @@
+from src.agents.core_types import describe_core_types_module
+from src.agents.errors import describe_errors_module
+from src.agents.events import describe_events_module
+from src.agents.runner import describe_runner_module
+from src.agents.tools.registry import describe_tools_registry_module
+from src.agents.security.approval import describe_approval_module
+from src.agents.sessions.store import describe_session_store_module
+from src.agents.memory.store import describe_memory_store_module
+from src.agents.retrieval.provider import describe_retrieval_provider_module
+from src.agents.handoffs.handoff import describe_handoff_module
+from src.agents.tracing.sink import describe_trace_sink_module
+from src.agents.artifacts.store import describe_artifact_store_module
+from src.agents.budgets.limits import describe_budget_limits_module
+from src.agents.streaming.events import describe_streaming_events_module
+from src.agents.integrations.adapters import describe_integration_adapters_module
+
+func describe_module_tree_impl() {
+	modules := {
+		"core_types": describe_core_types_module(),
+		"errors": describe_errors_module(),
+		"events": describe_events_module(),
+		"runner": describe_runner_module(),
+		"tools.registry": describe_tools_registry_module(),
+		"security.approval": describe_approval_module(),
+		"sessions.store": describe_session_store_module(),
+		"memory.store": describe_memory_store_module(),
+		"retrieval.provider": describe_retrieval_provider_module(),
+		"handoffs.handoff": describe_handoff_module(),
+		"tracing.sink": describe_trace_sink_module(),
+		"artifacts.store": describe_artifact_store_module(),
+		"budgets.limits": describe_budget_limits_module(),
+		"streaming.events": describe_streaming_events_module(),
+		"integrations.adapters": describe_integration_adapters_module()
+	}
+
+	return {
+		"module": "agents.index",
+		"module_count": len(keys(modules)),
+		"modules": modules,
+		"status": "stub",
+		"contract_version": "0.1.0"
+	}
+}
+
+export describe_module_tree := describe_module_tree_impl
+export describe_core_types_module := describe_core_types_module
+export describe_errors_module := describe_errors_module
+export describe_events_module := describe_events_module
+export describe_runner_module := describe_runner_module
+export describe_tools_registry_module := describe_tools_registry_module
+export describe_approval_module := describe_approval_module
+export describe_session_store_module := describe_session_store_module
+export describe_memory_store_module := describe_memory_store_module
+export describe_retrieval_provider_module := describe_retrieval_provider_module
+export describe_handoff_module := describe_handoff_module
+export describe_trace_sink_module := describe_trace_sink_module
+export describe_artifact_store_module := describe_artifact_store_module
+export describe_budget_limits_module := describe_budget_limits_module
+export describe_streaming_events_module := describe_streaming_events_module
+export describe_integration_adapters_module := describe_integration_adapters_module

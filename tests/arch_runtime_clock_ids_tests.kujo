@@ -1,0 +1,55 @@
+test_setup {
+	from src.agents.runtime.clock_ids import create_runtime_services, create_fixed_runtime_services
+	from src.agents.runtime.clock_ids import runtime_now_ms, runtime_now_iso, next_runtime_id
+	from src.agents.core_types import create_agent_run_request, create_agent_step
+	from src.agents.events import create_agent_event
+}
+
+test "fixed runtime services return deterministic time values" {
+	runtime_services := create_fixed_runtime_services(1234567890, "2026-05-22 12:00:00", 10)
+	assert_equal(runtime_now_ms(runtime_services), 1234567890)
+	assert_equal(runtime_now_iso(runtime_services), "2026-05-22 12:00:00")
+}
+
+test "next_runtime_id increments deterministically" {
+	runtime_services := create_runtime_services({
+		"id_counter_start": 7,
+		"id_prefix": "custom"
+	})
+
+	first := next_runtime_id(runtime_services, "")
+	second := next_runtime_id(first["runtime_services"], "run")
+	third := next_runtime_id(second["runtime_services"], "step")
+
+	assert_equal(first["id"], "custom-7")
+	assert_equal(second["id"], "run-8")
+	assert_equal(third["id"], "step-9")
+}
+
+test "core type constructors consume runtime services for run and step ids" {
+	runtime_services := create_fixed_runtime_services(1111, "2026-05-22 12:34:56", 42)
+
+	run_request := create_agent_run_request("Task input", {
+		"runtime_services": runtime_services,
+		"session_id": "session-5"
+	})
+	runtime_services = run_request["runtime_services"]
+	step := create_agent_step("model", "draft response", {}, {
+		"runtime_services": runtime_services
+	})
+
+	assert_equal(run_request["run_id"], "run-42")
+	assert_equal(step["step_id"], "step-43")
+}
+
+test "event constructor consumes runtime services for event id and timestamp" {
+	runtime_services := create_fixed_runtime_services(2222, "2026-05-22 18:00:00", 300)
+	event_payload := create_agent_event("run_started", {"phase": "init"}, {
+		"runtime_services": runtime_services,
+		"run_id": "run-demo",
+		"agent_id": "agent-demo"
+	})
+
+	assert_equal(event_payload["event_id"], "evt-300")
+	assert_equal(event_payload["timestamp"], "2026-05-22 18:00:00")
+}

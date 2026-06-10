@@ -1,0 +1,62 @@
+test_setup {
+	from src.agents.index import describe_module_tree
+	from src.agents.index import describe_core_types_module, describe_errors_module, describe_events_module, describe_runner_module
+	from src.agents.index import describe_tools_registry_module, describe_approval_module, describe_session_store_module
+	from src.agents.index import describe_memory_store_module, describe_retrieval_provider_module, describe_handoff_module
+	from src.agents.index import describe_trace_sink_module, describe_artifact_store_module, describe_budget_limits_module
+	from src.agents.index import describe_streaming_events_module, describe_integration_adapters_module
+}
+
+test "module tree includes expected module descriptors" {
+	summary := describe_module_tree()
+	assert_equal(summary["module_count"], 15)
+	assert_equal(has_key(summary["modules"], "core_types"), 1)
+	assert_equal(has_key(summary["modules"], "errors"), 1)
+	assert_equal(has_key(summary["modules"], "events"), 1)
+	assert_equal(has_key(summary["modules"], "runner"), 1)
+	assert_equal(has_key(summary["modules"], "tools.registry"), 1)
+	assert_equal(has_key(summary["modules"], "security.approval"), 1)
+	assert_equal(has_key(summary["modules"], "sessions.store"), 1)
+	assert_equal(has_key(summary["modules"], "memory.store"), 1)
+	assert_equal(has_key(summary["modules"], "retrieval.provider"), 1)
+	assert_equal(has_key(summary["modules"], "handoffs.handoff"), 1)
+	assert_equal(has_key(summary["modules"], "tracing.sink"), 1)
+	assert_equal(has_key(summary["modules"], "artifacts.store"), 1)
+	assert_equal(has_key(summary["modules"], "budgets.limits"), 1)
+	assert_equal(has_key(summary["modules"], "streaming.events"), 1)
+	assert_equal(has_key(summary["modules"], "integrations.adapters"), 1)
+}
+
+test "public export descriptors are callable" {
+	core := describe_core_types_module()
+	errors := describe_errors_module()
+	events := describe_events_module()
+	runner := describe_runner_module()
+	tools := describe_tools_registry_module()
+	approval := describe_approval_module()
+	sessions := describe_session_store_module()
+	memory := describe_memory_store_module()
+	retrieval := describe_retrieval_provider_module()
+	handoff := describe_handoff_module()
+	trace := describe_trace_sink_module()
+	artifact := describe_artifact_store_module()
+	budget := describe_budget_limits_module()
+	streaming := describe_streaming_events_module()
+	integrations := describe_integration_adapters_module()
+
+	assert_equal(core["module"], "agents.core_types")
+	assert_equal(errors["module"], "agents.errors")
+	assert_equal(events["module"], "agents.events")
+	assert_equal(runner["module"], "agents.runner")
+	assert_equal(tools["module"], "agents.tools.registry")
+	assert_equal(approval["module"], "agents.security.approval")
+	assert_equal(sessions["module"], "agents.sessions.store")
+	assert_equal(memory["module"], "agents.memory.store")
+	assert_equal(retrieval["module"], "agents.retrieval.provider")
+	assert_equal(handoff["module"], "agents.handoffs.handoff")
+	assert_equal(trace["module"], "agents.tracing.sink")
+	assert_equal(artifact["module"], "agents.artifacts.store")
+	assert_equal(budget["module"], "agents.budgets.limits")
+	assert_equal(streaming["module"], "agents.streaming.events")
+	assert_equal(integrations["module"], "agents.integrations.adapters")
+}

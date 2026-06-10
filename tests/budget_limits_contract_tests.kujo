@@ -1,0 +1,168 @@
+test_setup {
+	from src.agents.budgets.limits import budget_counter_keys, budget_limit_keys
+	from src.agents.budgets.limits import create_agent_budget, create_budget_usage, create_budget_limit_policy
+	from src.agents.budgets.limits import increment_budget_usage, evaluate_budget_limits
+}
+
+test "budget contract key registries include required counters and limits" {
+	counter_keys := budget_counter_keys()
+	limit_keys := budget_limit_keys()
+	counter_map := {}
+	limit_map := {}
+
+	for key_name in counter_keys {
+		counter_map[key_name] := true
+	}
+	for key_name in limit_keys {
+		limit_map[key_name] := true
+	}
+
+	assert_equal(type(counter_keys), "array")
+	assert_equal(type(limit_keys), "array")
+	assert_equal(has_key(counter_map, "model_calls"), 1)
+	assert_equal(has_key(counter_map, "artifact_bytes"), 1)
+	assert_equal(has_key(counter_map, "elapsed_ms"), 1)
+	assert_equal(has_key(limit_map, "max_model_calls"), 1)
+	assert_equal(has_key(limit_map, "max_artifact_bytes"), 1)
+	assert_equal(has_key(limit_map, "max_elapsed_ms"), 1)
+}
+
+test "budget constructors normalize policy budget and usage payloads" {
+	budget := create_agent_budget({
+		"budget_id": "budget-1",
+		"max_model_calls": 3,
+		"max_total_tokens": 1200,
+		"metadata": {
+			"scope": "test"
+		}
+	})
+	assert_equal(budget["type"], "AgentBudget")
+	assert_equal(budget["budget_id"], "budget-1")
+	assert_equal(budget["limits"]["max_model_calls"], 3)
+	assert_equal(budget["limits"]["max_total_tokens"], 1200)
+	assert_equal(budget["metadata"]["scope"], "test")
+
+	usage := create_budget_usage({
+		"run_id": "run-budget-1",
+		"model_calls": 1,
+		"total_tokens": 200
+	})
+	assert_equal(usage["type"], "BudgetUsage")
+	assert_equal(usage["run_id"], "run-budget-1")
+	assert_equal(usage["counters"]["model_calls"], 1)
+	assert_equal(usage["counters"]["total_tokens"], 200)
+	assert_equal(usage["counters"]["tool_calls"], 0)
+
+	policy := create_budget_limit_policy({
+		"mode": "observe",
+		"budget": budget
+	})
+	assert_equal(policy["type"], "BudgetLimitPolicy")
+	assert_equal(policy["mode"], "observe")
+	assert_equal(policy["budget"]["budget_id"], "budget-1")
+}
+
+test "budget usage increment helper updates counters deterministically" {
+	usage := create_budget_usage({
+		"run_id": "run-budget-2",
+		"model_calls": 1,
+		"total_tokens": 100,
+		"elapsed_ms": 50
+	})
+
+	updated := increment_budget_usage(usage, {
+		"model_calls": 2,
+		"tool_calls": 1,
+		"total_tokens": 240,
+		"elapsed_ms": 125
+	})
+
+	assert_equal(updated["type"], "BudgetUsage")
+	assert_equal(updated["run_id"], "run-budget-2")
+	assert_equal(updated["counters"]["model_calls"], 3)
+	assert_equal(updated["counters"]["tool_calls"], 1)
+	assert_equal(updated["counters"]["total_tokens"], 340)
+	assert_equal(updated["counters"]["elapsed_ms"], 175)
+}
+
+test "budget evaluation reports within limits for valid usage" {
+	policy := create_budget_limit_policy({
+		"mode": "enforce",
+		"budget": {
+			"budget_id": "budget-3",
+			"limits": {
+				"max_model_calls": 3,
+				"max_total_tokens": 500,
+				"max_elapsed_ms": 1000
+			}
+		}
+	})
+	usage := create_budget_usage({
+		"run_id": "run-budget-3",
+		"model_calls": 2,
+		"total_tokens": 320,
+		"elapsed_ms": 900
+	})
+
+	evaluation := evaluate_budget_limits(policy, usage, {
+		"metadata": {
+			"source": "tests"
+		}
+	})
+
+	assert_equal(evaluation["type"], "BudgetLimitEvaluation")
+	assert_equal(evaluation["ok"], true)
+	assert_equal(evaluation["status"], "within_limits")
+	assert_equal(len(evaluation["exceeded"]), 0)
+	assert_equal(type(evaluation["error"]), "null")
+	assert_equal(evaluation["metadata"]["source"], "tests")
+}
+
+test "budget evaluation returns budget_exceeded with deterministic details" {
+	policy := create_budget_limit_policy({
+		"mode": "enforce",
+		"budget": {
+			"budget_id": "budget-4",
+			"limits": {
+				"max_model_calls": 1,
+				"max_total_tokens": 300
+			}
+		}
+	})
+	usage := create_budget_usage({
+		"run_id": "run-budget-4",
+		"model_calls": 3,
+		"total_tokens": 480
+	})
+
+	evaluation := evaluate_budget_limits(policy, usage, {})
+
+	assert_equal(evaluation["ok"], false)
+	assert_equal(evaluation["status"], "budget_exceeded")
+	assert_equal(len(evaluation["exceeded"]), 2)
+	assert_equal(evaluation["error"]["kind"], "budget_exceeded")
+	assert_equal(evaluation["error"]["details"]["counter"], "model_calls")
+	assert_equal(evaluation["error"]["details"]["limit"], "max_model_calls")
+}
+
+test "budget evaluation supports observe mode while surfacing exceeded limits" {
+	policy := create_budget_limit_policy({
+		"mode": "observe",
+		"budget": {
+			"limits": {
+				"max_elapsed_ms": 100
+			}
+		}
+	})
+	usage := create_budget_usage({
+		"elapsed_ms": 250
+	})
+
+	evaluation := evaluate_budget_limits(policy, usage, {})
+
+	assert_equal(evaluation["ok"], false)
+	assert_equal(evaluation["status"], "exceeded_observe")
+	assert_equal(len(evaluation["exceeded"]), 1)
+	assert_equal(evaluation["exceeded"][0]["counter"], "elapsed_ms")
+	assert_equal(evaluation["exceeded"][0]["limit"], "max_elapsed_ms")
+}

@@ -1,0 +1,354 @@
+from src.agents.runtime.clock_ids import create_runtime_services, next_runtime_id
+
+func dict_get_or(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_positive_int(value, fallback) {
+	if type(value) == "int" {
+		if value > 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func normalize_dict(value) {
+	if type(value) == "dict" {
+		return value
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func array_contains(values, expected) {
+	for value in values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func map_merge(base, overrides) {
+	result := normalize_dict(base)
+	override_map := normalize_dict(overrides)
+	for key in keys(override_map) {
+		result[key] := override_map[key]
+	}
+	return result
+}
+
+func resolve_runtime_services(options_map) {
+	runtime_services := dict_get_or(options_map, "runtime_services", null)
+	if type(runtime_services) == "dict" {
+		return runtime_services
+	}
+	return create_runtime_services({})
+}
+
+func agent_message_role_values_impl() {
+	return ["system", "developer", "user", "assistant", "tool"]
+}
+
+func agent_step_kind_values_impl() {
+	return [
+		"model",
+		"tool_call",
+		"tool_result",
+		"guardrail",
+		"handoff",
+		"artifact",
+		"final"
+	]
+}
+
+func agent_run_status_values_impl() {
+	return ["running", "completed", "failed", "cancelled", "timeout", "budget_exceeded", "max_iterations"]
+}
+
+func default_agent_config_impl() {
+	return {
+		"id": "agent-default",
+		"name": "Default Agent",
+		"description": "",
+		"instructions": "",
+		"role": "assistant",
+		"capabilities": {},
+		"policy": {},
+		"model_policy": {},
+		"tools": [],
+		"memory": {},
+		"guardrails": [],
+		"approval_policy": {},
+		"handoff_targets": [],
+		"max_iterations": 8,
+		"timeout_ms": 120000,
+		"budget": {},
+		"output_schema": null,
+		"metadata": {}
+	}
+}
+
+func create_agent_config_impl(config_input) {
+	defaults := default_agent_config_impl()
+	config := map_merge(defaults, config_input)
+
+	config["id"] := normalize_string(dict_get_or(config, "id", defaults["id"]), defaults["id"])
+	config["name"] := normalize_string(dict_get_or(config, "name", defaults["name"]), defaults["name"])
+	config["description"] := normalize_string(dict_get_or(config, "description", defaults["description"]), defaults["description"])
+	config["instructions"] := normalize_string(dict_get_or(config, "instructions", defaults["instructions"]), defaults["instructions"])
+	config["role"] := normalize_string(dict_get_or(config, "role", defaults["role"]), defaults["role"])
+	config["capabilities"] := normalize_dict(dict_get_or(config, "capabilities", defaults["capabilities"]))
+	config["policy"] := normalize_dict(dict_get_or(config, "policy", defaults["policy"]))
+	config["model_policy"] := normalize_dict(dict_get_or(config, "model_policy", defaults["model_policy"]))
+	config["tools"] := normalize_array(dict_get_or(config, "tools", defaults["tools"]))
+	config["memory"] := normalize_dict(dict_get_or(config, "memory", defaults["memory"]))
+	config["guardrails"] := normalize_array(dict_get_or(config, "guardrails", defaults["guardrails"]))
+	config["approval_policy"] := normalize_dict(dict_get_or(config, "approval_policy", defaults["approval_policy"]))
+	config["handoff_targets"] := normalize_array(dict_get_or(config, "handoff_targets", defaults["handoff_targets"]))
+	config["max_iterations"] := normalize_positive_int(dict_get_or(config, "max_iterations", defaults["max_iterations"]), defaults["max_iterations"])
+	config["timeout_ms"] := normalize_non_negative_int(dict_get_or(config, "timeout_ms", defaults["timeout_ms"]), defaults["timeout_ms"])
+	config["budget"] := normalize_dict(dict_get_or(config, "budget", defaults["budget"]))
+	config["metadata"] := normalize_dict(dict_get_or(config, "metadata", defaults["metadata"]))
+
+	return config
+}
+
+func validate_agent_config_impl(config_input) {
+	config := create_agent_config_impl(config_input)
+	errors := []
+
+	if normalize_string(dict_get_or(config_input, "id", ""), "") == "" {
+		errors := push(errors, {
+			"field": "id",
+			"message": "Agent id is required."
+		})
+	}
+
+	if normalize_string(dict_get_or(config_input, "name", ""), "") == "" {
+		errors := push(errors, {
+			"field": "name",
+			"message": "Agent name is required."
+		})
+	}
+
+	if !array_contains(agent_message_role_values_impl(), dict_get_or(config, "role", "assistant")) {
+		errors := push(errors, {
+			"field": "role",
+			"message": "Agent role must be one of the supported message roles."
+		})
+	}
+
+	if type(dict_get_or(config_input, "max_iterations", 1)) == "int" {
+		if dict_get_or(config_input, "max_iterations", 1) <= 0 {
+			errors := push(errors, {
+				"field": "max_iterations",
+				"message": "max_iterations must be greater than zero."
+			})
+		}
+	}
+
+	if type(dict_get_or(config_input, "timeout_ms", 0)) == "int" {
+		if dict_get_or(config_input, "timeout_ms", 0) < 0 {
+			errors := push(errors, {
+				"field": "timeout_ms",
+				"message": "timeout_ms must be zero or greater."
+			})
+		}
+	}
+
+	return {
+		"ok": len(errors) == 0,
+		"errors": errors,
+		"normalized": config
+	}
+}
+
+func create_agent_impl(config_input) {
+	config := create_agent_config_impl(config_input)
+	return {
+		"type": "Agent",
+		"id": config["id"],
+		"name": config["name"],
+		"description": config["description"],
+		"instructions": config["instructions"],
+		"role": config["role"],
+		"capabilities": config["capabilities"],
+		"policy": config["policy"],
+		"model_policy": config["model_policy"],
+		"tools": config["tools"],
+		"memory": config["memory"],
+		"guardrails": config["guardrails"],
+		"approval_policy": config["approval_policy"],
+		"handoff_targets": config["handoff_targets"],
+		"max_iterations": config["max_iterations"],
+		"timeout_ms": config["timeout_ms"],
+		"budget": config["budget"],
+		"output_schema": dict_get_or(config, "output_schema", null),
+		"metadata": config["metadata"]
+	}
+}
+
+func create_agent_message_impl(role, content, metadata) {
+	resolved_role := normalize_string(role, "user")
+	if !array_contains(agent_message_role_values_impl(), resolved_role) {
+		resolved_role = "user"
+	}
+
+	return {
+		"type": "AgentMessage",
+		"role": resolved_role,
+		"content": normalize_string(content, ""),
+		"metadata": normalize_dict(metadata)
+	}
+}
+
+func create_agent_step_impl(step_kind, message, payload, metadata) {
+	metadata_map := normalize_dict(metadata)
+	runtime_services := resolve_runtime_services(metadata_map)
+	step_id := normalize_string(dict_get_or(metadata_map, "step_id", ""), "")
+	if step_id == "" {
+		id_result := next_runtime_id(runtime_services, "step")
+		step_id = dict_get_or(id_result, "id", "")
+		runtime_services = dict_get_or(id_result, "runtime_services", runtime_services)
+	}
+	metadata_map["runtime_services"] := runtime_services
+
+	resolved_step_kind := normalize_string(step_kind, "model")
+	if !array_contains(agent_step_kind_values_impl(), resolved_step_kind) {
+		resolved_step_kind = "model"
+	}
+
+	return {
+		"type": "AgentStep",
+		"step_id": step_id,
+		"step_kind": resolved_step_kind,
+		"message": normalize_string(message, ""),
+		"payload": normalize_dict(payload),
+		"metadata": metadata_map
+	}
+}
+
+func create_agent_run_request_impl(input_text, options) {
+	options_map := normalize_dict(options)
+	runtime_services := resolve_runtime_services(options_map)
+	run_id := normalize_string(dict_get_or(options_map, "run_id", ""), "")
+	if run_id == "" {
+		id_result := next_runtime_id(runtime_services, "run")
+		run_id = dict_get_or(id_result, "id", "")
+		runtime_services = dict_get_or(id_result, "runtime_services", runtime_services)
+	}
+
+	return {
+		"type": "AgentRunRequest",
+		"run_id": run_id,
+		"session_id": normalize_string(dict_get_or(options_map, "session_id", ""), "session-default"),
+		"input": normalize_string(input_text, ""),
+		"messages": normalize_array(dict_get_or(options_map, "messages", [])),
+		"stream": dict_get_or(options_map, "stream", false),
+		"metadata": normalize_dict(dict_get_or(options_map, "metadata", {})),
+		"runtime_services": runtime_services
+	}
+}
+
+func create_agent_context_impl(agent, run_request, runtime_options) {
+	runtime_map := normalize_dict(runtime_options)
+	return {
+		"type": "AgentContext",
+		"run_id": dict_get_or(run_request, "run_id", ""),
+		"session_id": dict_get_or(run_request, "session_id", ""),
+		"agent_id": dict_get_or(agent, "id", ""),
+		"agent_name": dict_get_or(agent, "name", ""),
+		"input": dict_get_or(run_request, "input", ""),
+		"messages": normalize_array(dict_get_or(run_request, "messages", [])),
+		"runtime": runtime_map,
+		"step_count": 0,
+		"status": "running"
+	}
+}
+
+func create_agent_run_result_impl(status, output, options) {
+	options_map := normalize_dict(options)
+	resolved_status := normalize_string(status, "failed")
+	if !array_contains(agent_run_status_values_impl(), resolved_status) {
+		resolved_status = "failed"
+	}
+
+	return {
+		"type": "AgentRunResult",
+		"status": resolved_status,
+		"output": output,
+		"error": dict_get_or(options_map, "error", null),
+		"steps": normalize_array(dict_get_or(options_map, "steps", [])),
+		"artifacts": normalize_array(dict_get_or(options_map, "artifacts", [])),
+		"metadata": normalize_dict(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func describe_core_types_module_impl() {
+	return {
+		"module": "agents.core_types",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"agent_message_role_values",
+			"agent_step_kind_values",
+			"agent_run_status_values",
+			"default_agent_config",
+			"create_agent_config",
+			"validate_agent_config",
+			"create_agent",
+			"create_agent_message",
+			"create_agent_step",
+			"create_agent_run_request",
+			"create_agent_context",
+			"create_agent_run_result"
+		]
+	}
+}
+
+export agent_message_role_values := agent_message_role_values_impl
+export agent_step_kind_values := agent_step_kind_values_impl
+export agent_run_status_values := agent_run_status_values_impl
+export default_agent_config := default_agent_config_impl
+export create_agent_config := create_agent_config_impl
+export validate_agent_config := validate_agent_config_impl
+export create_agent := create_agent_impl
+export create_agent_message := create_agent_message_impl
+export create_agent_step := create_agent_step_impl
+export create_agent_run_request := create_agent_run_request_impl
+export create_agent_context := create_agent_context_impl
+export create_agent_run_result := create_agent_run_result_impl
+export describe_core_types_module := describe_core_types_module_impl

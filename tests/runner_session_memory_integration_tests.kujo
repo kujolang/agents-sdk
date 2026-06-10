@@ -1,0 +1,87 @@
+test_setup {
+	from src.agents.core_types import create_agent, create_agent_run_request
+	from src.agents.ai.adapter import create_ai_sdk_adapter
+	from src.agents.runner import create_agent_runner, run_agent
+	from src.agents.sessions.store import create_in_memory_session_store, reset_in_memory_session_store
+	from src.agents.memory.store import create_in_memory_memory_store, reset_in_memory_memory_store, memory_store_query
+}
+
+test "runner persists and restores session/memory lifecycle across turns" {
+	fake_chat := func(client, messages, request_options) {
+		retry_attempt := request_options["retry_attempt"]
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "turn-output-" + to_string(retry_attempt),
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "memory-runner",
+		"name": "Memory Runner",
+		"instructions": "Track continuity across turns."
+	})
+
+	session_store_id := "mem-005-session-store"
+	memory_store_id := "mem-005-memory-store"
+	reset_session := reset_in_memory_session_store({
+		"store_id": session_store_id
+	})
+	reset_memory := reset_in_memory_memory_store({
+		"store_id": memory_store_id
+	})
+	assert_equal(reset_session["ok"], true)
+	assert_equal(reset_memory["ok"], true)
+
+	session_store := create_in_memory_session_store({
+		"store_id": session_store_id
+	})
+	memory_store := create_in_memory_memory_store({
+		"store_id": memory_store_id
+	})
+
+	first_request := create_agent_run_request("first turn", {
+		"run_id": "mem-005-run-1",
+		"session_id": "session-99"
+	})
+	first_result := run_agent(runner, agent, first_request, {
+		"session_store": session_store,
+		"memory_store": memory_store
+	})
+
+	assert_equal(first_result["status"], "completed")
+	assert_equal(first_result["metadata"]["session_store"]["restore"]["ok"], false)
+	assert_equal(len(first_result["metadata"]["session_store"]["writes"]) >= 2, true)
+	assert_equal(first_result["metadata"]["session_store"]["writes"][0]["stage"], "run_started")
+	assert_equal(first_result["metadata"]["memory_store_writes"][0]["stage"], "final_output")
+
+	second_request := create_agent_run_request("second turn", {
+		"run_id": "mem-005-run-2",
+		"session_id": "session-99"
+	})
+	second_result := run_agent(runner, agent, second_request, {
+		"session_store": session_store,
+		"memory_store": memory_store
+	})
+
+	assert_equal(second_result["status"], "completed")
+	assert_equal(second_result["metadata"]["session_store"]["restore"]["ok"], true)
+	assert_equal(type(second_result["metadata"]["context"]["restored_session_state"]), "dict")
+	assert_equal(second_result["metadata"]["memory_store_writes"][0]["ok"], true)
+
+	memory_query := memory_store_query(memory_store, {
+		"scope_kind": "session",
+		"scope_id": "session-99"
+	})
+	assert_equal(memory_query["ok"], true)
+	assert_equal(memory_query["count"], 2)
+	assert_equal(memory_query["type"], "MemoryQueryResult")
+}

@@ -1,0 +1,263 @@
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from src.agents.retrieval.provider import create_mock_retrieval_provider
+from src.agents.tools.registry import create_tool, create_tool_registry, register_tool
+
+func dict_get_or(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	if type(value) == "dict" {
+		return value
+	}
+	return {}
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned := {}
+		for key in keys(source) {
+			cloned[key] := clone_value(source[key])
+		}
+		return cloned
+	}
+
+	if type(value) == "array" {
+		cloned := []
+		for item in value {
+			cloned = push(cloned, clone_value(item))
+		}
+		return cloned
+	}
+
+	return value
+}
+
+func create_no_network_model_adapter_impl(options) {
+	options_map := normalize_dict(options)
+	provider_name := normalize_string(dict_get_or(options_map, "provider", "mock-provider"), "mock-provider")
+	model_name := normalize_string(dict_get_or(options_map, "model", "mock-model"), "mock-model")
+	output_text := normalize_string(dict_get_or(options_map, "output_text", "mock model response"), "mock model response")
+
+	chat_completion_fn := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": provider_name,
+			"model": model_name,
+			"request_id": "mock-request-1",
+			"status_code": 200,
+			"output_text": output_text,
+			"usage": {
+				"input_tokens": 10,
+				"output_tokens": 5,
+				"total_tokens": 15,
+				"cost_cents": 0
+			},
+			"emitted_events": [
+				{
+					"event": "done"
+				}
+			]
+		}
+	}
+
+	chat_completion_stream_fn := func(client, messages, request_options, on_event) {
+		if type(on_event) == "function" {
+			on_event({
+				"event": "output_text_delta",
+				"delta": output_text
+			})
+			on_event({
+				"event": "done"
+			})
+		}
+
+		return {
+			"ok": true,
+			"provider": provider_name,
+			"model": model_name,
+			"request_id": "mock-stream-request-1",
+			"status_code": 200,
+			"output_text": output_text,
+			"usage": {
+				"input_tokens": 10,
+				"output_tokens": 5,
+				"total_tokens": 15,
+				"cost_cents": 0
+			},
+			"emitted_events": [
+				{
+					"event": "output_text_delta",
+					"delta": output_text
+				},
+				{
+					"event": "done"
+				}
+			]
+		}
+	}
+
+	return create_ai_sdk_adapter({
+		"adapter_name": normalize_string(dict_get_or(options_map, "adapter_name", "no-network-model-adapter"), "no-network-model-adapter"),
+		"chat_completion_fn": chat_completion_fn,
+		"chat_completion_stream_fn": chat_completion_stream_fn,
+		"metadata": {
+			"fixture": "no_network",
+			"requires_network": false
+		}
+	})
+}
+
+func create_no_network_retrieval_provider_impl(options) {
+	options_map := normalize_dict(options)
+	responses := normalize_dict(dict_get_or(options_map, "responses", {}))
+	if len(keys(responses)) == 0 {
+		responses = {
+			"*": {
+				"summary": "Offline retrieval fixture response",
+				"documents": [
+					{
+						"document_id": "doc-offline-1",
+						"title": "Offline Fixture",
+						"content": "No-network retrieval fixture content",
+						"score": 0.9,
+						"source": "fixture"
+					}
+				],
+				"citations": [
+					{
+						"citation_id": "citation-offline-1",
+						"document_id": "doc-offline-1",
+						"span": "line:1",
+						"score": 0.9
+					}
+				]
+			}
+		}
+	}
+
+	return create_mock_retrieval_provider({
+		"name": normalize_string(dict_get_or(options_map, "name", "NoNetworkMockRetrievalProvider"), "NoNetworkMockRetrievalProvider"),
+		"responses": responses,
+		"metadata": {
+			"fixture": "no_network",
+			"requires_network": false
+		}
+	})
+}
+
+func create_no_network_tool_fixture_impl(options) {
+	options_map := normalize_dict(options)
+	tool_name := normalize_string(dict_get_or(options_map, "name", "echo_tool"), "echo_tool")
+	tool_id := normalize_string(dict_get_or(options_map, "id", "tool.echo"), "tool.echo")
+
+	return create_tool({
+		"id": tool_id,
+		"name": tool_name,
+		"description": normalize_string(dict_get_or(options_map, "description", "Deterministic offline echo tool"), "Deterministic offline echo tool"),
+		"input_schema": {
+			"type": "object",
+			"required": ["content"],
+			"properties": {
+				"content": {
+					"type": "string"
+				}
+			}
+		},
+		"handler": func(input_payload, context) {
+			input_map := normalize_dict(input_payload)
+			return {
+				"offline": true,
+				"tool": tool_name,
+				"content": normalize_string(dict_get_or(input_map, "content", ""), "")
+			}
+		},
+		"metadata": {
+			"fixture": "no_network",
+			"requires_network": false
+		}
+	})
+}
+
+func create_no_network_harness_impl(options) {
+	options_map := normalize_dict(options)
+	model_adapter := create_no_network_model_adapter_impl(dict_get_or(options_map, "model", {}))
+	retrieval_provider := create_no_network_retrieval_provider_impl(dict_get_or(options_map, "retrieval", {}))
+	registry := create_tool_registry({
+		"metadata": {
+			"fixture": "no_network"
+		}
+	})
+
+	tool_result := create_no_network_tool_fixture_impl(dict_get_or(options_map, "tool", {}))
+	if dict_get_or(tool_result, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(tool_result, "error", {
+				"kind": "tool_input_invalid",
+				"message": "No-network tool fixture could not be created."
+			})
+		}
+	}
+
+	register_result := register_tool(registry, dict_get_or(tool_result, "tool", {}))
+	if dict_get_or(register_result, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(register_result, "error", {
+				"kind": "tool_input_invalid",
+				"message": "No-network tool fixture could not be registered."
+			})
+		}
+	}
+
+	return {
+		"ok": true,
+		"type": "NoNetworkHarness",
+		"model_adapter": model_adapter,
+		"retrieval_provider": retrieval_provider,
+		"tool_registry": dict_get_or(register_result, "registry", registry),
+		"tool": dict_get_or(register_result, "tool", {}),
+		"metadata": {
+			"fixture": "no_network",
+			"requires_network": false
+		}
+	}
+}
+
+func describe_no_network_fixture_module_impl() {
+	return {
+		"module": "agents.testing.no_network",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_no_network_model_adapter",
+			"create_no_network_retrieval_provider",
+			"create_no_network_tool_fixture",
+			"create_no_network_harness"
+		]
+	}
+}
+
+export create_no_network_model_adapter := create_no_network_model_adapter_impl
+export create_no_network_retrieval_provider := create_no_network_retrieval_provider_impl
+export create_no_network_tool_fixture := create_no_network_tool_fixture_impl
+export create_no_network_harness := create_no_network_harness_impl
+export describe_no_network_fixture_module := describe_no_network_fixture_module_impl

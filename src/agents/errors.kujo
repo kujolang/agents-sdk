@@ -1,0 +1,178 @@
+func dict_get_or(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_dict(value) {
+	if type(value) == "dict" {
+		return value
+	}
+	return {}
+}
+
+func array_contains(values, expected) {
+	for value in values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func agent_error_kind_values_impl() {
+	return [
+		"invalid_config",
+		"invalid_request",
+		"provider_error",
+		"model_error",
+		"tool_not_found",
+		"tool_input_invalid",
+		"tool_execution_failed",
+		"approval_required",
+		"approval_denied",
+		"guardrail_blocked",
+		"handoff_failed",
+		"memory_error",
+		"retrieval_error",
+		"budget_exceeded",
+		"timeout",
+		"cancelled",
+		"structured_output_invalid",
+		"internal_error"
+	]
+}
+
+func retryable_error_kinds_impl() {
+	return [
+		"provider_error",
+		"model_error",
+		"retrieval_error",
+		"timeout"
+	]
+}
+
+func is_retryable_error_kind_impl(kind) {
+	return array_contains(retryable_error_kinds_impl(), kind)
+}
+
+func resolve_error_kind(kind_input, details) {
+	resolved_kind := normalize_string(kind_input, "internal_error")
+	if array_contains(agent_error_kind_values_impl(), resolved_kind) {
+		return {
+			"kind": resolved_kind,
+			"details": details
+		}
+	}
+
+	next_details := normalize_dict(details)
+	next_details["requested_kind"] := resolved_kind
+	return {
+		"kind": "internal_error",
+		"details": next_details
+	}
+}
+
+func create_agent_error_impl(kind_input, message, options) {
+	options_map := normalize_dict(options)
+	details := normalize_dict(dict_get_or(options_map, "details", {}))
+	kind_resolution := resolve_error_kind(kind_input, details)
+	resolved_kind := dict_get_or(kind_resolution, "kind", "internal_error")
+	resolved_details := normalize_dict(dict_get_or(kind_resolution, "details", {}))
+
+	retryable := dict_get_or(options_map, "retryable", is_retryable_error_kind_impl(resolved_kind))
+
+	return {
+		"type": "AgentError",
+		"kind": resolved_kind,
+		"code": resolved_kind,
+		"message": normalize_string(message, "Agent runtime error."),
+		"retryable": retryable,
+		"details": resolved_details,
+		"run_id": normalize_string(dict_get_or(options_map, "run_id", ""), ""),
+		"step_id": normalize_string(dict_get_or(options_map, "step_id", ""), ""),
+		"tool_name": normalize_string(dict_get_or(options_map, "tool_name", ""), ""),
+		"status_code": dict_get_or(options_map, "status_code", 0)
+	}
+}
+
+func normalize_agent_error_impl(error_input, fallback_kind) {
+	if type(error_input) == "dict" {
+		if dict_get_or(error_input, "type", "") == "AgentError" {
+			kind_value := normalize_string(dict_get_or(error_input, "kind", fallback_kind), fallback_kind)
+			message_value := normalize_string(dict_get_or(error_input, "message", "Agent runtime error."), "Agent runtime error.")
+			return create_agent_error_impl(kind_value, message_value, {
+				"retryable": dict_get_or(error_input, "retryable", false),
+				"details": dict_get_or(error_input, "details", {}),
+				"run_id": dict_get_or(error_input, "run_id", ""),
+				"step_id": dict_get_or(error_input, "step_id", ""),
+				"tool_name": dict_get_or(error_input, "tool_name", ""),
+				"status_code": dict_get_or(error_input, "status_code", 0)
+			})
+		}
+
+		message_value := normalize_string(dict_get_or(error_input, "message", "Agent runtime error."), "Agent runtime error.")
+		kind_value := normalize_string(dict_get_or(error_input, "kind", dict_get_or(error_input, "code", fallback_kind)), fallback_kind)
+		return create_agent_error_impl(kind_value, message_value, {
+			"retryable": dict_get_or(error_input, "retryable", false),
+			"details": dict_get_or(error_input, "details", error_input),
+			"run_id": dict_get_or(error_input, "run_id", ""),
+			"step_id": dict_get_or(error_input, "step_id", ""),
+			"tool_name": dict_get_or(error_input, "tool_name", ""),
+			"status_code": dict_get_or(error_input, "status_code", 0)
+		})
+	}
+
+	if type(error_input) == "string" {
+		return create_agent_error_impl(fallback_kind, error_input, {})
+	}
+
+	return create_agent_error_impl(fallback_kind, "Agent runtime error.", {})
+}
+
+func create_error_result_impl(error_input, status, metadata) {
+	resolved_status := normalize_string(status, "failed")
+	return {
+		"ok": false,
+		"status": resolved_status,
+		"error": normalize_agent_error_impl(error_input, "internal_error"),
+		"metadata": normalize_dict(metadata)
+	}
+}
+
+func describe_errors_module_impl() {
+	return {
+		"module": "agents.errors",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"error_kind_count": len(agent_error_kind_values_impl()),
+		"exports": [
+			"agent_error_kind_values",
+			"is_retryable_error_kind",
+			"create_agent_error",
+			"normalize_agent_error",
+			"create_error_result"
+		]
+	}
+}
+
+export agent_error_kind_values := agent_error_kind_values_impl
+export is_retryable_error_kind := is_retryable_error_kind_impl
+export create_agent_error := create_agent_error_impl
+export normalize_agent_error := normalize_agent_error_impl
+export create_error_result := create_error_result_impl
+export describe_errors_module := describe_errors_module_impl

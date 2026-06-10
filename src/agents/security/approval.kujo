@@ -1,0 +1,1307 @@
+from src.agents.runtime.clock_ids import create_runtime_services, next_runtime_id
+
+func key_in_dict(obj, expected_key) {
+	if type(obj) != "dict" {
+		return false
+	}
+
+	for key in keys(obj) {
+		if key == expected_key {
+			return true
+		}
+	}
+
+	return false
+}
+
+func unwrap_dict(value) {
+	if type(value) != "dict" {
+		return value
+	}
+
+	if key_in_dict(value, "_self") {
+		inner := value["_self"]
+		if type(inner) == "dict" {
+			return inner
+		}
+	}
+
+	return value
+}
+
+func dict_get_or(obj, key, default_value) {
+	source := unwrap_dict(obj)
+	if type(source) != "dict" {
+		return default_value
+	}
+	if key_in_dict(source, key) {
+		return source[key]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	unwrapped := unwrap_dict(value)
+	if type(unwrapped) == "dict" {
+		return unwrapped
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_bool(value, fallback) {
+	if type(value) == "bool" {
+		return value
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		cloned_dict := {}
+		for key in keys(value) {
+			cloned_dict[key] := clone_value(value[key])
+		}
+		return cloned_dict
+	}
+
+	if type(value) == "array" {
+		cloned_array := []
+		for item in value {
+			cloned_array = push(cloned_array, clone_value(item))
+		}
+		return cloned_array
+	}
+
+	return value
+}
+
+func safe_map_value(source_input, key_input, default_value) {
+	if type(source_input) != "dict" {
+		return default_value
+	}
+	if has_key(source_input, key_input) == 1 {
+		return source_input[key_input]
+	}
+	return default_value
+}
+
+func copy_dict_shallow(value_input) {
+	if type(value_input) != "dict" {
+		return {}
+	}
+	source := value_input
+	copy := {}
+
+	for key in keys(source) {
+		copy[key] = safe_map_value(source, key, null)
+	}
+
+	return copy
+}
+
+func array_contains(values_input, expected) {
+	values := normalize_array(values_input)
+	for value in values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func normalize_string_array(values_input) {
+	values := normalize_array(values_input)
+	normalized := []
+
+	for value in values {
+		normalized_value := normalize_string(value, "")
+		if normalized_value != "" {
+			normalized = push(normalized, normalized_value)
+		}
+	}
+
+	return normalized
+}
+
+func intersect_permissions(left_values_input, right_values_input) {
+	left_values := normalize_string_array(left_values_input)
+	right_values := normalize_string_array(right_values_input)
+	matched := []
+
+	for left_value in left_values {
+		if array_contains(right_values, left_value) {
+			matched = push(matched, left_value)
+		}
+	}
+
+	return matched
+}
+
+func approval_policy_mode_values_impl() {
+	return [
+		"always_allow",
+		"always_deny",
+		"write_tool",
+		"high_risk",
+		"permission_based"
+	]
+}
+
+func normalize_approval_policy_mode(value) {
+	mode := normalize_string(value, "always_allow")
+	if array_contains(approval_policy_mode_values_impl(), mode) {
+		return mode
+	}
+	return "always_allow"
+}
+
+func approval_provider_kind_values_impl() {
+	return [
+		"auto",
+		"deny_all",
+		"manual_stub"
+	]
+}
+
+func normalize_approval_provider_kind(value) {
+	kind := normalize_string(value, "manual_stub")
+	if array_contains(approval_provider_kind_values_impl(), kind) {
+		return kind
+	}
+	return "manual_stub"
+}
+
+func approval_provider_status_values_impl() {
+	return [
+		"approved",
+		"denied",
+		"pending"
+	]
+}
+
+func normalize_approval_provider_status(value) {
+	status := normalize_string(value, "pending")
+	if array_contains(approval_provider_status_values_impl(), status) {
+		return status
+	}
+	return "pending"
+}
+
+func guardrail_stage_values_impl() {
+	return [
+		"before_model",
+		"after_model",
+		"before_tool",
+		"after_tool",
+		"before_final_output"
+	]
+}
+
+func normalize_guardrail_stage(value) {
+	stage := normalize_string(value, "before_model")
+	if array_contains(guardrail_stage_values_impl(), stage) {
+		return stage
+	}
+	return "before_model"
+}
+
+func guardrail_action_values_impl() {
+	return [
+		"pass",
+		"warn",
+		"block"
+	]
+}
+
+func normalize_guardrail_action(value, fallback) {
+	action := normalize_string(value, fallback)
+	if array_contains(guardrail_action_values_impl(), action) {
+		return action
+	}
+	return normalize_string(fallback, "pass")
+}
+
+func create_guardrail_rule_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "GuardrailRule",
+		"rule_id": normalize_string(dict_get_or(options_map, "rule_id", "guardrail-rule"), "guardrail-rule"),
+		"name": normalize_string(dict_get_or(options_map, "name", "Guardrail Rule"), "Guardrail Rule"),
+		"stage": normalize_guardrail_stage(dict_get_or(options_map, "stage", "before_model")),
+		"on_match": normalize_guardrail_action(dict_get_or(options_map, "on_match", "block"), "block"),
+		"message": normalize_string(dict_get_or(options_map, "message", "Guardrail rule matched."), "Guardrail rule matched."),
+		"enabled": normalize_bool(dict_get_or(options_map, "enabled", true), true),
+		"matcher_fn": dict_get_or(options_map, "matcher_fn", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_guardrail_policy_impl(options) {
+	options_map := normalize_dict(options)
+	rules_input := normalize_array(dict_get_or(options_map, "rules", []))
+	normalized_rules := []
+
+	for rule in rules_input {
+		normalized_rules = push(normalized_rules, create_guardrail_rule_impl(rule))
+	}
+
+	return {
+		"type": "GuardrailPolicy",
+		"rules": normalized_rules,
+		"default_action": normalize_guardrail_action(dict_get_or(options_map, "default_action", "pass"), "pass"),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_guardrail_context_impl(stage_input, payload_input, options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "GuardrailContext",
+		"stage": normalize_guardrail_stage(stage_input),
+		"run_id": normalize_string(dict_get_or(options_map, "run_id", ""), ""),
+		"session_id": normalize_string(dict_get_or(options_map, "session_id", ""), ""),
+		"agent_id": normalize_string(dict_get_or(options_map, "agent_id", ""), ""),
+		"step_id": normalize_string(dict_get_or(options_map, "step_id", ""), ""),
+		"tool_name": normalize_string(dict_get_or(options_map, "tool_name", ""), ""),
+		"payload": normalize_dict(payload_input),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_guardrail_result_impl(action_input, reason_input, options) {
+	options_map := normalize_dict(options)
+	action := normalize_guardrail_action(action_input, "pass")
+
+	return {
+		"type": "GuardrailResult",
+		"action": action,
+		"passed": action == "pass",
+		"warned": action == "warn",
+		"blocked": action == "block",
+		"reason": normalize_string(reason_input, "Guardrail evaluation completed."),
+		"rule_id": normalize_string(dict_get_or(options_map, "rule_id", ""), ""),
+		"rule_name": normalize_string(dict_get_or(options_map, "rule_name", ""), ""),
+		"stage": normalize_guardrail_stage(dict_get_or(options_map, "stage", "before_model")),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func evaluate_guardrail_rule_impl(rule_input, context_input) {
+	rule := create_guardrail_rule_impl(rule_input)
+	context := normalize_dict(context_input)
+	rule_stage := normalize_guardrail_stage(dict_get_or(rule, "stage", "before_model"))
+	context_stage := normalize_guardrail_stage(dict_get_or(context, "stage", "before_model"))
+
+	if normalize_bool(dict_get_or(rule, "enabled", true), true) == false {
+		return create_guardrail_result_impl("pass", "Guardrail rule is disabled.", {
+			"rule_id": dict_get_or(rule, "rule_id", ""),
+			"rule_name": dict_get_or(rule, "name", ""),
+			"stage": context_stage
+		})
+	}
+
+	if rule_stage != context_stage {
+		return create_guardrail_result_impl("pass", "Guardrail stage does not apply to this context.", {
+			"rule_id": dict_get_or(rule, "rule_id", ""),
+			"rule_name": dict_get_or(rule, "name", ""),
+			"stage": context_stage,
+			"metadata": {
+				"rule_stage": rule_stage,
+				"context_stage": context_stage
+			}
+		})
+	}
+
+	matcher_fn := dict_get_or(rule, "matcher_fn", null)
+	if type(matcher_fn) != "function" {
+		return create_guardrail_result_impl("pass", "Guardrail matcher is not configured.", {
+			"rule_id": dict_get_or(rule, "rule_id", ""),
+			"rule_name": dict_get_or(rule, "name", ""),
+			"stage": context_stage
+		})
+	}
+
+	match_result := matcher_fn(context, rule)
+
+	if type(match_result) == "bool" {
+		if match_result {
+			return create_guardrail_result_impl(dict_get_or(rule, "on_match", "block"), dict_get_or(rule, "message", "Guardrail rule matched."), {
+				"rule_id": dict_get_or(rule, "rule_id", ""),
+				"rule_name": dict_get_or(rule, "name", ""),
+				"stage": context_stage
+			})
+		}
+
+		return create_guardrail_result_impl("pass", "Guardrail matcher passed.", {
+			"rule_id": dict_get_or(rule, "rule_id", ""),
+			"rule_name": dict_get_or(rule, "name", ""),
+			"stage": context_stage
+		})
+	}
+
+	if type(match_result) == "dict" {
+		matched := normalize_bool(dict_get_or(match_result, "matched", false), false)
+		if matched == false {
+			return create_guardrail_result_impl("pass", normalize_string(dict_get_or(match_result, "reason", "Guardrail matcher passed."), "Guardrail matcher passed."), {
+				"rule_id": dict_get_or(rule, "rule_id", ""),
+				"rule_name": dict_get_or(rule, "name", ""),
+				"stage": context_stage,
+				"metadata": clone_value(dict_get_or(match_result, "metadata", {}))
+			})
+		}
+
+		return create_guardrail_result_impl(normalize_guardrail_action(dict_get_or(match_result, "action", dict_get_or(rule, "on_match", "block")), dict_get_or(rule, "on_match", "block")), normalize_string(dict_get_or(match_result, "reason", dict_get_or(rule, "message", "Guardrail rule matched.")), dict_get_or(rule, "message", "Guardrail rule matched.")), {
+			"rule_id": dict_get_or(rule, "rule_id", ""),
+			"rule_name": dict_get_or(rule, "name", ""),
+			"stage": context_stage,
+			"metadata": clone_value(dict_get_or(match_result, "metadata", {}))
+		})
+	}
+
+	return create_guardrail_result_impl("pass", "Guardrail matcher returned an unsupported result type.", {
+		"rule_id": dict_get_or(rule, "rule_id", ""),
+		"rule_name": dict_get_or(rule, "name", ""),
+		"stage": context_stage,
+		"metadata": {
+			"matcher_result_type": type(match_result)
+		}
+	})
+}
+
+func evaluate_guardrails_impl(policy_input, context_input) {
+	policy := create_guardrail_policy_impl(policy_input)
+	context_map := normalize_dict(context_input)
+	context_stage := normalize_guardrail_stage(dict_get_or(context_map, "stage", "before_model"))
+	guardrail_context := create_guardrail_context_impl(context_stage, dict_get_or(context_map, "payload", context_map), context_map)
+	rules := normalize_array(dict_get_or(policy, "rules", []))
+	results := []
+	final_action := normalize_guardrail_action(dict_get_or(policy, "default_action", "pass"), "pass")
+	matched_count := 0
+
+	for rule in rules {
+		rule_result := evaluate_guardrail_rule_impl(rule, guardrail_context)
+		results = push(results, rule_result)
+
+		action := normalize_guardrail_action(dict_get_or(rule_result, "action", "pass"), "pass")
+		if action != "pass" {
+			matched_count = matched_count + 1
+		}
+
+		if action == "block" {
+			final_action = "block"
+		}
+
+		if action == "warn" && final_action != "block" {
+			final_action = "warn"
+		}
+	}
+
+	return {
+		"type": "GuardrailEvaluation",
+		"stage": context_stage,
+		"action": final_action,
+		"passed": final_action == "pass",
+		"warned": final_action == "warn",
+		"blocked": final_action == "block",
+		"results": results,
+		"metadata": {
+			"rules_total": len(rules),
+			"rules_matched": matched_count
+		}
+	}
+}
+
+func context_text_payload(context_input) {
+	context := normalize_dict(context_input)
+	payload := normalize_dict(dict_get_or(context, "payload", {}))
+
+	text := normalize_string(dict_get_or(payload, "text", ""), "")
+	if text != "" {
+		return text
+	}
+
+	input_text := normalize_string(dict_get_or(payload, "input_text", ""), "")
+	if input_text != "" {
+		return input_text
+	}
+
+	output_text := normalize_string(dict_get_or(payload, "output_text", ""), "")
+	if output_text != "" {
+		return output_text
+	}
+
+	final_text := normalize_string(dict_get_or(payload, "final_text", ""), "")
+	if final_text != "" {
+		return final_text
+	}
+
+	return ""
+}
+
+func text_contains_term(text_input, term_input) {
+	text := normalize_string(text_input, "")
+	term := normalize_string(term_input, "")
+
+	if text == "" || term == "" {
+		return false
+	}
+
+	if index_of(text, term) >= 0 {
+		return true
+	}
+
+	return false
+}
+
+func create_builtin_guardrails_impl(options) {
+	options_map := normalize_dict(options)
+	max_input_chars := normalize_non_negative_int(dict_get_or(options_map, "max_input_chars", 4000), 4000)
+	blocked_terms := normalize_string_array(dict_get_or(options_map, "blocked_terms", []))
+	blocked_risk_levels := normalize_string_array(dict_get_or(options_map, "blocked_risk_levels", ["high", "critical"]))
+	max_output_chars := normalize_non_negative_int(dict_get_or(options_map, "max_output_chars", 4000), 4000)
+	final_output_action := normalize_guardrail_action(dict_get_or(options_map, "final_output_action", "warn"), "warn")
+
+	return [
+		create_guardrail_rule_impl({
+			"rule_id": "builtin-max-input-length",
+			"name": "Max Input Length Guardrail",
+			"stage": "before_model",
+			"on_match": "block",
+			"message": "Input exceeds configured length limit.",
+			"matcher_fn": func(context, rule_map) {
+				input_text := context_text_payload(context)
+				if len(input_text) > max_input_chars {
+					return {
+						"matched": true,
+						"reason": "Input exceeds configured length limit.",
+						"metadata": {
+							"input_length": len(input_text),
+							"max_input_chars": max_input_chars
+						}
+					}
+				}
+
+				return {
+					"matched": false,
+					"reason": "Input length is within configured limit."
+				}
+			}
+		}),
+		create_guardrail_rule_impl({
+			"rule_id": "builtin-blocked-terms",
+			"name": "Blocked Terms Guardrail",
+			"stage": "before_model",
+			"on_match": "block",
+			"message": "Input contains blocked terms.",
+			"matcher_fn": func(context, rule_map) {
+				input_text := context_text_payload(context)
+				for blocked_term in blocked_terms {
+					if text_contains_term(input_text, blocked_term) {
+						return {
+							"matched": true,
+							"reason": "Input contains a blocked term.",
+							"metadata": {
+								"blocked_term": blocked_term
+							}
+						}
+					}
+				}
+
+				return {
+					"matched": false,
+					"reason": "No blocked terms were found."
+				}
+			}
+		}),
+		create_guardrail_rule_impl({
+			"rule_id": "builtin-tool-risk",
+			"name": "Tool Risk Guardrail",
+			"stage": "before_tool",
+			"on_match": "block",
+			"message": "Tool risk level is not permitted.",
+			"matcher_fn": func(context, rule_map) {
+				payload := normalize_dict(dict_get_or(context, "payload", {}))
+				tool_risk := normalize_string(dict_get_or(payload, "tool_risk", "medium"), "medium")
+
+				if array_contains(blocked_risk_levels, tool_risk) {
+					return {
+						"matched": true,
+						"reason": "Tool risk level is blocked by policy.",
+						"metadata": {
+							"tool_risk": tool_risk
+						}
+					}
+				}
+
+				return {
+					"matched": false,
+					"reason": "Tool risk level is allowed."
+				}
+			}
+		}),
+		create_guardrail_rule_impl({
+			"rule_id": "builtin-final-output-size",
+			"name": "Final Output Size Guardrail",
+			"stage": "before_final_output",
+			"on_match": final_output_action,
+			"message": "Final output exceeds configured length limit.",
+			"matcher_fn": func(context, rule_map) {
+				final_text := context_text_payload(context)
+				if len(final_text) > max_output_chars {
+					return {
+						"matched": true,
+						"action": final_output_action,
+						"reason": "Final output exceeds configured length limit.",
+						"metadata": {
+							"output_length": len(final_text),
+							"max_output_chars": max_output_chars
+						}
+					}
+				}
+
+				return {
+					"matched": false,
+					"reason": "Final output length is within configured limit."
+				}
+			}
+		})
+	]
+}
+
+func create_minimal_guardrail_policy_impl(options) {
+	options_map := normalize_dict(options)
+	builtin_rules := create_builtin_guardrails_impl(options_map)
+	extra_rules := normalize_array(dict_get_or(options_map, "rules", []))
+	all_rules := []
+
+	for builtin_rule in builtin_rules {
+		all_rules = push(all_rules, builtin_rule)
+	}
+
+	for extra_rule in extra_rules {
+		all_rules = push(all_rules, create_guardrail_rule_impl(extra_rule))
+	}
+
+	return create_guardrail_policy_impl({
+		"rules": all_rules,
+		"default_action": normalize_guardrail_action(dict_get_or(options_map, "default_action", "pass"), "pass"),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	})
+}
+
+func create_redaction_policy_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "RedactionPolicy",
+		"masked_keys": normalize_string_array(dict_get_or(options_map, "masked_keys", ["password", "token", "api_key", "authorization", "secret", "access_token", "refresh_token"])),
+		"blocked_value_terms": normalize_string_array(dict_get_or(options_map, "blocked_value_terms", ["Bearer ", "sk-", "BEGIN PRIVATE KEY"])),
+		"replacement": normalize_string(dict_get_or(options_map, "replacement", "[REDACTED]"), "[REDACTED]"),
+		"mask_event_payload": normalize_bool(dict_get_or(options_map, "mask_event_payload", true), true),
+		"mask_trace_payload": normalize_bool(dict_get_or(options_map, "mask_trace_payload", true), true),
+		"mask_tool_io": normalize_bool(dict_get_or(options_map, "mask_tool_io", true), true),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func should_redact_key(key_input, policy_input) {
+	key := normalize_string(key_input, "")
+	policy := normalize_dict(policy_input)
+	masked_keys := normalize_string_array(dict_get_or(policy, "masked_keys", []))
+	return array_contains(masked_keys, key)
+}
+
+func should_redact_string_value(value_input, policy_input) {
+	value := normalize_string(value_input, "")
+	policy := normalize_dict(policy_input)
+	blocked_value_terms := normalize_string_array(dict_get_or(policy, "blocked_value_terms", []))
+
+	for blocked_term in blocked_value_terms {
+		if text_contains_term(value, blocked_term) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func redact_value_with_count(value_input, policy_input) {
+	policy := create_redaction_policy_impl(policy_input)
+	replacement := normalize_string(dict_get_or(policy, "replacement", "[REDACTED]"), "[REDACTED]")
+
+	if type(value_input) == "dict" {
+		source := value_input
+		redacted_dict := {}
+		redacted_count := 0
+
+		for key in keys(source) {
+			current_value := safe_map_value(source, key, null)
+			if should_redact_key(key, policy) {
+				redacted_dict[key] = replacement
+				redacted_count = redacted_count + 1
+			} else {
+				nested_result := redact_value_with_count(current_value, policy)
+				redacted_dict[key] = nested_result["value"]
+				redacted_count = redacted_count + normalize_non_negative_int(nested_result["redacted_count"], 0)
+			}
+		}
+
+		return {
+			"value": redacted_dict,
+			"redacted_count": redacted_count
+		}
+	}
+
+	if type(value_input) == "array" {
+		source := normalize_array(value_input)
+		redacted_array := []
+		redacted_count := 0
+
+		for item in source {
+			nested_result := redact_value_with_count(item, policy)
+			redacted_array = push(redacted_array, nested_result["value"])
+			redacted_count = redacted_count + normalize_non_negative_int(nested_result["redacted_count"], 0)
+		}
+
+		return {
+			"value": redacted_array,
+			"redacted_count": redacted_count
+		}
+	}
+
+	if type(value_input) == "string" {
+		if should_redact_string_value(value_input, policy) {
+			return {
+				"value": replacement,
+				"redacted_count": 1
+			}
+		}
+	}
+
+	return {
+		"value": value_input,
+		"redacted_count": 0
+	}
+}
+
+func redact_event_payload_impl(event_input, policy_input) {
+	event_map := normalize_dict(event_input)
+	policy := create_redaction_policy_impl(policy_input)
+	if normalize_bool(dict_get_or(policy, "mask_event_payload", true), true) == false {
+		return {
+			"event": copy_dict_shallow(event_map),
+			"redacted": false,
+			"redacted_fields_count": 0
+		}
+	}
+
+	payload := normalize_dict(dict_get_or(event_map, "payload", {}))
+	redaction_result := redact_value_with_count(payload, policy)
+	redacted_count := normalize_non_negative_int(dict_get_or(redaction_result, "redacted_count", 0), 0)
+	updated_event := copy_dict_shallow(event_map)
+	updated_event["payload"] = dict_get_or(redaction_result, "value", {})
+
+	event_metadata := copy_dict_shallow(dict_get_or(updated_event, "metadata", {}))
+	event_metadata["redacted"] = redacted_count > 0
+	event_metadata["redacted_fields_count"] = redacted_count
+	updated_event["metadata"] = event_metadata
+
+	return {
+		"event": updated_event,
+		"redacted": redacted_count > 0,
+		"redacted_fields_count": redacted_count
+	}
+}
+
+func redact_trace_payload_impl(trace_payload_input, policy_input) {
+	policy := create_redaction_policy_impl(policy_input)
+	if normalize_bool(dict_get_or(policy, "mask_trace_payload", true), true) == false {
+		return {
+			"payload": trace_payload_input,
+			"redacted": false,
+			"redacted_fields_count": 0
+		}
+	}
+
+	redaction_result := redact_value_with_count(trace_payload_input, policy)
+	redacted_count := normalize_non_negative_int(dict_get_or(redaction_result, "redacted_count", 0), 0)
+
+	return {
+		"payload": dict_get_or(redaction_result, "value", trace_payload_input),
+		"redacted": redacted_count > 0,
+		"redacted_fields_count": redacted_count
+	}
+}
+
+func redact_tool_io_impl(tool_io_input, policy_input) {
+	policy := create_redaction_policy_impl(policy_input)
+	if normalize_bool(dict_get_or(policy, "mask_tool_io", true), true) == false {
+		return {
+			"tool_io": tool_io_input,
+			"redacted": false,
+			"redacted_fields_count": 0
+		}
+	}
+
+	redaction_result := redact_value_with_count(tool_io_input, policy)
+	redacted_count := normalize_non_negative_int(dict_get_or(redaction_result, "redacted_count", 0), 0)
+
+	return {
+		"tool_io": dict_get_or(redaction_result, "value", tool_io_input),
+		"redacted": redacted_count > 0,
+		"redacted_fields_count": redacted_count
+	}
+}
+
+func create_approval_policy_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "ApprovalPolicy",
+		"mode": normalize_approval_policy_mode(dict_get_or(options_map, "mode", "always_allow")),
+		"required_permissions": normalize_string_array(dict_get_or(options_map, "required_permissions", [])),
+		"write_permissions": normalize_string_array(dict_get_or(options_map, "write_permissions", ["write", "delete", "update", "admin"])),
+		"high_risk_levels": normalize_string_array(dict_get_or(options_map, "high_risk_levels", ["high", "critical"])),
+		"deny_reason": normalize_string(dict_get_or(options_map, "deny_reason", "Policy denies this action."), "Policy denies this action."),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_approval_request_impl(tool_input, context_input, options) {
+	tool := normalize_dict(tool_input)
+	context := normalize_dict(context_input)
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "ApprovalRequest",
+		"run_id": normalize_string(dict_get_or(context, "run_id", ""), ""),
+		"session_id": normalize_string(dict_get_or(context, "session_id", ""), ""),
+		"agent_id": normalize_string(dict_get_or(context, "agent_id", ""), ""),
+		"tool_name": normalize_string(dict_get_or(tool, "name", dict_get_or(context, "tool_name", "")), ""),
+		"tool_risk": normalize_string(dict_get_or(tool, "risk", "medium"), "medium"),
+		"tool_permissions": normalize_string_array(dict_get_or(tool, "permissions", [])),
+		"requested_by": normalize_string(dict_get_or(options_map, "requested_by", "runner"), "runner"),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_approval_decision_impl(outcome_input, reason_input, options) {
+	outcome := normalize_string(outcome_input, "allow")
+	if outcome != "allow" && outcome != "deny" && outcome != "require_approval" {
+		outcome = "deny"
+	}
+
+	options_map := normalize_dict(options)
+	mode := normalize_approval_policy_mode(dict_get_or(options_map, "mode", "always_allow"))
+
+	return {
+		"type": "ApprovalDecision",
+		"decision_id": normalize_string(dict_get_or(options_map, "decision_id", "approval-decision"), "approval-decision"),
+		"mode": mode,
+		"outcome": outcome,
+		"allowed": outcome == "allow",
+		"denied": outcome == "deny",
+		"requires_approval": outcome == "require_approval",
+		"reason": normalize_string(reason_input, "Approval decision applied."),
+		"matched_permissions": normalize_string_array(dict_get_or(options_map, "matched_permissions", [])),
+		"tool_name": normalize_string(dict_get_or(options_map, "tool_name", ""), ""),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_approval_provider_interface_impl(options) {
+	options_map := normalize_dict(options)
+	kind := normalize_approval_provider_kind(dict_get_or(options_map, "kind", "manual_stub"))
+	runtime_services := dict_get_or(options_map, "runtime_services", null)
+	if type(runtime_services) != "dict" {
+		runtime_services = create_runtime_services({})
+	}
+
+	return {
+		"type": "ApprovalProvider",
+		"kind": kind,
+		"provider_id": normalize_string(dict_get_or(options_map, "provider_id", kind + "-approval-provider"), kind + "-approval-provider"),
+		"runtime_services": runtime_services,
+		"resolve_fn": dict_get_or(options_map, "resolve_fn", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_approval_provider_request_impl(approval_request_input, options) {
+	approval_request := normalize_dict(approval_request_input)
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "ApprovalProviderRequest",
+		"request_id": normalize_string(dict_get_or(options_map, "request_id", "approval-request"), "approval-request"),
+		"approval_request": clone_value(approval_request),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_approval_provider_decision_impl(status_input, reason_input, options) {
+	options_map := normalize_dict(options)
+	status := normalize_approval_provider_status(status_input)
+
+	return {
+		"type": "ApprovalProviderDecision",
+		"decision_id": normalize_string(dict_get_or(options_map, "decision_id", "apd-0"), "apd-0"),
+		"provider_kind": normalize_approval_provider_kind(dict_get_or(options_map, "provider_kind", "manual_stub")),
+		"request_id": normalize_string(dict_get_or(options_map, "request_id", "approval-request"), "approval-request"),
+		"status": status,
+		"approved": status == "approved",
+		"denied": status == "denied",
+		"requires_manual_review": status == "pending",
+		"reason": normalize_string(reason_input, "Approval provider evaluated the request."),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func resolve_provider_decision_with_status(provider_input, provider_request_input, status, reason) {
+	provider := normalize_dict(provider_input)
+	provider_request := normalize_dict(provider_request_input)
+	runtime_services := dict_get_or(provider, "runtime_services", create_runtime_services({}))
+	id_result := next_runtime_id(runtime_services, "apd")
+	updated_provider := clone_value(provider)
+	updated_provider["runtime_services"] := dict_get_or(id_result, "runtime_services", runtime_services)
+
+	decision := create_approval_provider_decision_impl(status, reason, {
+		"decision_id": normalize_string(dict_get_or(id_result, "id", "apd-0"), "apd-0"),
+		"provider_kind": dict_get_or(provider, "kind", "manual_stub"),
+		"request_id": dict_get_or(provider_request, "request_id", "approval-request")
+	})
+
+	return {
+		"ok": true,
+		"provider": updated_provider,
+		"decision": decision
+	}
+}
+
+func create_auto_approval_provider_impl(options) {
+	options_map := normalize_dict(options)
+
+	return create_approval_provider_interface_impl({
+		"kind": "auto",
+		"provider_id": dict_get_or(options_map, "provider_id", "auto-approval-provider"),
+		"runtime_services": dict_get_or(options_map, "runtime_services", create_runtime_services({})),
+		"metadata": dict_get_or(options_map, "metadata", {}),
+		"resolve_fn": func(provider, provider_request) {
+			return resolve_provider_decision_with_status(provider, provider_request, "approved", "Automatically approved by provider policy.")
+		}
+	})
+}
+
+func create_deny_all_approval_provider_impl(options) {
+	options_map := normalize_dict(options)
+
+	return create_approval_provider_interface_impl({
+		"kind": "deny_all",
+		"provider_id": dict_get_or(options_map, "provider_id", "deny-all-approval-provider"),
+		"runtime_services": dict_get_or(options_map, "runtime_services", create_runtime_services({})),
+		"metadata": dict_get_or(options_map, "metadata", {}),
+		"resolve_fn": func(provider, provider_request) {
+			return resolve_provider_decision_with_status(provider, provider_request, "denied", "Denied by provider default policy.")
+		}
+	})
+}
+
+func create_manual_stub_approval_provider_impl(options) {
+	options_map := normalize_dict(options)
+
+	return create_approval_provider_interface_impl({
+		"kind": "manual_stub",
+		"provider_id": dict_get_or(options_map, "provider_id", "manual-stub-approval-provider"),
+		"runtime_services": dict_get_or(options_map, "runtime_services", create_runtime_services({})),
+		"metadata": dict_get_or(options_map, "metadata", {}),
+		"resolve_fn": func(provider, provider_request) {
+			return resolve_provider_decision_with_status(provider, provider_request, "pending", "Manual approval is required.")
+		}
+	})
+}
+
+func resolve_approval_provider_decision_impl(provider_input, provider_request_input) {
+	provider := normalize_dict(provider_input)
+	provider_request_raw := normalize_dict(provider_request_input)
+	provider_request := create_approval_provider_request_impl(dict_get_or(provider_request_raw, "approval_request", provider_request_raw), provider_request_raw)
+
+	resolve_fn := dict_get_or(provider, "resolve_fn", null)
+	if type(resolve_fn) != "function" {
+		kind := normalize_approval_provider_kind(dict_get_or(provider, "kind", "manual_stub"))
+		if kind == "auto" {
+			provider = create_auto_approval_provider_impl(provider)
+		}
+		if kind == "deny_all" {
+			provider = create_deny_all_approval_provider_impl(provider)
+		}
+		if kind == "manual_stub" {
+			provider = create_manual_stub_approval_provider_impl(provider)
+		}
+		resolve_fn = dict_get_or(provider, "resolve_fn", null)
+	}
+
+	if type(resolve_fn) != "function" {
+		return {
+			"ok": false,
+			"provider": provider,
+			"decision": create_approval_provider_decision_impl("pending", "Approval provider could not resolve the decision.", {
+				"provider_kind": dict_get_or(provider, "kind", "manual_stub"),
+				"request_id": dict_get_or(provider_request, "request_id", "approval-request")
+			})
+		}
+	}
+
+	result := resolve_fn(provider, provider_request)
+	if type(result) != "dict" {
+		return {
+			"ok": false,
+			"provider": provider,
+			"decision": create_approval_provider_decision_impl("pending", "Approval provider returned an invalid payload.", {
+				"provider_kind": dict_get_or(provider, "kind", "manual_stub"),
+				"request_id": dict_get_or(provider_request, "request_id", "approval-request")
+			})
+		}
+	}
+
+	return {
+		"ok": dict_get_or(result, "ok", true),
+		"provider": dict_get_or(result, "provider", provider),
+		"decision": dict_get_or(result, "decision", create_approval_provider_decision_impl("pending", "Approval provider returned no decision.", {
+			"provider_kind": dict_get_or(provider, "kind", "manual_stub"),
+			"request_id": dict_get_or(provider_request, "request_id", "approval-request")
+		}))
+	}
+}
+
+func evaluate_approval_policy_impl(policy_input, request_input) {
+	policy := create_approval_policy_impl(policy_input)
+	request := normalize_dict(request_input)
+	mode := normalize_approval_policy_mode(dict_get_or(policy, "mode", "always_allow"))
+
+	if mode == "always_allow" {
+		return create_approval_decision_impl("allow", "Approval policy allows this request.", {
+			"mode": mode,
+			"tool_name": dict_get_or(request, "tool_name", "")
+		})
+	}
+
+	if mode == "always_deny" {
+		return create_approval_decision_impl("deny", dict_get_or(policy, "deny_reason", "Policy denies this action."), {
+			"mode": mode,
+			"tool_name": dict_get_or(request, "tool_name", "")
+		})
+	}
+
+	if mode == "write_tool" {
+		matched_permissions := intersect_permissions(dict_get_or(request, "tool_permissions", []), dict_get_or(policy, "write_permissions", []))
+		if len(matched_permissions) > 0 {
+			return create_approval_decision_impl("require_approval", "Write-capable tool requires approval.", {
+				"mode": mode,
+				"tool_name": dict_get_or(request, "tool_name", ""),
+				"matched_permissions": matched_permissions
+			})
+		}
+
+		return create_approval_decision_impl("allow", "Tool is read-only under write_tool policy.", {
+			"mode": mode,
+			"tool_name": dict_get_or(request, "tool_name", "")
+		})
+	}
+
+	if mode == "high_risk" {
+		tool_risk := normalize_string(dict_get_or(request, "tool_risk", "medium"), "medium")
+		if array_contains(dict_get_or(policy, "high_risk_levels", []), tool_risk) {
+			return create_approval_decision_impl("require_approval", "High-risk tool requires approval.", {
+				"mode": mode,
+				"tool_name": dict_get_or(request, "tool_name", ""),
+				"metadata": {
+					"tool_risk": tool_risk
+				}
+			})
+		}
+
+		return create_approval_decision_impl("allow", "Tool risk does not require approval.", {
+			"mode": mode,
+			"tool_name": dict_get_or(request, "tool_name", ""),
+			"metadata": {
+				"tool_risk": tool_risk
+			}
+		})
+	}
+
+	if mode == "permission_based" {
+		matched_permissions := intersect_permissions(dict_get_or(request, "tool_permissions", []), dict_get_or(policy, "required_permissions", []))
+		if len(matched_permissions) > 0 {
+			return create_approval_decision_impl("require_approval", "Tool permissions require explicit approval.", {
+				"mode": mode,
+				"tool_name": dict_get_or(request, "tool_name", ""),
+				"matched_permissions": matched_permissions
+			})
+		}
+
+		return create_approval_decision_impl("allow", "Tool permissions are allowed by policy.", {
+			"mode": mode,
+			"tool_name": dict_get_or(request, "tool_name", "")
+		})
+	}
+
+	return create_approval_decision_impl("allow", "Approval policy allows this request.", {
+		"mode": "always_allow",
+		"tool_name": dict_get_or(request, "tool_name", "")
+	})
+}
+
+func memory_scope_kind_values_impl() {
+	return ["session", "user", "project"]
+}
+
+func normalize_memory_scope_kind(value_input) {
+	value := normalize_string(value_input, "session")
+	if array_contains(memory_scope_kind_values_impl(), value) {
+		return value
+	}
+	return "session"
+}
+
+func memory_data_class_values_impl() {
+	return ["general", "pii", "credentials", "secret", "system"]
+}
+
+func normalize_memory_data_class(value_input) {
+	value := normalize_string(value_input, "general")
+	if array_contains(memory_data_class_values_impl(), value) {
+		return value
+	}
+	return "general"
+}
+
+func create_memory_write_policy_impl(options) {
+	options_map := normalize_dict(options)
+	mode := normalize_string(dict_get_or(options_map, "mode", "allow_all"), "allow_all")
+	if mode != "allow_all" && mode != "deny_all" && mode != "restricted" {
+		mode = "allow_all"
+	}
+
+	return {
+		"type": "MemoryWritePolicy",
+		"mode": mode,
+		"allowed_scopes": normalize_string_array(dict_get_or(options_map, "allowed_scopes", memory_scope_kind_values_impl())),
+		"denied_scopes": normalize_string_array(dict_get_or(options_map, "denied_scopes", [])),
+		"blocked_data_classes": normalize_string_array(dict_get_or(options_map, "blocked_data_classes", [])),
+		"deny_reason": normalize_string(dict_get_or(options_map, "deny_reason", "Memory write denied by policy."), "Memory write denied by policy."),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_memory_write_request_impl(scope_kind_input, scope_id_input, options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "MemoryWriteRequest",
+		"scope_kind": normalize_memory_scope_kind(scope_kind_input),
+		"scope_id": normalize_string(scope_id_input, "default"),
+		"data_class": normalize_memory_data_class(dict_get_or(options_map, "data_class", "general")),
+		"content": normalize_string(dict_get_or(options_map, "content", ""), ""),
+		"source": normalize_string(dict_get_or(options_map, "source", "runner"), "runner"),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_memory_write_denial_error_impl(code_input, message_input, details_input) {
+	code := normalize_string(code_input, "memory_write_denied")
+
+	return {
+		"type": "MemoryWritePolicyError",
+		"kind": "memory_write_denied",
+		"code": code,
+		"message": normalize_string(message_input, "Memory write denied by policy."),
+		"details": clone_value(normalize_dict(details_input))
+	}
+}
+
+func create_memory_write_decision_impl(outcome_input, reason_input, options) {
+	options_map := normalize_dict(options)
+	outcome := normalize_string(outcome_input, "allow")
+	if outcome != "allow" && outcome != "deny" {
+		outcome = "deny"
+	}
+
+	return {
+		"type": "MemoryWriteDecision",
+		"outcome": outcome,
+		"allowed": outcome == "allow",
+		"denied": outcome == "deny",
+		"reason": normalize_string(reason_input, "Memory write policy evaluated."),
+		"error": dict_get_or(options_map, "error", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func evaluate_memory_write_policy_impl(policy_input, request_input) {
+	policy := create_memory_write_policy_impl(policy_input)
+	request := normalize_dict(request_input)
+	mode := normalize_string(dict_get_or(policy, "mode", "allow_all"), "allow_all")
+	scope_kind := normalize_memory_scope_kind(dict_get_or(request, "scope_kind", "session"))
+	scope_id := normalize_string(dict_get_or(request, "scope_id", "default"), "default")
+	data_class := normalize_memory_data_class(dict_get_or(request, "data_class", "general"))
+	allowed_scopes := normalize_string_array(dict_get_or(policy, "allowed_scopes", memory_scope_kind_values_impl()))
+	denied_scopes := normalize_string_array(dict_get_or(policy, "denied_scopes", []))
+	blocked_data_classes := normalize_string_array(dict_get_or(policy, "blocked_data_classes", []))
+
+	if mode == "deny_all" {
+		error := create_memory_write_denial_error_impl("policy_deny_all", dict_get_or(policy, "deny_reason", "Memory write denied by policy."), {
+			"scope_kind": scope_kind,
+			"scope_id": scope_id,
+			"data_class": data_class
+		})
+		return create_memory_write_decision_impl("deny", dict_get_or(policy, "deny_reason", "Memory write denied by policy."), {
+			"error": error
+		})
+	}
+
+	if array_contains(denied_scopes, scope_kind) {
+		error := create_memory_write_denial_error_impl("scope_restricted", "Memory writes are not allowed in this scope.", {
+			"scope_kind": scope_kind,
+			"scope_id": scope_id
+		})
+		return create_memory_write_decision_impl("deny", "Memory writes are not allowed in this scope.", {
+			"error": error
+		})
+	}
+
+	if array_contains(blocked_data_classes, data_class) {
+		error := create_memory_write_denial_error_impl("data_class_restricted", "Memory writes for this data class are not allowed.", {
+			"scope_kind": scope_kind,
+			"scope_id": scope_id,
+			"data_class": data_class
+		})
+		return create_memory_write_decision_impl("deny", "Memory writes for this data class are not allowed.", {
+			"error": error
+		})
+	}
+
+	if mode == "restricted" && array_contains(allowed_scopes, scope_kind) == false {
+		error := create_memory_write_denial_error_impl("scope_not_allowed", "Memory write scope is not included in the allow-list.", {
+			"scope_kind": scope_kind,
+			"scope_id": scope_id,
+			"allowed_scopes": allowed_scopes
+		})
+		return create_memory_write_decision_impl("deny", "Memory write scope is not included in the allow-list.", {
+			"error": error
+		})
+	}
+
+	return create_memory_write_decision_impl("allow", "Memory write is allowed by policy.", {
+		"metadata": {
+			"scope_kind": scope_kind,
+			"scope_id": scope_id,
+			"data_class": data_class
+		}
+	})
+}
+
+func describe_approval_module_impl() {
+	return {
+		"module": "agents.security.approval",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"approval_policy_mode_values",
+			"approval_provider_kind_values",
+			"approval_provider_status_values",
+			"guardrail_stage_values",
+			"guardrail_action_values",
+			"create_approval_policy",
+			"create_approval_request",
+			"create_approval_decision",
+			"evaluate_approval_policy",
+			"create_guardrail_rule",
+			"create_guardrail_policy",
+			"create_guardrail_context",
+			"create_guardrail_result",
+			"evaluate_guardrail_rule",
+			"evaluate_guardrails",
+			"create_builtin_guardrails",
+			"create_minimal_guardrail_policy",
+			"create_redaction_policy",
+			"redact_event_payload",
+			"redact_trace_payload",
+			"redact_tool_io",
+			"memory_scope_kind_values",
+			"memory_data_class_values",
+			"create_memory_write_policy",
+			"create_memory_write_request",
+			"create_memory_write_denial_error",
+			"create_memory_write_decision",
+			"evaluate_memory_write_policy",
+			"create_auto_approval_provider",
+			"create_deny_all_approval_provider",
+			"create_manual_stub_approval_provider",
+			"create_approval_provider_request",
+			"resolve_approval_provider_decision"
+		]
+	}
+}
+
+export approval_policy_mode_values := approval_policy_mode_values_impl
+export approval_provider_kind_values := approval_provider_kind_values_impl
+export approval_provider_status_values := approval_provider_status_values_impl
+export guardrail_stage_values := guardrail_stage_values_impl
+export guardrail_action_values := guardrail_action_values_impl
+export create_approval_policy := create_approval_policy_impl
+export create_approval_request := create_approval_request_impl
+export create_approval_decision := create_approval_decision_impl
+export evaluate_approval_policy := evaluate_approval_policy_impl
+export create_guardrail_rule := create_guardrail_rule_impl
+export create_guardrail_policy := create_guardrail_policy_impl
+export create_guardrail_context := create_guardrail_context_impl
+export create_guardrail_result := create_guardrail_result_impl
+export evaluate_guardrail_rule := evaluate_guardrail_rule_impl
+export evaluate_guardrails := evaluate_guardrails_impl
+export create_builtin_guardrails := create_builtin_guardrails_impl
+export create_minimal_guardrail_policy := create_minimal_guardrail_policy_impl
+export create_redaction_policy := create_redaction_policy_impl
+export redact_event_payload := redact_event_payload_impl
+export redact_trace_payload := redact_trace_payload_impl
+export redact_tool_io := redact_tool_io_impl
+export memory_scope_kind_values := memory_scope_kind_values_impl
+export memory_data_class_values := memory_data_class_values_impl
+export create_memory_write_policy := create_memory_write_policy_impl
+export create_memory_write_request := create_memory_write_request_impl
+export create_memory_write_denial_error := create_memory_write_denial_error_impl
+export create_memory_write_decision := create_memory_write_decision_impl
+export evaluate_memory_write_policy := evaluate_memory_write_policy_impl
+export create_auto_approval_provider := create_auto_approval_provider_impl
+export create_deny_all_approval_provider := create_deny_all_approval_provider_impl
+export create_manual_stub_approval_provider := create_manual_stub_approval_provider_impl
+export create_approval_provider_request := create_approval_provider_request_impl
+export resolve_approval_provider_decision := resolve_approval_provider_decision_impl
+export describe_approval_module := describe_approval_module_impl

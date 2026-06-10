@@ -1,0 +1,51 @@
+from src.agents.testing.no_network import create_no_network_harness
+from src.agents.runner import create_agent_runner, run_agent
+from src.agents.core_types import create_agent, create_agent_run_request
+
+func run_retrieval_agent_example_impl() {
+	harness_result := create_no_network_harness({
+		"model": {
+			"output_text": "retrieval-agent-offline"
+		}
+	})
+	if harness_result["ok"] == false {
+		return {
+			"ok": false,
+			"requires_network": false,
+			"error": harness_result["error"]
+		}
+	}
+
+	harness := harness_result
+	runner := create_agent_runner({
+		"ai_adapter": harness["model_adapter"]
+	})
+	agent := create_agent({
+		"id": "example-retrieval-agent",
+		"name": "Example Retrieval Agent",
+		"policy": {
+			"retrieval": {
+				"enabled": true,
+				"max_documents": 1
+			}
+		}
+	})
+	run_request := create_agent_run_request("retrieve offline context", {
+		"run_id": "run-example-retrieval",
+		"session_id": "session-example-retrieval"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"retrieval_provider": harness["retrieval_provider"],
+		"tool_registry": harness["tool_registry"]
+	})
+
+	return {
+		"ok": true,
+		"requires_network": false,
+		"scenario": "retrieval_agent",
+		"result": result
+	}
+}
+
+export run_retrieval_agent_example := run_retrieval_agent_example_impl

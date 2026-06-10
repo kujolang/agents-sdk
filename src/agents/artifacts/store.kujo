@@ -1,0 +1,774 @@
+func key_in_dict(obj, expected_key) {
+	if type(obj) != "dict" {
+		return false
+	}
+
+	for key in keys(obj) {
+		if key == expected_key {
+			return true
+		}
+	}
+
+	return false
+}
+
+func unwrap_dict(value) {
+	if type(value) != "dict" {
+		return value
+	}
+
+	if key_in_dict(value, "_self") {
+		inner := value["_self"]
+		if type(inner) == "dict" {
+			return inner
+		}
+	}
+
+	return value
+}
+
+func dict_get_or(obj, key, default_value) {
+	source := unwrap_dict(obj)
+	if type(source) != "dict" {
+		return default_value
+	}
+	if key_in_dict(source, key) {
+		return source[key]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	unwrapped := unwrap_dict(value)
+	if type(unwrapped) == "dict" {
+		return unwrapped
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func array_contains(values_input, expected) {
+	values := normalize_array(values_input)
+	for value in values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned := {}
+		for key in keys(source) {
+			cloned[key] := clone_value(source[key])
+		}
+		return cloned
+	}
+
+	if type(value) == "array" {
+		cloned := []
+		for item in value {
+			cloned = push(cloned, clone_value(item))
+		}
+		return cloned
+	}
+
+	return value
+}
+
+func merge_dicts(base_input, patch_input) {
+	base := normalize_dict(base_input)
+	patch := normalize_dict(patch_input)
+	merged := clone_value(base)
+
+	for key in keys(patch) {
+		merged[key] := patch[key]
+	}
+
+	return merged
+}
+
+func contains_traversal_segment(path_input) {
+	path_value := normalize_string(path_input, "")
+	if path_value == "" {
+		return false
+	}
+
+	if index_of(path_value, "..") >= 0 {
+		return true
+	}
+
+	if index_of(path_value, "\\") >= 0 {
+		return true
+	}
+
+	return false
+}
+
+func resolve_file_artifact_path(metadata_input, artifact_id_input) {
+	metadata := normalize_dict(metadata_input)
+	root_path := normalize_string(dict_get_or(metadata, "root_path", ""), "")
+	file_extension := normalize_string(dict_get_or(metadata, "file_extension", ".artifact"), ".artifact")
+	artifact_id := normalize_string(artifact_id_input, "")
+
+	if root_path == "" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "invalid_path",
+				"message": "File artifact store root path is required.",
+				"details": {
+					"field": "root_path"
+				}
+			}
+		}
+	}
+
+	if artifact_id == "" || contains_traversal_segment(artifact_id) || index_of(artifact_id, "/") >= 0 {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "invalid_path",
+				"message": "Artifact ID must be a safe leaf identifier for file-backed stores.",
+				"details": {
+					"artifact_id": artifact_id
+				}
+			}
+		}
+	}
+
+	return {
+		"ok": true,
+		"file_path": root_path + "/" + artifact_id + file_extension,
+		"root_path": root_path,
+		"file_extension": file_extension
+	}
+}
+
+func artifact_kind_values_impl() {
+	return ["text", "markdown", "json", "binary", "report", "trace", "other"]
+}
+
+func normalize_artifact_kind(value_input) {
+	kind := normalize_string(value_input, "other")
+	if array_contains(artifact_kind_values_impl(), kind) {
+		return kind
+	}
+	return "other"
+}
+
+func create_artifact_id_impl(value_input, options) {
+	options_map := normalize_dict(options)
+	prefix := normalize_string(dict_get_or(options_map, "prefix", "artifact"), "artifact")
+	resolved := normalize_string(value_input, "")
+	if resolved == "" {
+		resolved = prefix + "-default"
+	}
+
+	return {
+		"type": "ArtifactId",
+		"value": resolved,
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func resolve_artifact_id_value(value_input, options) {
+	if type(value_input) == "dict" {
+		if normalize_string(dict_get_or(value_input, "type", ""), "") == "ArtifactId" {
+			return normalize_string(dict_get_or(value_input, "value", ""), normalize_string(dict_get_or(normalize_dict(options), "fallback", "artifact-default"), "artifact-default"))
+		}
+	}
+
+	resolved := normalize_string(value_input, "")
+	if resolved != "" {
+		return resolved
+	}
+
+	return normalize_string(dict_get_or(normalize_dict(options), "fallback", "artifact-default"), "artifact-default")
+}
+
+func estimated_artifact_bytes(content_input, explicit_bytes_input) {
+	explicit_bytes := normalize_non_negative_int(explicit_bytes_input, -1)
+	if explicit_bytes >= 0 {
+		return explicit_bytes
+	}
+
+	content := normalize_string(content_input, "")
+	if content == "" {
+		return 0
+	}
+
+	return len(content)
+}
+
+func create_artifact_impl(options) {
+	options_map := normalize_dict(options)
+	artifact_id := resolve_artifact_id_value(dict_get_or(options_map, "artifact_id", dict_get_or(options_map, "id", "")), {
+		"fallback": "artifact-default"
+	})
+
+	content := normalize_string(dict_get_or(options_map, "content", ""), "")
+
+	return {
+		"type": "Artifact",
+		"artifact_id": artifact_id,
+		"artifact_kind": normalize_artifact_kind(dict_get_or(options_map, "artifact_kind", dict_get_or(options_map, "kind", "other"))),
+		"title": normalize_string(dict_get_or(options_map, "title", ""), ""),
+		"content": content,
+		"media_type": normalize_string(dict_get_or(options_map, "media_type", "text/plain"), "text/plain"),
+		"bytes": estimated_artifact_bytes(content, dict_get_or(options_map, "bytes", -1)),
+		"producer_run_id": normalize_string(dict_get_or(options_map, "producer_run_id", ""), ""),
+		"producer_step_id": normalize_string(dict_get_or(options_map, "producer_step_id", ""), ""),
+		"producer_tool_name": normalize_string(dict_get_or(options_map, "producer_tool_name", ""), ""),
+		"created_at": normalize_string(dict_get_or(options_map, "created_at", ""), ""),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_artifact_store_interface_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "ArtifactStore",
+		"name": normalize_string(dict_get_or(options_map, "name", "ArtifactStore"), "ArtifactStore"),
+		"create_artifact_fn": dict_get_or(options_map, "create_artifact_fn", null),
+		"get_artifact_fn": dict_get_or(options_map, "get_artifact_fn", null),
+		"list_artifacts_fn": dict_get_or(options_map, "list_artifacts_fn", null),
+		"metadata": normalize_dict(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func ensure_artifact_store_impl(store_input) {
+	store := normalize_dict(store_input)
+	if normalize_string(dict_get_or(store, "type", ""), "") == "ArtifactStore" {
+		return store
+	}
+
+	return create_artifact_store_interface_impl({})
+}
+
+func not_implemented_result(operation_name) {
+	return {
+		"ok": false,
+		"error": {
+			"kind": "not_implemented",
+			"message": "Artifact store operation is not implemented.",
+			"details": {
+				"operation": normalize_string(operation_name, "unknown")
+			}
+		}
+	}
+}
+
+func artifact_store_create_impl(store_input, artifact_input) {
+	store := ensure_artifact_store_impl(store_input)
+	create_fn := dict_get_or(store, "create_artifact_fn", null)
+	if type(create_fn) != "function" {
+		return not_implemented_result("create_artifact")
+	}
+
+	artifact := create_artifact_impl(artifact_input)
+	store_metadata := normalize_dict(dict_get_or(store, "metadata", {}))
+	allowed_kinds := normalize_array(dict_get_or(store_metadata, "allowed_kinds", []))
+	if len(allowed_kinds) > 0 {
+		artifact_kind := normalize_artifact_kind(dict_get_or(artifact, "artifact_kind", "other"))
+		kind_allowed := false
+		for allowed_kind in allowed_kinds {
+			if normalize_artifact_kind(allowed_kind) == artifact_kind {
+				kind_allowed = true
+			}
+		}
+
+		if kind_allowed == false {
+			return {
+				"ok": false,
+				"error": {
+					"kind": "validation_error",
+					"message": "Artifact kind is not allowed by store policy.",
+					"details": {
+						"artifact_kind": artifact_kind,
+						"allowed_kinds": clone_value(allowed_kinds)
+					}
+				}
+			}
+		}
+	}
+
+	max_artifact_bytes := normalize_non_negative_int(dict_get_or(store_metadata, "max_artifact_bytes", 0), 0)
+	artifact_bytes := normalize_non_negative_int(dict_get_or(artifact, "bytes", 0), 0)
+	if max_artifact_bytes > 0 && artifact_bytes > max_artifact_bytes {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "budget_exceeded",
+				"message": "Artifact size exceeds configured store byte limit.",
+				"details": {
+					"artifact_bytes": artifact_bytes,
+					"max_artifact_bytes": max_artifact_bytes
+				}
+			}
+		}
+	}
+
+	return create_fn(store, artifact)
+}
+
+func artifact_store_get_impl(store_input, artifact_id_input) {
+	store := ensure_artifact_store_impl(store_input)
+	get_fn := dict_get_or(store, "get_artifact_fn", null)
+	if type(get_fn) != "function" {
+		return not_implemented_result("get_artifact")
+	}
+
+	artifact_id := resolve_artifact_id_value(artifact_id_input, {
+		"fallback": "artifact-default"
+	})
+	return get_fn(store, artifact_id)
+}
+
+func artifact_store_list_impl(store_input, options) {
+	store := ensure_artifact_store_impl(store_input)
+	list_fn := dict_get_or(store, "list_artifacts_fn", null)
+	if type(list_fn) != "function" {
+		return not_implemented_result("list_artifacts")
+	}
+
+	return list_fn(store, normalize_dict(options))
+}
+
+func to_artifact_record(value_input) {
+	value := normalize_dict(value_input)
+	content := normalize_string(dict_get_or(value, "content", ""), "")
+
+	return {
+		"type": "Artifact",
+		"artifact_id": resolve_artifact_id_value(dict_get_or(value, "artifact_id", ""), {
+			"fallback": "artifact-default"
+		}),
+		"artifact_kind": normalize_artifact_kind(dict_get_or(value, "artifact_kind", dict_get_or(value, "kind", "other"))),
+		"title": normalize_string(dict_get_or(value, "title", ""), ""),
+		"content": content,
+		"media_type": normalize_string(dict_get_or(value, "media_type", "text/plain"), "text/plain"),
+		"bytes": estimated_artifact_bytes(content, dict_get_or(value, "bytes", -1)),
+		"producer_run_id": normalize_string(dict_get_or(value, "producer_run_id", ""), ""),
+		"producer_step_id": normalize_string(dict_get_or(value, "producer_step_id", ""), ""),
+		"producer_tool_name": normalize_string(dict_get_or(value, "producer_tool_name", ""), ""),
+		"created_at": normalize_string(dict_get_or(value, "created_at", ""), ""),
+		"metadata": normalize_dict(dict_get_or(value, "metadata", {}))
+	}
+}
+
+IN_MEMORY_ARTIFACT_STORES := {}
+
+func resolve_in_memory_store_id(store_input) {
+	store_map := normalize_dict(store_input)
+	metadata := normalize_dict(dict_get_or(store_map, "metadata", {}))
+	store_id := normalize_string(dict_get_or(metadata, "store_id", ""), "")
+	if store_id != "" {
+		return store_id
+	}
+
+	return normalize_string(dict_get_or(store_map, "name", "in-memory-artifact-store"), "in-memory-artifact-store")
+}
+
+func default_in_memory_state() {
+	return {
+		"artifacts_by_id": {},
+		"ordered_artifact_ids": [],
+		"next_artifact_number": 1
+	}
+}
+
+func ensure_in_memory_state(store_id_input) {
+	store_id := normalize_string(store_id_input, "in-memory-artifact-store")
+	if key_in_dict(IN_MEMORY_ARTIFACT_STORES, store_id) {
+		return normalize_dict(dict_get_or(IN_MEMORY_ARTIFACT_STORES, store_id, {}))
+	}
+
+	state := default_in_memory_state()
+	IN_MEMORY_ARTIFACT_STORES[store_id] := state
+	return state
+}
+
+func save_in_memory_state(store_id_input, state_input) {
+	store_id := normalize_string(store_id_input, "in-memory-artifact-store")
+	IN_MEMORY_ARTIFACT_STORES[store_id] := normalize_dict(state_input)
+}
+
+func in_memory_create_artifact_fn_impl(store_map, artifact_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_state(store_id)
+	artifacts_by_id := normalize_dict(dict_get_or(state, "artifacts_by_id", {}))
+	ordered_artifact_ids := normalize_array(dict_get_or(state, "ordered_artifact_ids", []))
+	next_artifact_number := normalize_non_negative_int(dict_get_or(state, "next_artifact_number", 1), 1)
+
+	artifact := to_artifact_record(artifact_input)
+	artifact_id := normalize_string(dict_get_or(artifact, "artifact_id", ""), "")
+	created := false
+
+	if artifact_id == "" || artifact_id == "artifact-default" {
+		artifact_id = store_id + "-artifact-" + to_string(next_artifact_number)
+		next_artifact_number = next_artifact_number + 1
+		created = true
+	}
+
+	if key_in_dict(artifacts_by_id, artifact_id) == false {
+		created = true
+		ordered_artifact_ids = push(ordered_artifact_ids, artifact_id)
+	}
+
+	artifact["artifact_id"] := artifact_id
+	artifacts_by_id[artifact_id] := artifact
+
+	state["artifacts_by_id"] := artifacts_by_id
+	state["ordered_artifact_ids"] := ordered_artifact_ids
+	state["next_artifact_number"] := next_artifact_number
+	save_in_memory_state(store_id, state)
+
+	return {
+		"ok": true,
+		"created": created,
+		"artifact": to_artifact_record(artifact)
+	}
+}
+
+func in_memory_get_artifact_fn_impl(store_map, artifact_id_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_state(store_id)
+	artifacts_by_id := normalize_dict(dict_get_or(state, "artifacts_by_id", {}))
+	artifact_id := resolve_artifact_id_value(artifact_id_input, {
+		"fallback": "artifact-default"
+	})
+
+	if artifact_id != "" && key_in_dict(artifacts_by_id, artifact_id) {
+		artifact_value := dict_get_or(artifacts_by_id, artifact_id, null)
+		if type(artifact_value) == "dict" {
+			return {
+				"ok": true,
+				"artifact": to_artifact_record(artifact_value)
+			}
+		}
+	}
+
+	return {
+		"ok": false,
+		"artifact": null
+	}
+}
+
+func matches_artifact_filter(artifact_input, options_input) {
+	artifact := normalize_dict(artifact_input)
+	options := normalize_dict(options_input)
+
+	kind_filter := normalize_string(dict_get_or(options, "artifact_kind", ""), "")
+	if kind_filter != "" {
+		if normalize_artifact_kind(dict_get_or(artifact, "artifact_kind", "other")) != normalize_artifact_kind(kind_filter) {
+			return false
+		}
+	}
+
+	run_filter := normalize_string(dict_get_or(options, "producer_run_id", ""), "")
+	if run_filter != "" {
+		if normalize_string(dict_get_or(artifact, "producer_run_id", ""), "") != run_filter {
+			return false
+		}
+	}
+
+	return true
+}
+
+func in_memory_list_artifacts_fn_impl(store_map, options_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_state(store_id)
+	artifacts_by_id := normalize_dict(dict_get_or(state, "artifacts_by_id", {}))
+	ordered_artifact_ids := normalize_array(dict_get_or(state, "ordered_artifact_ids", []))
+	options := normalize_dict(options_input)
+	offset := normalize_non_negative_int(dict_get_or(options, "offset", 0), 0)
+	limit := normalize_non_negative_int(dict_get_or(options, "limit", len(ordered_artifact_ids)), len(ordered_artifact_ids))
+
+	filtered := []
+	for artifact_id in ordered_artifact_ids {
+		if key_in_dict(artifacts_by_id, artifact_id) {
+			artifact_value := dict_get_or(artifacts_by_id, artifact_id, null)
+			if type(artifact_value) == "dict" {
+				artifact := to_artifact_record(artifact_value)
+				if matches_artifact_filter(artifact, options) {
+					filtered = push(filtered, artifact)
+				}
+			}
+		}
+	}
+
+	if limit <= 0 {
+		limit = len(filtered)
+	}
+
+	items := []
+	index := offset
+	max_items := offset + limit
+	if max_items > len(filtered) {
+		max_items = len(filtered)
+	}
+
+	while index < max_items {
+		items = push(items, filtered[index])
+		index = index + 1
+	}
+
+	return {
+		"ok": true,
+		"artifacts": items,
+		"count": len(filtered),
+		"total_count": len(filtered)
+	}
+}
+
+func create_in_memory_artifact_store_impl(options) {
+	options_map := normalize_dict(options)
+	store_id := normalize_string(dict_get_or(options_map, "store_id", "in-memory-artifact-store"), "in-memory-artifact-store")
+	metadata := merge_dicts(normalize_dict(dict_get_or(options_map, "metadata", {})), {
+		"store_kind": "in_memory",
+		"store_id": store_id
+	})
+
+	ensure_in_memory_state(store_id)
+
+	return create_artifact_store_interface_impl({
+		"name": normalize_string(dict_get_or(options_map, "name", "InMemoryArtifactStore"), "InMemoryArtifactStore"),
+		"create_artifact_fn": in_memory_create_artifact_fn_impl,
+		"get_artifact_fn": in_memory_get_artifact_fn_impl,
+		"list_artifacts_fn": in_memory_list_artifacts_fn_impl,
+		"metadata": metadata
+	})
+}
+
+func reset_in_memory_artifact_store_impl(options) {
+	options_map := normalize_dict(options)
+	store_id := normalize_string(dict_get_or(options_map, "store_id", "in-memory-artifact-store"), "in-memory-artifact-store")
+	IN_MEMORY_ARTIFACT_STORES[store_id] := default_in_memory_state()
+
+	return {
+		"ok": true,
+		"store_id": store_id
+	}
+}
+
+func resolve_file_store_id(store_input) {
+	store_map := normalize_dict(store_input)
+	metadata := normalize_dict(dict_get_or(store_map, "metadata", {}))
+	store_id := normalize_string(dict_get_or(metadata, "store_id", ""), "")
+	if store_id != "" {
+		return store_id
+	}
+
+	return normalize_string(dict_get_or(store_map, "name", "file-artifact-store"), "file-artifact-store")
+}
+
+func resolve_file_store_index_id(store_id_input) {
+	store_id := normalize_string(store_id_input, "file-artifact-store")
+	return "file-index-" + store_id
+}
+
+func file_store_index_map(store_input) {
+	store_map := normalize_dict(store_input)
+	store_id := resolve_file_store_id(store_map)
+
+	return {
+		"name": "FileArtifactIndex",
+		"metadata": {
+			"store_id": resolve_file_store_index_id(store_id)
+		}
+	}
+}
+
+func file_store_create_artifact_fn_impl(store_map, artifact_input) {
+	store_id := resolve_file_store_id(store_map)
+	metadata := normalize_dict(dict_get_or(store_map, "metadata", {}))
+
+	artifact := to_artifact_record(artifact_input)
+	artifact_id := normalize_string(dict_get_or(artifact, "artifact_id", ""), "")
+	if artifact_id == "" || artifact_id == "artifact-default" {
+		artifact_id = store_id + "-artifact-" + to_string(current_timestamp())
+	}
+
+	path_result := resolve_file_artifact_path(metadata, artifact_id)
+	if dict_get_or(path_result, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(path_result, "error", {
+				"kind": "invalid_path",
+				"message": "File artifact path is invalid."
+			})
+		}
+	}
+
+	file_path := normalize_string(dict_get_or(path_result, "file_path", ""), "")
+	content := normalize_string(dict_get_or(artifact, "content", ""), "")
+
+	try {
+		if file_exists(file_path) {
+			rename_file(file_path, file_path + ".bak." + to_string(current_timestamp()))
+		}
+		write_file(file_path, content)
+	} except err {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "artifact_store_write_failed",
+				"message": "File artifact store could not persist artifact content.",
+				"details": {
+					"artifact_id": artifact_id,
+					"file_path": file_path,
+					"error": to_string(err)
+				}
+			}
+		}
+	}
+
+	artifact_metadata := {
+		"store_kind": "file",
+		"store_id": store_id,
+		"file_path": file_path,
+		"root_path": normalize_string(dict_get_or(path_result, "root_path", ""), ""),
+		"reference": "file://" + file_path
+	}
+
+	artifact["artifact_id"] := artifact_id
+	artifact["metadata"] := artifact_metadata
+
+	index_store := file_store_index_map(store_map)
+	create_result := in_memory_create_artifact_fn_impl(index_store, artifact)
+	if dict_get_or(create_result, "ok", false) == false {
+		return create_result
+	}
+
+	persisted_artifact := dict_get_or(create_result, "artifact", artifact)
+
+	return {
+		"ok": true,
+		"created": dict_get_or(create_result, "created", true),
+		"artifact": to_artifact_record(persisted_artifact)
+	}
+}
+
+func file_store_get_artifact_fn_impl(store_map, artifact_id_input) {
+	index_store := file_store_index_map(store_map)
+	get_result := in_memory_get_artifact_fn_impl(index_store, artifact_id_input)
+	if dict_get_or(get_result, "ok", false) {
+		artifact := to_artifact_record(dict_get_or(get_result, "artifact", {}))
+		file_path := normalize_string(dict_get_or(normalize_dict(dict_get_or(artifact, "metadata", {})), "file_path", ""), "")
+		if file_path != "" && file_exists(file_path) {
+			try {
+				artifact["content"] = to_string(read_file(file_path))
+			} except err {
+				return {
+					"ok": false,
+					"artifact": null,
+					"error": {
+						"kind": "artifact_store_read_failed",
+						"message": "File artifact store could not read persisted artifact content.",
+						"details": {
+							"file_path": file_path,
+							"error": to_string(err)
+						}
+					}
+				}
+			}
+		}
+
+		return {
+			"ok": true,
+			"artifact": artifact
+		}
+	}
+
+	return {
+		"ok": false,
+		"artifact": null
+	}
+}
+
+func file_store_list_artifacts_fn_impl(store_map, options_input) {
+	index_store := file_store_index_map(store_map)
+	return in_memory_list_artifacts_fn_impl(index_store, normalize_dict(options_input))
+}
+
+func create_file_artifact_store_impl(options) {
+	options_map := normalize_dict(options)
+	store_id := normalize_string(dict_get_or(options_map, "store_id", "file-artifact-store"), "file-artifact-store")
+	metadata := {
+		"store_kind": "file",
+		"store_id": store_id,
+		"root_path": normalize_string(dict_get_or(options_map, "root_path", "/tmp"), "/tmp"),
+		"file_extension": normalize_string(dict_get_or(options_map, "file_extension", ".artifact"), ".artifact"),
+		"allowed_kinds": clone_value(dict_get_or(options_map, "allowed_kinds", [])),
+		"max_artifact_bytes": normalize_non_negative_int(dict_get_or(options_map, "max_artifact_bytes", 0), 0)
+	}
+
+	return create_artifact_store_interface_impl({
+		"name": normalize_string(dict_get_or(options_map, "name", "FileArtifactStore"), "FileArtifactStore"),
+		"create_artifact_fn": file_store_create_artifact_fn_impl,
+		"get_artifact_fn": file_store_get_artifact_fn_impl,
+		"list_artifacts_fn": file_store_list_artifacts_fn_impl,
+		"metadata": metadata
+	})
+}
+
+func describe_artifact_store_module_impl() {
+	return {
+		"module": "agents.artifacts.store",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"artifact_kind_values",
+			"create_artifact_id",
+			"create_artifact",
+			"create_artifact_store_interface",
+			"create_in_memory_artifact_store",
+			"create_file_artifact_store",
+			"reset_in_memory_artifact_store",
+			"artifact_store_create",
+			"artifact_store_get",
+			"artifact_store_list"
+		]
+	}
+}
+
+export artifact_kind_values := artifact_kind_values_impl
+export create_artifact_id := create_artifact_id_impl
+export create_artifact := create_artifact_impl
+export create_artifact_store_interface := create_artifact_store_interface_impl
+export create_in_memory_artifact_store := create_in_memory_artifact_store_impl
+export create_file_artifact_store := create_file_artifact_store_impl
+export reset_in_memory_artifact_store := reset_in_memory_artifact_store_impl
+export artifact_store_create := artifact_store_create_impl
+export artifact_store_get := artifact_store_get_impl
+export artifact_store_list := artifact_store_list_impl
+export describe_artifact_store_module := describe_artifact_store_module_impl

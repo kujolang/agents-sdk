@@ -1,0 +1,174 @@
+test_setup {
+	from src.agents.retrieval.provider import create_retrieval_query, create_retrieved_document, create_retrieval_citation
+	from src.agents.retrieval.provider import create_retrieved_context, create_retrieval_policy, create_retrieval_result
+	from src.agents.retrieval.provider import create_retrieval_provider_interface, create_mock_retrieval_provider, retrieval_provider_retrieve
+}
+
+test "retrieval contract constructors produce expected schema" {
+	query := create_retrieval_query({
+		"query_text": "how to back up",
+		"top_k": 3,
+		"scope": {
+			"workspace": "default"
+		}
+	})
+	assert_equal(query["type"], "RetrievalQuery")
+	assert_equal(query["query_text"], "how to back up")
+	assert_equal(query["top_k"], 3)
+
+	document := create_retrieved_document({
+		"document_id": "doc-1",
+		"title": "Backup Guide",
+		"content": "Use snapshots",
+		"score": 0.9,
+		"source": "kb"
+	})
+	assert_equal(document["type"], "RetrievedDocument")
+	assert_equal(document["document_id"], "doc-1")
+	assert_equal(document["title"], "Backup Guide")
+
+	citation := create_retrieval_citation({
+		"citation_id": "cit-1",
+		"document_id": "doc-1",
+		"span": "L1-L3",
+		"score": 0.9
+	})
+	assert_equal(citation["type"], "RetrievalCitation")
+	assert_equal(citation["citation_id"], "cit-1")
+	assert_equal(citation["document_id"], "doc-1")
+
+	context := create_retrieved_context({
+		"context_id": "ctx-1",
+		"documents": [document],
+		"summary": "One relevant document",
+		"citations": [citation]
+	})
+	assert_equal(context["type"], "RetrievedContext")
+	assert_equal(type(context["documents"]), "array")
+	assert_equal(type(context["citations"]), "array")
+
+	policy := create_retrieval_policy({
+		"enabled": true,
+		"max_documents": 5,
+		"include_citations": true
+	})
+	assert_equal(policy["type"], "RetrievalPolicy")
+	assert_equal(policy["enabled"], true)
+	assert_equal(policy["max_documents"], 5)
+
+	result := create_retrieval_result({
+		"ok": true,
+		"query": query,
+		"context": context,
+		"count": 1
+	})
+	assert_equal(result["type"], "RetrievalResult")
+	assert_equal(result["ok"], true)
+	assert_equal(type(result["count"]), "int")
+	assert_equal(type(result["documents"]), "array")
+	assert_equal(type(result["citations"]), "array")
+}
+
+test "retrieval provider interface returns normalized retrieval results" {
+	provider := create_retrieval_provider_interface({
+		"name": "MockRetrievalProvider",
+		"retrieve_fn": func(provider_map, query, options) {
+			return {
+				"ok": true,
+				"context": {
+					"context_id": "ctx-mock",
+					"summary": "Mocked context",
+					"documents": [
+						{
+							"document_id": "doc-a",
+							"title": "A",
+							"content": "Alpha",
+							"score": 0.8,
+							"source": "mock"
+						}
+					],
+					"citations": [
+						{
+							"citation_id": "cit-a",
+							"document_id": "doc-a",
+							"span": "1-2",
+							"score": 0.8
+						}
+					]
+				},
+				"count": 1,
+				"metadata": {
+					"provider": "mock"
+				}
+			}
+		}
+	})
+
+	result := retrieval_provider_retrieve(provider, {
+		"query_text": "alpha",
+		"top_k": 2
+	}, {})
+
+	assert_equal(result["type"], "RetrievalResult")
+	assert_equal(result["ok"], true)
+	assert_equal(result["query"]["query_text"], "alpha")
+	assert_equal(type(result["count"]), "int")
+	assert_equal(type(result["documents"]), "array")
+	assert_equal(type(result["citations"]), "array")
+	assert_equal(type(result["context"]), "dict")
+}
+
+test "mock retrieval provider returns deterministic seeded responses" {
+	mock_provider := create_mock_retrieval_provider({
+		"responses": {
+			"alpha": {
+				"context": {
+					"context_id": "ctx-alpha",
+					"summary": "Alpha summary",
+					"documents": [
+						{
+							"document_id": "doc-alpha",
+							"title": "Alpha doc",
+							"content": "Alpha content",
+							"score": 0.9,
+							"source": "mock"
+						}
+					],
+					"citations": []
+				}
+			}
+		},
+		"default_response": {
+			"context": {
+				"summary": "No matches"
+			}
+		}
+	})
+
+	raw_alpha_result := mock_provider["retrieve_fn"](mock_provider, {
+		"query_text": "alpha",
+		"top_k": 1
+	}, {})
+	assert_equal(raw_alpha_result["count"] >= 1, true)
+	assert_equal(raw_alpha_result["documents"][0]["document_id"], "doc-alpha")
+
+	raw_beta_result := mock_provider["retrieve_fn"](mock_provider, {
+		"query_text": "beta",
+		"top_k": 1
+	}, {})
+	assert_equal(raw_beta_result["count"], 0)
+
+	alpha_result := retrieval_provider_retrieve(mock_provider, {
+		"query_text": "alpha",
+		"top_k": 1
+	}, {})
+	assert_equal(alpha_result["ok"], true)
+	assert_equal(type(alpha_result["metadata"]), "dict")
+
+	beta_result := retrieval_provider_retrieve(mock_provider, {
+		"query_text": "beta",
+		"top_k": 1
+	}, {})
+	assert_equal(beta_result["ok"], true)
+	assert_equal(type(beta_result["metadata"]), "dict")
+}

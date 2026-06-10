@@ -1,0 +1,232 @@
+test_setup {
+	from src.agents.sessions.store import create_session_id, create_session_message, create_session_state, create_session
+	from src.agents.sessions.store import create_in_memory_session_store, reset_in_memory_session_store
+	from src.agents.sessions.store import session_store_create, session_store_get, session_store_update
+	from src.agents.sessions.store import session_store_list, session_store_delete
+	from src.agents.sessions.store import session_store_save_run_state, session_store_get_run_state
+}
+
+test "session contract constructors normalize ids messages and state" {
+	session_id := create_session_id("", {
+		"prefix": "sess"
+	})
+	assert_equal(session_id["type"], "SessionId")
+	assert_equal(session_id["value"], "sess-default")
+
+	message := create_session_message("assistant", "hello", {
+		"message_id": "msg-1",
+		"source": "model"
+	})
+	assert_equal(message["type"], "SessionMessage")
+	assert_equal(message["role"], "assistant")
+	assert_equal(message["content"], "hello")
+	assert_equal(message["source"], "model")
+
+	state := create_session_state({
+		"session_id": "sess-1",
+		"messages": [
+			{
+				"role": "user",
+				"content": "hi"
+			}
+		],
+		"run_state": {
+			"cursor": 1
+		}
+	})
+	assert_equal(state["type"], "SessionState")
+	assert_equal(state["session_id"], "sess-1")
+	assert_equal(len(state["messages"]), 1)
+	assert_equal(state["messages"][0]["role"], "user")
+	assert_equal(type(state["run_state"]), "dict")
+
+	session := create_session({
+		"session_id": "sess-1",
+		"user_id": "user-1",
+		"state": state,
+		"metadata": {
+			"env": "test"
+		}
+	})
+	assert_equal(session["type"], "Session")
+	assert_equal(session["session_id"], "sess-1")
+	assert_equal(type(session["user_id"]), "string")
+	assert_equal(session["state"]["session_id"], "sess-1")
+	assert_equal(type(session["metadata"]), "dict")
+}
+
+test "session store interface supports CRUD and run-state continuity operations" {
+	store := {
+		"type": "SessionStore",
+		"name": "InMemorySessionStore",
+		"create_session_fn": func(store_map, session) {
+			return {
+				"ok": true,
+				"session": session
+			}
+		},
+		"get_session_fn": func(store_map, session_id) {
+			return {
+				"ok": true,
+				"session": create_session({
+					"session_id": session_id,
+					"user_id": "user-from-get"
+				})
+			}
+		},
+		"update_session_fn": func(store_map, session_id, patch) {
+			return {
+				"ok": true,
+				"session": {
+					"session_id": session_id,
+					"updated_at": patch["updated_at"]
+				}
+			}
+		},
+		"list_sessions_fn": func(store_map, options) {
+			return {
+				"ok": true,
+				"sessions": [
+					create_session({
+						"session_id": "session-1"
+					})
+				],
+				"count": 1
+			}
+		},
+		"delete_session_fn": func(store_map, session_id) {
+			return {
+				"ok": true,
+				"deleted": true
+			}
+		},
+		"save_run_state_fn": func(store_map, session_id, run_state, options) {
+			return {
+				"ok": true,
+				"run_state": run_state
+			}
+		},
+		"get_run_state_fn": func(store_map, session_id, options) {
+			return {
+				"ok": true,
+				"run_state": {
+					"cursor": 3,
+					"last_event": "run_completed"
+				}
+			}
+		}
+	}
+
+	create_result := session_store_create(store, {
+		"session_id": "session-1",
+		"user_id": "user-1",
+		"messages": [
+			{
+				"role": "user",
+				"content": "start"
+			}
+		]
+	})
+	assert_equal(create_result["ok"], true)
+	assert_equal(create_result["session"]["session_id"], "session-1")
+
+	get_result := session_store_get(store, "session-1")
+	assert_equal(get_result["ok"], true)
+	assert_equal(get_result["session"]["session_id"], "session-1")
+
+	update_result := session_store_update(store, "session-1", {
+		"updated_at": "2026-05-22 02:00:00"
+	})
+	assert_equal(update_result["ok"], true)
+	assert_equal(update_result["session"]["updated_at"], "2026-05-22 02:00:00")
+
+	list_result := session_store_list(store, {})
+	assert_equal(list_result["ok"], true)
+	assert_equal(list_result["count"], 1)
+	assert_equal(list_result["sessions"][0]["session_id"], "session-1")
+
+	save_run_state_result := session_store_save_run_state(store, "session-1", {
+		"cursor": 3,
+		"last_event": "run_completed"
+	}, {
+		"source": "test"
+	})
+	assert_equal(save_run_state_result["ok"], true)
+	assert_equal(type(save_run_state_result["run_state"]), "dict")
+
+	get_run_state_result := session_store_get_run_state(store, "session-1", {})
+	assert_equal(get_run_state_result["ok"], true)
+	assert_equal(type(get_run_state_result["run_state"]), "dict")
+
+	delete_result := session_store_delete(store, "session-1")
+	assert_equal(delete_result["ok"], true)
+	assert_equal(delete_result["deleted"], true)
+}
+
+test "in-memory session store persists CRUD and run-state operations deterministically" {
+	store_id := "mem-002-store"
+	reset_result := reset_in_memory_session_store({
+		"store_id": store_id
+	})
+	assert_equal(reset_result["ok"], true)
+
+	store := create_in_memory_session_store({
+		"store_id": store_id
+	})
+
+	create_a := session_store_create(store, {
+		"session_id": "session-a",
+		"messages": [
+			{
+				"role": "user",
+				"content": "alpha"
+			}
+		]
+	})
+	assert_equal(create_a["ok"], true)
+
+	create_b := session_store_create(store, {
+		"session_id": "session-b",
+		"messages": [
+			{
+				"role": "user",
+				"content": "beta"
+			}
+		]
+	})
+	assert_equal(create_b["ok"], true)
+
+	get_a := session_store_get(store, "session-a")
+	assert_equal(get_a["ok"], true)
+
+	update_a := session_store_update(store, "session-a", {
+		"updated_at": "2026-05-22 03:00:00"
+	})
+	assert_equal(update_a["ok"], true)
+
+	list_result := session_store_list(store, {})
+	assert_equal(list_result["ok"], true)
+	assert_equal(list_result["count"], 2)
+
+	save_run_state := session_store_save_run_state(store, "session-a", {
+		"cursor": 7,
+		"status": "checkpoint"
+	}, {})
+	assert_equal(save_run_state["ok"], true)
+	assert_equal(type(save_run_state["run_state"]), "dict")
+
+	get_run_state := session_store_get_run_state(store, "session-a", {})
+	assert_equal(get_run_state["ok"], true)
+	assert_equal(type(get_run_state["run_state"]), "dict")
+
+	delete_b := session_store_delete(store, "session-b")
+	assert_equal(delete_b["ok"], true)
+	assert_equal(delete_b["deleted"], true)
+
+	missing_b := session_store_get(store, "session-b")
+	assert_equal(missing_b["ok"], false)
+
+	list_after_delete := session_store_list(store, {})
+	assert_equal(list_after_delete["ok"], true)
+	assert_equal(list_after_delete["count"], 1)
+}

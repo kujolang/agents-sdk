@@ -1,0 +1,270 @@
+func dict_get_or(obj, key, default_value) {
+	source := unwrap_dict(obj)
+	if type(source) != "dict" {
+		return default_value
+	}
+
+	present := has_key(source, key)
+	if present == true || present == 1 {
+		return source[key]
+	}
+
+	return default_value
+}
+
+func unwrap_dict(value) {
+	if type(value) != "dict" {
+		return value
+	}
+
+	if has_key(value, "_self") {
+		inner := value["_self"]
+		if type(inner) == "dict" {
+			return inner
+		}
+	}
+
+	return value
+}
+
+func normalize_dict(value) {
+	unwrapped := unwrap_dict(value)
+	if type(unwrapped) == "dict" {
+		return unwrapped
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func normalize_bool(value, fallback) {
+	if type(value) == "bool" {
+		return value
+	}
+	return fallback
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned := {}
+		for key in keys(source) {
+			cloned[key] := clone_value(source[key])
+		}
+		return cloned
+	}
+
+	if type(value) == "array" {
+		cloned := []
+		for item in value {
+			cloned = push(cloned, clone_value(item))
+		}
+		return cloned
+	}
+
+	return value
+}
+
+func array_contains(values_input, expected_value) {
+	values := normalize_array(values_input)
+
+	index := 0
+	total := len(values)
+	while index < total {
+		if values[index] == expected_value {
+			return true
+		}
+		index = index + 1
+	}
+
+	return false
+}
+
+func handoff_result_status_values_impl() {
+	return ["pending", "completed", "failed", "blocked", "skipped"]
+}
+
+func create_handoff_target_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "HandoffTarget",
+		"target_agent_id": normalize_string(dict_get_or(options_map, "target_agent_id", dict_get_or(options_map, "id", "target-default")), "target-default"),
+		"target_agent_name": normalize_string(dict_get_or(options_map, "target_agent_name", dict_get_or(options_map, "name", "")), ""),
+		"reason": normalize_string(dict_get_or(options_map, "reason", ""), ""),
+		"capabilities": clone_value(dict_get_or(options_map, "capabilities", [])),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_handoff_policy_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "HandoffPolicy",
+		"enabled": normalize_bool(dict_get_or(options_map, "enabled", true), true),
+		"allow_self_handoff": normalize_bool(dict_get_or(options_map, "allow_self_handoff", false), false),
+		"max_depth": normalize_non_negative_int(dict_get_or(options_map, "max_depth", 3), 3),
+		"prevent_loops": normalize_bool(dict_get_or(options_map, "prevent_loops", true), true),
+		"allowed_targets": clone_value(dict_get_or(options_map, "allowed_targets", [])),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_handoff_loop_state_impl(options) {
+	options_map := normalize_dict(options)
+	visited_targets := normalize_array(dict_get_or(options_map, "visited_targets", []))
+	depth_value := dict_get_or(options_map, "depth", dict_get_or(options_map, "handoff_depth", 0))
+	max_depth_value := dict_get_or(options_map, "max_depth", dict_get_or(options_map, "handoff_max_depth", 3))
+
+	return {
+		"type": "HandoffLoopState",
+		"depth": normalize_non_negative_int(depth_value, 0),
+		"max_depth": normalize_non_negative_int(max_depth_value, 3),
+		"visited_targets": clone_value(visited_targets),
+		"loop_detected": normalize_bool(dict_get_or(options_map, "loop_detected", false), false),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_handoff_request_impl(options) {
+	options_map := normalize_dict(options)
+	request_id_value := dict_get_or(options_map, "request_id", "handoff-request")
+	source_agent_id_value := dict_get_or(options_map, "source_agent_id", "")
+	source_agent_name_value := dict_get_or(options_map, "source_agent_name", "")
+
+	target_input := dict_get_or(options_map, "target", {})
+	target := create_handoff_target_impl(target_input)
+	loop_state := create_handoff_loop_state_impl(options_map)
+
+	return {
+		"type": "HandoffRequest",
+		"request_id": normalize_string(request_id_value, "handoff-request"),
+		"source_agent_id": normalize_string(source_agent_id_value, ""),
+		"source_agent_name": normalize_string(source_agent_name_value, ""),
+		"target": target,
+		"reason": normalize_string(dict_get_or(options_map, "reason", dict_get_or(target, "reason", "")), ""),
+		"loop_state": loop_state,
+		"depth": normalize_non_negative_int(dict_get_or(loop_state, "depth", 0), 0),
+		"max_depth": normalize_non_negative_int(dict_get_or(loop_state, "max_depth", 3), 3),
+		"visited_targets": clone_value(dict_get_or(loop_state, "visited_targets", [])),
+		"loop_detected": normalize_bool(dict_get_or(loop_state, "loop_detected", false), false),
+		"handoff_depth": normalize_non_negative_int(dict_get_or(loop_state, "depth", 0), 0),
+		"handoff_max_depth": normalize_non_negative_int(dict_get_or(loop_state, "max_depth", 3), 3),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_handoff_request_from_parts_impl(source_agent_id_input, source_agent_name_input, target_input, reason_input, loop_state_input, options) {
+	options_map := normalize_dict(options)
+	target := create_handoff_target_impl(target_input)
+	loop_state := create_handoff_loop_state_impl(loop_state_input)
+	request_id := "handoff-request"
+	if type(options) == "string" {
+		request_id = normalize_string(options, "handoff-request")
+	}
+	if type(options) == "dict" {
+		request_id = normalize_string(dict_get_or(options_map, "request_id", request_id), request_id)
+	}
+
+	return {
+		"type": "HandoffRequest",
+		"request_id": request_id,
+		"source_agent_id": normalize_string(source_agent_id_input, ""),
+		"source_agent_name": normalize_string(source_agent_name_input, ""),
+		"target": target,
+		"reason": normalize_string(reason_input, normalize_string(dict_get_or(target, "reason", ""), "")),
+		"loop_state": loop_state,
+		"depth": normalize_non_negative_int(dict_get_or(loop_state, "depth", 0), 0),
+		"max_depth": normalize_non_negative_int(dict_get_or(loop_state, "max_depth", 3), 3),
+		"visited_targets": clone_value(dict_get_or(loop_state, "visited_targets", [])),
+		"loop_detected": normalize_bool(dict_get_or(loop_state, "loop_detected", false), false),
+		"handoff_depth": normalize_non_negative_int(dict_get_or(loop_state, "depth", 0), 0),
+		"handoff_max_depth": normalize_non_negative_int(dict_get_or(loop_state, "max_depth", 3), 3),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_handoff_result_impl(options) {
+	options_map := normalize_dict(options)
+	status := normalize_string(dict_get_or(options_map, "status", "pending"), "pending")
+	if array_contains(handoff_result_status_values_impl(), status) == false {
+		status = "failed"
+	}
+
+	request_input := dict_get_or(options_map, "request", {})
+	request_map_input := normalize_dict(request_input)
+	request := request_map_input
+	if normalize_string(dict_get_or(request_map_input, "type", ""), "") != "HandoffRequest" {
+		request = create_handoff_request_impl(request_input)
+	}
+	target := create_handoff_target_impl(dict_get_or(options_map, "target", dict_get_or(request, "target", {})))
+	request_map := normalize_dict(request)
+	loop_state_source := request_map
+	if has_key(options_map, "depth") || has_key(options_map, "max_depth") || has_key(options_map, "visited_targets") || has_key(options_map, "loop_detected") {
+		loop_state_source = options_map
+	}
+	loop_state := create_handoff_loop_state_impl(loop_state_source)
+
+	return {
+		"type": "HandoffResult",
+		"status": status,
+		"ok": status == "completed",
+		"request": request,
+		"target": target,
+		"loop_state": loop_state,
+		"output": clone_value(dict_get_or(options_map, "output", {})),
+		"error": clone_value(dict_get_or(options_map, "error", null)),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func describe_handoff_module_impl() {
+	return {
+		"module": "agents.handoffs.handoff",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_handoff_target",
+			"create_handoff_policy",
+			"create_handoff_loop_state",
+			"create_handoff_request",
+			"create_handoff_request_from_parts",
+			"create_handoff_result",
+			"handoff_result_status_values"
+		]
+	}
+}
+
+export create_handoff_target := create_handoff_target_impl
+export create_handoff_policy := create_handoff_policy_impl
+export create_handoff_loop_state := create_handoff_loop_state_impl
+export create_handoff_request := create_handoff_request_impl
+export create_handoff_request_from_parts := create_handoff_request_from_parts_impl
+export create_handoff_result := create_handoff_result_impl
+export handoff_result_status_values := handoff_result_status_values_impl
+export describe_handoff_module := describe_handoff_module_impl

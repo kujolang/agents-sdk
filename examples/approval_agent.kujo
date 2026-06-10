@@ -1,0 +1,80 @@
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from src.agents.runner import create_agent_runner, run_agent
+from src.agents.core_types import create_agent, create_agent_run_request
+from src.agents.tools.registry import create_tool_registry, register_tool
+
+func run_approval_agent_example_impl() {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "mock-provider",
+			"model": "mock-model",
+			"output_text": "approval-agent-offline",
+			"status_code": 200,
+			"tool_calls": [
+				{
+					"name": "write_tool",
+					"input": {
+						"content": "blocked-write"
+					}
+				}
+			]
+		}
+	}
+
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "example-write-tool",
+		"name": "write_tool",
+		"permissions": ["write"],
+		"handler": func(input_payload, context) {
+			return {
+				"ok": true,
+				"output": {
+					"executed": true
+				}
+			}
+		}
+	})
+	if register_result["ok"] == false {
+		return {
+			"ok": false,
+			"requires_network": false,
+			"error": register_result["error"]
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "example-approval-agent",
+		"name": "Example Approval Agent"
+	})
+	run_request := create_agent_run_request("Trigger approval gate", {
+		"run_id": "run-example-approval",
+		"session_id": "session-example-approval"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"tool_registry": register_result["registry"],
+		"approval_policy": {
+			"mode": "write_tool"
+		},
+		"approval_provider": {
+			"kind": "deny_all"
+		}
+	})
+
+	return {
+		"ok": true,
+		"requires_network": false,
+		"scenario": "approval_agent",
+		"result": result
+	}
+}
+
+export run_approval_agent_example := run_approval_agent_example_impl

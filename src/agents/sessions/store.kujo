@@ -1,0 +1,645 @@
+func key_in_dict(obj, expected_key) {
+	if type(obj) != "dict" {
+		return false
+	}
+	if has_key(obj, expected_key) == 1 {
+		return true
+	}
+
+	for key in keys(obj) {
+		if key == expected_key {
+			return true
+		}
+	}
+
+	return false
+}
+
+func unwrap_dict(value) {
+	if type(value) != "dict" {
+		return value
+	}
+
+	if key_in_dict(value, "_self") {
+		inner := value["_self"]
+		if type(inner) == "dict" {
+			return inner
+		}
+	}
+
+	return value
+}
+
+func dict_get_or(obj, key, default_value) {
+	source := unwrap_dict(obj)
+	if type(source) != "dict" {
+		return default_value
+	}
+	if key_in_dict(source, key) {
+		return source[key]
+	}
+	return default_value
+}
+
+func safe_map_value(source_input, key_input, default_value) {
+	if type(source_input) != "dict" {
+		return default_value
+	}
+	if has_key(source_input, key_input) == 1 {
+		return source_input[key_input]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	unwrapped := unwrap_dict(value)
+	if type(unwrapped) == "dict" {
+		return unwrapped
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned_dict := {}
+		for key in keys(source) {
+			cloned_dict[key] := clone_value(dict_get_or(source, key, null))
+		}
+		return cloned_dict
+	}
+
+	if type(value) == "array" {
+		cloned_array := []
+		for item in value {
+			cloned_array = push(cloned_array, clone_value(item))
+		}
+		return cloned_array
+	}
+
+	return value
+}
+
+func merge_dicts(base_input, patch_input) {
+	base := normalize_dict(base_input)
+	patch := normalize_dict(patch_input)
+	merged := clone_value(base)
+
+	for key in keys(patch) {
+		merged[key] := dict_get_or(patch, key, null)
+	}
+
+	return merged
+}
+
+func array_contains_value(values_input, expected_value) {
+	values := normalize_array(values_input)
+	for value in values {
+		if value == expected_value {
+			return true
+		}
+	}
+	return false
+}
+
+IN_MEMORY_SESSION_STORES := {}
+
+func session_message_role_values_impl() {
+	return ["system", "developer", "user", "assistant", "tool"]
+}
+
+func normalize_session_message_role(value) {
+	role := normalize_string(value, "user")
+	if role == "system" || role == "developer" || role == "user" || role == "assistant" || role == "tool" {
+		return role
+	}
+	return "user"
+}
+
+func create_session_id_impl(value_input, options) {
+	options_map := normalize_dict(options)
+	prefix := normalize_string(dict_get_or(options_map, "prefix", "session"), "session")
+	resolved := normalize_string(value_input, "")
+	if resolved == "" {
+		resolved = prefix + "-default"
+	}
+
+	return {
+		"type": "SessionId",
+		"value": resolved,
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func resolve_session_id_value(value_input, options) {
+	if type(value_input) == "dict" {
+		if normalize_string(dict_get_or(value_input, "type", ""), "") == "SessionId" {
+			return normalize_string(dict_get_or(value_input, "value", ""), normalize_string(dict_get_or(normalize_dict(options), "fallback", "session-default"), "session-default"))
+		}
+	}
+
+	resolved := normalize_string(value_input, "")
+	if resolved != "" {
+		return resolved
+	}
+
+	return normalize_string(dict_get_or(normalize_dict(options), "fallback", "session-default"), "session-default")
+}
+
+func create_session_message_impl(role_input, content_input, options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "SessionMessage",
+		"message_id": normalize_string(dict_get_or(options_map, "message_id", ""), ""),
+		"role": normalize_session_message_role(role_input),
+		"content": normalize_string(content_input, ""),
+		"timestamp": normalize_string(dict_get_or(options_map, "timestamp", ""), ""),
+		"source": normalize_string(dict_get_or(options_map, "source", "runtime"), "runtime"),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func normalize_session_messages(messages_input) {
+	messages := normalize_array(messages_input)
+	normalized := []
+
+	for message in messages {
+		message_map := normalize_dict(message)
+		normalized = push(normalized, create_session_message_impl(
+			dict_get_or(message_map, "role", "user"),
+			dict_get_or(message_map, "content", ""),
+			{
+				"message_id": dict_get_or(message_map, "message_id", ""),
+				"timestamp": dict_get_or(message_map, "timestamp", ""),
+				"source": dict_get_or(message_map, "source", "runtime"),
+				"metadata": dict_get_or(message_map, "metadata", {})
+			}
+		))
+	}
+
+	return normalized
+}
+
+func create_session_state_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "SessionState",
+		"session_id": resolve_session_id_value(dict_get_or(options_map, "session_id", ""), {
+			"fallback": "session-default"
+		}),
+		"messages": normalize_session_messages(dict_get_or(options_map, "messages", [])),
+		"context": clone_value(dict_get_or(options_map, "context", {})),
+		"run_state": clone_value(dict_get_or(options_map, "run_state", {})),
+		"last_run_id": normalize_string(dict_get_or(options_map, "last_run_id", ""), ""),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_session_impl(options) {
+	options_map := normalize_dict(options)
+	session_id := resolve_session_id_value(dict_get_or(options_map, "session_id", ""), {
+		"fallback": "session-default"
+	})
+
+	state_map := create_session_state_impl(merge_dicts(
+		normalize_dict(dict_get_or(options_map, "state", {})),
+		{
+			"session_id": session_id,
+			"messages": dict_get_or(options_map, "messages", dict_get_or(dict_get_or(options_map, "state", {}), "messages", [])),
+			"context": dict_get_or(options_map, "context", dict_get_or(dict_get_or(options_map, "state", {}), "context", {})),
+			"run_state": dict_get_or(options_map, "run_state", dict_get_or(dict_get_or(options_map, "state", {}), "run_state", {})),
+			"last_run_id": dict_get_or(options_map, "last_run_id", dict_get_or(dict_get_or(options_map, "state", {}), "last_run_id", "")),
+			"metadata": dict_get_or(dict_get_or(options_map, "state", {}), "metadata", {})
+		}
+	))
+
+	return {
+		"type": "Session",
+		"session_id": session_id,
+		"user_id": normalize_string(dict_get_or(options_map, "user_id", ""), ""),
+		"created_at": normalize_string(dict_get_or(options_map, "created_at", ""), ""),
+		"updated_at": normalize_string(dict_get_or(options_map, "updated_at", ""), ""),
+		"state": state_map,
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_session_store_interface_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "SessionStore",
+		"name": normalize_string(dict_get_or(options_map, "name", "SessionStore"), "SessionStore"),
+		"create_session_fn": dict_get_or(options_map, "create_session_fn", null),
+		"get_session_fn": dict_get_or(options_map, "get_session_fn", null),
+		"update_session_fn": dict_get_or(options_map, "update_session_fn", null),
+		"list_sessions_fn": dict_get_or(options_map, "list_sessions_fn", null),
+		"delete_session_fn": dict_get_or(options_map, "delete_session_fn", null),
+		"save_run_state_fn": dict_get_or(options_map, "save_run_state_fn", null),
+		"get_run_state_fn": dict_get_or(options_map, "get_run_state_fn", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func resolve_in_memory_store_id(store_input) {
+	store_map := normalize_dict(store_input)
+	metadata := normalize_dict(dict_get_or(store_map, "metadata", {}))
+	store_id := normalize_string(dict_get_or(metadata, "store_id", ""), "")
+	if store_id != "" {
+		return store_id
+	}
+
+	return normalize_string(dict_get_or(store_map, "name", "in-memory-session-store"), "in-memory-session-store")
+}
+
+func default_in_memory_store_state() {
+	return {
+		"sessions_by_id": {},
+		"active_ids": {},
+		"ordered_ids": [],
+		"run_state_by_session": {}
+	}
+}
+
+func ensure_in_memory_store_state(store_id_input) {
+	store_id := normalize_string(store_id_input, "in-memory-session-store")
+	if key_in_dict(IN_MEMORY_SESSION_STORES, store_id) {
+		return normalize_dict(dict_get_or(IN_MEMORY_SESSION_STORES, store_id, {}))
+	}
+
+	state := default_in_memory_store_state()
+	IN_MEMORY_SESSION_STORES[store_id] := state
+	return state
+}
+
+func save_in_memory_store_state(store_id_input, state_input) {
+	store_id := normalize_string(store_id_input, "in-memory-session-store")
+	IN_MEMORY_SESSION_STORES[store_id] := normalize_dict(state_input)
+}
+
+func in_memory_create_session_fn_impl(store_map, session_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_store_state(store_id)
+	sessions_by_id := normalize_dict(dict_get_or(state, "sessions_by_id", {}))
+	active_ids := normalize_dict(dict_get_or(state, "active_ids", {}))
+	ordered_ids := normalize_array(dict_get_or(state, "ordered_ids", []))
+	session := session_input
+	session_id := resolve_session_id_value(dict_get_or(session_input, "session_id", ""), {
+		"fallback": "session-default"
+	})
+
+	sessions_by_id[session_id] := clone_value(session)
+	active_ids[session_id] := true
+	if array_contains_value(ordered_ids, session_id) == false {
+		ordered_ids = push(ordered_ids, session_id)
+	}
+
+	state["sessions_by_id"] := sessions_by_id
+	state["active_ids"] := active_ids
+	state["ordered_ids"] := ordered_ids
+	save_in_memory_store_state(store_id, state)
+
+	return {
+		"ok": true,
+		"session": clone_value(session)
+	}
+}
+
+func in_memory_get_session_fn_impl(store_map, session_id_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_store_state(store_id)
+	sessions_by_id := normalize_dict(dict_get_or(state, "sessions_by_id", {}))
+	active_ids := normalize_dict(dict_get_or(state, "active_ids", {}))
+	session_id := resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	})
+
+	if key_in_dict(active_ids, session_id) && active_ids[session_id] == true && key_in_dict(sessions_by_id, session_id) {
+		return {
+			"ok": true,
+			"session": clone_value(dict_get_or(sessions_by_id, session_id, {}))
+		}
+	}
+
+	return {
+		"ok": false
+	}
+}
+
+func in_memory_update_session_fn_impl(store_map, session_id_input, patch_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_store_state(store_id)
+	sessions_by_id := normalize_dict(dict_get_or(state, "sessions_by_id", {}))
+	active_ids := normalize_dict(dict_get_or(state, "active_ids", {}))
+	patch := normalize_dict(patch_input)
+	session_id := resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	})
+
+	if key_in_dict(active_ids, session_id) && active_ids[session_id] == true && key_in_dict(sessions_by_id, session_id) {
+		current := normalize_dict(dict_get_or(sessions_by_id, session_id, {}))
+		updated := merge_dicts(current, patch)
+		sessions_by_id[session_id] := updated
+		state["sessions_by_id"] := sessions_by_id
+		save_in_memory_store_state(store_id, state)
+
+		return {
+			"ok": true,
+			"session": clone_value(updated)
+		}
+	}
+
+	return {
+		"ok": false
+	}
+}
+
+func in_memory_list_sessions_fn_impl(store_map, options) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_store_state(store_id)
+	sessions_by_id := normalize_dict(dict_get_or(state, "sessions_by_id", {}))
+	active_ids := normalize_dict(dict_get_or(state, "active_ids", {}))
+	ordered_ids := normalize_array(dict_get_or(state, "ordered_ids", []))
+	items := []
+
+	for session_id in ordered_ids {
+		if key_in_dict(active_ids, session_id) && active_ids[session_id] == true && key_in_dict(sessions_by_id, session_id) {
+			items = push(items, clone_value(dict_get_or(sessions_by_id, session_id, {})))
+		}
+	}
+
+	return {
+		"ok": true,
+		"sessions": items,
+		"count": len(items)
+	}
+}
+
+func in_memory_delete_session_fn_impl(store_map, session_id_input) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_store_state(store_id)
+	active_ids := normalize_dict(dict_get_or(state, "active_ids", {}))
+	session_id := resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	})
+
+	if key_in_dict(active_ids, session_id) {
+		active_ids[session_id] := false
+		state["active_ids"] := active_ids
+		save_in_memory_store_state(store_id, state)
+		return {
+			"ok": true,
+			"deleted": true
+		}
+	}
+
+	return {
+		"ok": false,
+		"deleted": false
+	}
+}
+
+func in_memory_save_run_state_fn_impl(store_map, session_id_input, run_state_input, options) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_store_state(store_id)
+	run_state_by_session := normalize_dict(dict_get_or(state, "run_state_by_session", {}))
+	session_id := resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	})
+	run_state := clone_value(run_state_input)
+
+	run_state_by_session[session_id] := run_state
+	state["run_state_by_session"] := run_state_by_session
+	save_in_memory_store_state(store_id, state)
+
+	return {
+		"ok": true,
+		"run_state": run_state
+	}
+}
+
+func in_memory_get_run_state_fn_impl(store_map, session_id_input, options) {
+	store_id := resolve_in_memory_store_id(store_map)
+	state := ensure_in_memory_store_state(store_id)
+	run_state_by_session := normalize_dict(dict_get_or(state, "run_state_by_session", {}))
+	session_id := resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	})
+
+	if key_in_dict(run_state_by_session, session_id) {
+		return {
+			"ok": true,
+			"run_state": clone_value(dict_get_or(run_state_by_session, session_id, {}))
+		}
+	}
+
+	return {
+		"ok": false,
+		"run_state": {}
+	}
+}
+
+func create_in_memory_session_store_impl(options) {
+	options_map := normalize_dict(options)
+	store_id := normalize_string(dict_get_or(options_map, "store_id", "in-memory-session-store"), "in-memory-session-store")
+	store_name := normalize_string(dict_get_or(options_map, "name", "InMemorySessionStore"), "InMemorySessionStore")
+	metadata := merge_dicts(normalize_dict(dict_get_or(options_map, "metadata", {})), {
+		"store_kind": "in_memory",
+		"store_id": store_id
+	})
+
+	ensure_in_memory_store_state(store_id)
+
+	return create_session_store_interface_impl({
+		"name": store_name,
+		"create_session_fn": in_memory_create_session_fn_impl,
+		"get_session_fn": in_memory_get_session_fn_impl,
+		"update_session_fn": in_memory_update_session_fn_impl,
+		"list_sessions_fn": in_memory_list_sessions_fn_impl,
+		"delete_session_fn": in_memory_delete_session_fn_impl,
+		"save_run_state_fn": in_memory_save_run_state_fn_impl,
+		"get_run_state_fn": in_memory_get_run_state_fn_impl,
+		"metadata": metadata
+	})
+}
+
+func reset_in_memory_session_store_impl(options) {
+	options_map := normalize_dict(options)
+	store_id := normalize_string(dict_get_or(options_map, "store_id", "in-memory-session-store"), "in-memory-session-store")
+	IN_MEMORY_SESSION_STORES[store_id] := default_in_memory_store_state()
+
+	return {
+		"ok": true,
+		"store_id": store_id
+	}
+}
+
+func ensure_session_store_impl(store_input) {
+	store := normalize_dict(store_input)
+	if normalize_string(dict_get_or(store, "type", ""), "") == "SessionStore" {
+		return store
+	}
+
+	return create_session_store_interface_impl({})
+}
+
+func not_implemented_result(operation_name) {
+	return {
+		"ok": false,
+		"error": {
+			"kind": "not_implemented",
+			"message": "Session store operation is not implemented.",
+			"details": {
+				"operation": normalize_string(operation_name, "unknown")
+			}
+		}
+	}
+}
+
+func session_store_create_impl(store_input, session_input) {
+	store := ensure_session_store_impl(store_input)
+	create_fn := dict_get_or(store, "create_session_fn", null)
+	if type(create_fn) != "function" {
+		return not_implemented_result("create_session")
+	}
+
+	return create_fn(store, create_session_impl(session_input))
+}
+
+func session_store_get_impl(store_input, session_id_input) {
+	store := ensure_session_store_impl(store_input)
+	get_fn := dict_get_or(store, "get_session_fn", null)
+	if type(get_fn) != "function" {
+		return not_implemented_result("get_session")
+	}
+
+	return get_fn(store, resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	}))
+}
+
+func session_store_update_impl(store_input, session_id_input, patch_input) {
+	store := ensure_session_store_impl(store_input)
+	update_fn := dict_get_or(store, "update_session_fn", null)
+	if type(update_fn) != "function" {
+		return not_implemented_result("update_session")
+	}
+
+	return update_fn(store, resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	}), normalize_dict(patch_input))
+}
+
+func session_store_list_impl(store_input, options) {
+	store := ensure_session_store_impl(store_input)
+	list_fn := dict_get_or(store, "list_sessions_fn", null)
+	if type(list_fn) != "function" {
+		return not_implemented_result("list_sessions")
+	}
+
+	return list_fn(store, normalize_dict(options))
+}
+
+func session_store_delete_impl(store_input, session_id_input) {
+	store := ensure_session_store_impl(store_input)
+	delete_fn := dict_get_or(store, "delete_session_fn", null)
+	if type(delete_fn) != "function" {
+		return not_implemented_result("delete_session")
+	}
+
+	return delete_fn(store, resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	}))
+}
+
+func session_store_save_run_state_impl(store_input, session_id_input, run_state_input, options) {
+	store := ensure_session_store_impl(store_input)
+	save_fn := dict_get_or(store, "save_run_state_fn", null)
+	if type(save_fn) != "function" {
+		return not_implemented_result("save_run_state")
+	}
+
+	return save_fn(store, resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	}), clone_value(run_state_input), normalize_dict(options))
+}
+
+func session_store_get_run_state_impl(store_input, session_id_input, options) {
+	store := ensure_session_store_impl(store_input)
+	get_fn := dict_get_or(store, "get_run_state_fn", null)
+	if type(get_fn) != "function" {
+		return not_implemented_result("get_run_state")
+	}
+
+	return get_fn(store, resolve_session_id_value(session_id_input, {
+		"fallback": "session-default"
+	}), normalize_dict(options))
+}
+
+func describe_session_store_module_impl() {
+	return {
+		"module": "agents.sessions.store",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_session_id",
+			"create_session_message",
+			"create_session_state",
+			"create_session",
+			"create_session_store_interface",
+			"create_in_memory_session_store",
+			"reset_in_memory_session_store",
+			"session_store_create",
+			"session_store_get",
+			"session_store_update",
+			"session_store_list",
+			"session_store_delete",
+			"session_store_save_run_state",
+			"session_store_get_run_state"
+		]
+	}
+}
+
+export create_session_id := create_session_id_impl
+export create_session_message := create_session_message_impl
+export create_session_state := create_session_state_impl
+export create_session := create_session_impl
+export create_session_store_interface := create_session_store_interface_impl
+export create_in_memory_session_store := create_in_memory_session_store_impl
+export reset_in_memory_session_store := reset_in_memory_session_store_impl
+export session_store_create := session_store_create_impl
+export session_store_get := session_store_get_impl
+export session_store_update := session_store_update_impl
+export session_store_list := session_store_list_impl
+export session_store_delete := session_store_delete_impl
+export session_store_save_run_state := session_store_save_run_state_impl
+export session_store_get_run_state := session_store_get_run_state_impl
+export describe_session_store_module := describe_session_store_module_impl

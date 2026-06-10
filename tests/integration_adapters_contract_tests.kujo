@@ -1,0 +1,188 @@
+test_setup {
+	from src.agents.integrations.adapters import create_external_tool_provider_adapter, external_provider_list_tools, external_provider_invoke_tool
+	from src.agents.integrations.adapters import map_external_tool_to_registry_entry
+	from src.agents.integrations.adapters import create_dispatch_integration_hooks, dispatch_run_agent_step, dispatch_invoke_workflow_as_tool
+	from src.agents.integrations.adapters import create_watchdog_trace_adapter, watchdog_transform_trace_event
+	from src.agents.integrations.adapters import create_scout_code_context_provider, scout_provider_resolve_context, map_scout_context_to_retrieval_enrichment
+}
+
+test "external tool provider adapter lists and invokes tools" {
+	provider := create_external_tool_provider_adapter({
+		"provider_name": "mcp",
+		"list_tools_fn": func(provider_map, options) {
+			return [
+				{
+					"id": "mcp.search",
+					"name": "search",
+					"description": "Search external index"
+				}
+			]
+		},
+		"invoke_tool_fn": func(provider_map, tool_name, payload, context) {
+			return {
+				"ok": true,
+				"tool_name": tool_name,
+				"result": {
+					"echo": payload
+				}
+			}
+		}
+	})
+
+	listed := external_provider_list_tools(provider, {})
+	assert_equal(listed["ok"], true)
+	assert_equal(len(listed["tools"]), 1)
+	assert_equal(listed["tools"][0]["name"], "search")
+
+	invoked := external_provider_invoke_tool(provider, "search", {
+		"query": "agents"
+	}, {})
+	assert_equal(invoked["ok"], true)
+	assert_equal(invoked["tool_name"], "search")
+	assert_equal(invoked["result"]["echo"]["query"], "agents")
+
+	mapped := map_external_tool_to_registry_entry(listed["tools"][0], {
+		"provider_name": "mcp"
+	})
+	assert_equal(mapped["id"], "mcp.search")
+	assert_equal(mapped["metadata"]["integration_provider"], "mcp")
+}
+
+test "dispatch integration hooks execute adapter callbacks" {
+	hooks := create_dispatch_integration_hooks({
+		"run_agent_step_fn": func(step_payload, options) {
+			return {
+				"ok": true,
+				"step": step_payload["step_id"]
+			}
+		},
+		"invoke_workflow_fn": func(workflow_name, workflow_input, options) {
+			return {
+				"ok": true,
+				"workflow": workflow_name,
+				"input": workflow_input
+			}
+		}
+	})
+
+	step_result := dispatch_run_agent_step(hooks, {
+		"step_id": "step-1"
+	}, {})
+	assert_equal(step_result["ok"], true)
+	assert_equal(step_result["step"], "step-1")
+
+	workflow_result := dispatch_invoke_workflow_as_tool(hooks, "compile_report", {
+		"run_id": "run-1"
+	}, {})
+	assert_equal(workflow_result["ok"], true)
+	assert_equal(workflow_result["workflow"], "compile_report")
+}
+
+test "watchdog trace adapter maps default and custom transformations" {
+	default_adapter := create_watchdog_trace_adapter({})
+	default_result := watchdog_transform_trace_event(default_adapter, {
+		"trace_id": "trc-1",
+		"run_id": "run-1",
+		"agent_id": "agent-1",
+		"event_kind": "run_started",
+		"timestamp": "2026-05-27 00:00:00",
+		"sequence": 1,
+		"payload": {
+			"input": "hello"
+		}
+	}, {})
+	assert_equal(default_result["ok"], true)
+	assert_equal(default_result["record"]["metadata"]["adapter"], "watchdog")
+
+	custom_adapter := create_watchdog_trace_adapter({
+		"transform_trace_fn": func(trace_event, options) {
+			return {
+				"ok": true,
+				"record": {
+					"kind": trace_event["event_kind"],
+					"run": trace_event["run_id"]
+				}
+			}
+		}
+	})
+	custom_result := watchdog_transform_trace_event(custom_adapter, {
+		"event_kind": "run_completed",
+		"run_id": "run-2"
+	}, {})
+	assert_equal(custom_result["ok"], true)
+	assert_equal(custom_result["record"]["kind"], "run_completed")
+}
+
+test "scout code-context provider resolves context and maps retrieval enrichment" {
+	provider := create_scout_code_context_provider({
+		"provider_name": "scout",
+		"resolve_context_fn": func(provider_map, request_payload, options) {
+			return {
+				"ok": true,
+				"summary": "Relevant code context for runner lifecycle",
+				"entries": [
+					{
+						"entry_id": "entry-1",
+						"file_path": "src/agents/runner.kujo",
+						"symbol_name": "run_agent_impl",
+						"snippet": "func run_agent_impl(agent_input, run_request_input, options) {",
+						"score": 0.93,
+						"start_line": 600,
+						"end_line": 750,
+						"metadata": {
+							"source": "fixture"
+						}
+					}
+				]
+			}
+		}
+	})
+
+	resolved := scout_provider_resolve_context(provider, {
+		"query_text": "runner lifecycle and handoff flow",
+		"path_hints": [
+			"src/agents/runner.kujo"
+		],
+		"top_k": 3
+	}, {})
+
+	assert_equal(resolved["ok"], true)
+	assert_equal(resolved["count"], 1)
+	assert_equal(resolved["context"]["provider_name"], "scout")
+	assert_equal(resolved["context"]["entries"][0]["file_path"], "src/agents/runner.kujo")
+	assert_equal(resolved["metadata"]["integration_provider"], "scout")
+
+	enrichment := map_scout_context_to_retrieval_enrichment(resolved, {})
+	assert_equal(enrichment["ok"], true)
+	assert_equal(len(enrichment["retrieval_enrichment"]["documents"]), 1)
+	assert_equal(enrichment["retrieval_enrichment"]["documents"][0]["document_id"], "scout-doc-1")
+	assert_equal(enrichment["retrieval_enrichment"]["documents"][0]["source"], "src/agents/runner.kujo")
+	assert_equal(enrichment["retrieval_enrichment"]["citations"][0]["citation_id"], "scout-citation-1")
+	assert_equal(enrichment["retrieval_enrichment"]["metadata"]["integration_provider"], "scout")
+}
+
+test "scout code-context provider returns deterministic errors for missing callbacks and invalid queries" {
+	unconfigured := create_scout_code_context_provider({
+		"provider_name": "scout"
+	})
+	not_implemented := scout_provider_resolve_context(unconfigured, {
+		"query_text": "runner"
+	}, {})
+	assert_equal(not_implemented["ok"], false)
+	assert_equal(not_implemented["error"]["kind"], "not_implemented")
+
+	provider := create_scout_code_context_provider({
+		"provider_name": "scout",
+		"resolve_context_fn": func(provider_map, request_payload, options) {
+			return {
+				"ok": true,
+				"entries": []
+			}
+		}
+	})
+	invalid_query := scout_provider_resolve_context(provider, {
+		"query_text": ""
+	}, {})
+	assert_equal(invalid_query["ok"], false)
+	assert_equal(invalid_query["error"]["kind"], "invalid_request")
+}

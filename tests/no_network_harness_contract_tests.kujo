@@ -1,0 +1,85 @@
+test_setup {
+	from src.agents.testing.no_network import create_no_network_model_adapter, create_no_network_retrieval_provider, create_no_network_tool_fixture, create_no_network_harness
+	from src.agents.ai.adapter import call_chat, call_chat_stream
+	from src.agents.retrieval.provider import retrieval_provider_retrieve
+	from src.agents.tools.registry import resolve_tool, create_tool_execution_context, execute_tool
+}
+
+test "no-network fixture builders produce deterministic model retrieval and tool contracts" {
+	model_adapter := create_no_network_model_adapter({
+		"output_text": "fixture-output"
+	})
+	chat_result := call_chat(model_adapter, [
+		{
+			"role": "user",
+			"content": "hello"
+		}
+	], {})
+	assert_equal(chat_result["ok"], true)
+	assert_equal(chat_result["output_text"], "fixture-output")
+
+	stream_result := call_chat_stream(model_adapter, [
+		{
+			"role": "user",
+			"content": "stream"
+		}
+	], {}, func(event_payload) {
+		return
+	})
+	assert_equal(stream_result["ok"], true)
+	assert_equal(len(stream_result["emitted_events"]), 2)
+
+	retrieval_provider := create_no_network_retrieval_provider({})
+	retrieval_result := retrieval_provider_retrieve(retrieval_provider, {
+		"query_text": "offline query"
+	}, {})
+	assert_equal(retrieval_result["ok"], true)
+	assert_equal(type(retrieval_result["documents"]), "array")
+
+	tool_result := create_no_network_tool_fixture({
+		"name": "fixture_tool"
+	})
+	assert_equal(tool_result["ok"], true)
+	assert_equal(tool_result["tool"]["name"], "fixture_tool")
+}
+
+test "no-network harness composes fixtures for integration tests" {
+	harness := create_no_network_harness({
+		"model": {
+			"output_text": "harness-output"
+		}
+	})
+	assert_equal(harness["ok"], true)
+	assert_equal(harness["type"], "NoNetworkHarness")
+	assert_equal(harness["metadata"]["requires_network"], false)
+
+	chat_result := call_chat(harness["model_adapter"], [
+		{
+			"role": "user",
+			"content": "run"
+		}
+	], {})
+	assert_equal(chat_result["ok"], true)
+	assert_equal(chat_result["output_text"], "harness-output")
+
+	retrieval_result := retrieval_provider_retrieve(harness["retrieval_provider"], {
+		"query_text": "harness retrieval"
+	}, {})
+	assert_equal(retrieval_result["ok"], true)
+	assert_equal(type(retrieval_result["citations"]), "array")
+
+	resolved := resolve_tool(harness["tool_registry"], harness["tool"]["name"])
+	assert_equal(resolved["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-1",
+		"agent_id": "agent-1",
+		"tool_name": harness["tool"]["name"]
+	})
+	exec_result := execute_tool(resolved["tool"], {
+		"content": "offline-content"
+	}, context, {})
+	assert_equal(exec_result["ok"], true)
+	assert_equal(exec_result["output"]["offline"], true)
+	assert_equal(exec_result["output"]["content"], "offline-content")
+}

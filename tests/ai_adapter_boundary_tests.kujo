@@ -1,0 +1,281 @@
+test_setup {
+	from src.agents.ai.adapter import create_ai_sdk_adapter, build_ai_request_options, to_agent_model_result, extract_usage_metrics, build_observability_hooks, call_chat, call_chat_stream
+}
+
+test "build_ai_request_options merges model policy and run overrides" {
+	agent := {
+		"model_policy": {
+			"model": "gpt-4.1-mini",
+			"temperature": 0.2,
+			"max_tokens": 256
+		},
+		"output_schema": {
+			"type": "object",
+			"required": ["summary"]
+		}
+	}
+	request_options := build_ai_request_options(agent, {
+		"max_tokens": 128,
+		"stream": false
+	})
+
+	assert_equal(request_options["model"], "gpt-4.1-mini")
+	assert_equal(request_options["temperature"], 0.2)
+	assert_equal(request_options["max_tokens"], 128)
+	assert_equal(request_options["stream"], false)
+	assert_equal(has_key(request_options, "structured_output_schema"), 1)
+}
+
+test "call_chat maps AI SDK success response" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"request_id": "req-123",
+			"model": "gpt-4.1-mini",
+			"output_text": "hello",
+			"tool_calls": [],
+			"usage": {
+				"input_tokens": 3,
+				"output_tokens": 2,
+				"total_tokens": 5
+			},
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"client": {"provider": "openai"},
+		"chat_completion_fn": fake_chat
+	})
+
+	result := call_chat(adapter, [{"role": "user", "content": "hello"}], {"max_tokens": 16})
+	assert_true(result["ok"])
+	assert_equal(result["provider"], "openai")
+	assert_equal(result["request_id"], "req-123")
+	assert_equal(result["output_text"], "hello")
+	assert_equal(result["usage"]["total_tokens"], 5)
+}
+
+test "call_chat maps AI SDK error response into agent error contract" {
+	fake_error_chat := func(client, messages, request_options) {
+		return {
+			"ok": false,
+			"provider": "openai",
+			"status_code": 504,
+			"error": {
+				"code": "timeout",
+				"message": "Request timed out",
+				"retryable": true
+			}
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_error_chat
+	})
+	result := call_chat(adapter, [], {})
+	assert_false(result["ok"])
+	assert_equal(result["error"]["kind"], "timeout")
+	assert_true(result["error"]["retryable"])
+	assert_equal(result["error"]["details"]["provider_error_code"], "timeout")
+}
+
+test "call_chat returns invalid_config when chat function is missing" {
+	adapter := create_ai_sdk_adapter({})
+	result := call_chat(adapter, [], {})
+	assert_false(result["ok"])
+	assert_equal(result["error"]["kind"], "invalid_config")
+}
+
+test "call_chat_stream maps stream response and retains emitted events" {
+	fake_stream := func(client, messages, request_options, on_event) {
+		on_event({"type": "delta", "delta": "A"})
+		on_event({"type": "done"})
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "A",
+			"status_code": 200,
+			"emitted_events": [
+				{"type": "delta", "delta": "A"},
+				{"type": "done"}
+			]
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_stream_fn": fake_stream
+	})
+	result := call_chat_stream(adapter, [], {"stream": true}, null)
+	assert_true(result["ok"])
+	assert_equal(len(result["emitted_events"]), 2)
+	assert_equal(result["emitted_events"][1]["type"], "done")
+}
+
+test "to_agent_model_result preserves success and maps provider errors" {
+	success_input := {
+		"ok": true,
+		"provider": "openai",
+		"request_id": "req-xyz",
+		"model": "gpt-4.1",
+		"output_text": "answer",
+		"usage": {
+			"input_tokens": 10,
+			"output_tokens": 5,
+			"total_tokens": 15
+		},
+		"status_code": 200
+	}
+	success_result := to_agent_model_result(success_input, {})
+	assert_true(success_result["ok"])
+	assert_equal(success_result["provider"], "openai")
+	assert_equal(success_result["request_id"], "req-xyz")
+	assert_equal(success_result["usage"]["total_tokens"], 15)
+
+	error_input := {
+		"ok": false,
+		"provider": "openai",
+		"status_code": 504,
+		"error": {
+			"code": "timeout",
+			"message": "Provider timed out",
+			"retryable": true
+		}
+	}
+	error_result := to_agent_model_result(error_input, {})
+	assert_false(error_result["ok"])
+	assert_equal(error_result["error"]["kind"], "timeout")
+	assert_equal(error_result["error"]["details"]["provider"], "openai")
+	assert_equal(error_result["error"]["details"]["provider_error_code"], "timeout")
+}
+
+test "structured output schema enforcement returns deterministic invalid errors" {
+	structured_schema := {
+		"type": "object",
+		"required": ["summary", "confidence"]
+	}
+
+	valid_result := to_agent_model_result({
+		"ok": true,
+		"provider": "openai",
+		"output_text": "structured",
+		"status_code": 200,
+		"structured_output": {
+			"summary": "Ready",
+			"confidence": 0.92
+		}
+	}, {
+		"structured_output_schema": structured_schema
+	})
+	assert_true(valid_result["ok"])
+
+	missing_required := to_agent_model_result({
+		"ok": true,
+		"provider": "openai",
+		"output_text": "structured",
+		"status_code": 200,
+		"structured_output": {
+			"summary": "Ready"
+		}
+	}, {
+		"structured_output_schema": structured_schema
+	})
+	assert_false(missing_required["ok"])
+	assert_equal(missing_required["error"]["kind"], "structured_output_invalid")
+	assert_equal(len(missing_required["error"]["details"]["missing_fields"]), 1)
+}
+
+test "usage metadata is normalized for budget accounting" {
+	result := to_agent_model_result({
+		"ok": true,
+		"provider": "openai",
+		"output_text": "usage",
+		"status_code": 200,
+		"estimated_cost_cents": 1.75,
+		"usage": {
+			"prompt_tokens": 9,
+			"completion_tokens": 4
+		}
+	}, {})
+
+	assert_true(result["ok"])
+	assert_equal(result["usage"]["input_tokens"], 9)
+	assert_equal(result["usage"]["output_tokens"], 4)
+	assert_equal(result["usage"]["total_tokens"], 13)
+	assert_equal(result["usage"]["cost_cents"], 1.75)
+
+	budget_usage := extract_usage_metrics(result)
+	assert_equal(budget_usage["total_tokens"], 13)
+	assert_equal(budget_usage["cost_cents"], 1.75)
+}
+
+test "observability hooks compose without duplicate callback counts" {
+	adapter_hooks := {
+		"on_request_start": func(event_payload) {
+			return
+		}
+	}
+	agent_hooks := {
+		"on_request_start": func(event_payload) {
+			return
+		}
+	}
+
+	hooks := build_observability_hooks(adapter_hooks, agent_hooks)
+	first := hooks["on_request_start"]({"request_id": "req-1", "attempt": 1})
+	second := hooks["on_request_start"]({"request_id": "req-1", "attempt": 1})
+	third := hooks["on_request_start"]({"request_id": "req-1", "attempt": 2})
+
+	assert_false(first["deduped"])
+	assert_true(first["called_adapter"])
+	assert_true(first["called_agent"])
+	assert_true(second["deduped"])
+	assert_false(second["called_adapter"])
+	assert_false(second["called_agent"])
+	assert_false(third["deduped"])
+}
+
+test "call_chat passes merged request hooks to adapter callback" {
+	fake_chat := func(client, messages, request_options) {
+		hook_results := []
+		if type(request_options["on_request_start"]) == "function" {
+			hook_results := push(hook_results, request_options["on_request_start"]({"request_id": "req-hook", "attempt": 1}))
+			hook_results := push(hook_results, request_options["on_request_start"]({"request_id": "req-hook", "attempt": 1}))
+		}
+
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "hooked",
+			"status_code": 200,
+			"hook_results": hook_results
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat,
+		"hooks": {
+			"on_request_start": func(event_payload) {
+				return
+			}
+		}
+	})
+
+	result := call_chat(adapter, [{"role": "user", "content": "hello"}], {
+		"hooks": {
+			"on_request_start": func(event_payload) {
+				return
+			}
+		}
+	})
+
+	assert_true(result["ok"])
+	assert_equal(len(result["raw"]["hook_results"]), 2)
+	assert_false(result["raw"]["hook_results"][0]["deduped"])
+	assert_true(result["raw"]["hook_results"][0]["called_adapter"])
+	assert_true(result["raw"]["hook_results"][0]["called_agent"])
+	assert_true(result["raw"]["hook_results"][1]["deduped"])
+}

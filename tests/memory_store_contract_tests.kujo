@@ -1,0 +1,247 @@
+test_setup {
+	from src.agents.memory.store import create_memory_scope, create_memory_provenance, create_memory_entry, create_memory_query, create_memory_query_result
+	from src.agents.memory.store import create_noop_memory_store, create_in_memory_memory_store, reset_in_memory_memory_store
+	from src.agents.memory.store import memory_store_write, memory_store_read, memory_store_query, memory_store_delete
+}
+
+test "memory contract constructors provide scope and provenance fields" {
+	scope := create_memory_scope("session", "session-1", {
+		"metadata": {
+			"origin": "test"
+		}
+	})
+	assert_equal(scope["type"], "MemoryScope")
+	assert_equal(scope["scope_kind"], "session")
+	assert_equal(scope["scope_id"], "session-1")
+	assert_equal(scope["metadata"]["origin"], "test")
+
+	provenance := create_memory_provenance({
+		"source": "runner",
+		"source_id": "run-1",
+		"confidence": 87
+	})
+	assert_equal(provenance["type"], "MemoryProvenance")
+	assert_equal(provenance["source"], "runner")
+	assert_equal(provenance["source_id"], "run-1")
+	assert_equal(provenance["confidence"], 87)
+
+	entry := create_memory_entry({
+		"entry_id": "entry-1",
+		"scope": scope,
+		"content": "remember this",
+		"tags": ["note", "session"],
+		"provenance": provenance
+	})
+	assert_equal(entry["type"], "MemoryEntry")
+	assert_equal(entry["entry_id"], "entry-1")
+	assert_equal(entry["scope"]["scope_kind"], "session")
+	assert_equal(entry["scope"]["scope_id"], "session-1")
+	assert_equal(type(entry["tags"]), "array")
+	assert_equal(type(entry["provenance"]), "dict")
+
+	query := create_memory_query({
+		"scope_kind": "session",
+		"scope_id": "session-1",
+		"limit": 10,
+		"offset": 1
+	})
+	assert_equal(query["type"], "MemoryQuery")
+	assert_equal(query["scope_kind"], "session")
+	assert_equal(query["scope_id"], "session-1")
+	assert_equal(query["limit"], 10)
+	assert_equal(query["offset"], 1)
+
+	query_result := create_memory_query_result({
+		"query": query,
+		"entries": [entry],
+		"count": 1,
+		"total_count": 1
+	})
+	assert_equal(query_result["type"], "MemoryQueryResult")
+	assert_equal(query_result["ok"], true)
+	assert_equal(type(query_result["count"]), "int")
+	assert_equal(type(query_result["total_count"]), "int")
+	assert_equal(query_result["provenance"]["type"], "MemoryQueryProvenance")
+	assert_equal(query_result["provenance"]["scope_kind"], "session")
+}
+
+test "noop memory store returns deterministic no-op responses" {
+	store := create_noop_memory_store({})
+
+	write_result := memory_store_write(store, {
+		"scope_kind": "session",
+		"scope_id": "session-1",
+		"content": "transient"
+	})
+	assert_equal(write_result["ok"], true)
+	assert_equal(write_result["persisted"], false)
+	assert_equal(type(write_result["entry"]), "dict")
+
+	read_result := memory_store_read(store, "anything")
+	assert_equal(read_result["ok"], false)
+
+	query_result := memory_store_query(store, {
+		"scope_kind": "session",
+		"scope_id": "session-1"
+	})
+	assert_equal(query_result["ok"], true)
+	assert_equal(query_result["count"], 0)
+
+	delete_result := memory_store_delete(store, "anything")
+	assert_equal(delete_result["ok"], false)
+	assert_equal(delete_result["deleted"], false)
+}
+
+test "in-memory memory store supports write read query and delete" {
+	store_id := "mem-003-crud"
+	reset_result := reset_in_memory_memory_store({
+		"store_id": store_id
+	})
+	assert_equal(reset_result["ok"], true)
+
+	store := create_in_memory_memory_store({
+		"store_id": store_id
+	})
+
+	write_a := memory_store_write(store, {
+		"scope_kind": "session",
+		"scope_id": "session-1",
+		"content": "alpha",
+		"provenance": {
+			"source": "runner",
+			"source_id": "run-a"
+		}
+	})
+	assert_equal(write_a["ok"], true)
+	assert_equal(write_a["created"], true)
+
+	entry_id := "mem-003-crud-entry-1"
+	read_a := memory_store_read(store, entry_id)
+	assert_equal(read_a["ok"], true)
+	assert_equal(type(read_a["entry"]), "dict")
+
+	query_session := memory_store_query(store, {
+		"scope_kind": "session",
+		"scope_id": "session-1"
+	})
+	assert_equal(query_session["ok"], true)
+	assert_equal(query_session["type"], "MemoryQueryResult")
+	assert_equal(query_session["count"], 1)
+	assert_equal(query_session["total_count"], 1)
+	assert_equal(query_session["provenance"]["type"], "MemoryQueryProvenance")
+
+	delete_a := memory_store_delete(store, entry_id)
+	assert_equal(delete_a["ok"], true)
+	assert_equal(delete_a["deleted"], true)
+
+	read_deleted := memory_store_read(store, entry_id)
+	assert_equal(read_deleted["ok"], false)
+}
+
+test "in-memory memory store enforces scope isolation" {
+	store_id := "mem-003-scope"
+	reset_result := reset_in_memory_memory_store({
+		"store_id": store_id
+	})
+	assert_equal(reset_result["ok"], true)
+
+	store := create_in_memory_memory_store({
+		"store_id": store_id
+	})
+
+	write_session := memory_store_write(store, {
+		"scope_kind": "session",
+		"scope_id": "session-42",
+		"content": "session memory"
+	})
+	assert_equal(write_session["ok"], true)
+
+	write_user := memory_store_write(store, {
+		"scope_kind": "user",
+		"scope_id": "user-42",
+		"content": "user memory"
+	})
+	assert_equal(write_user["ok"], true)
+
+	write_project := memory_store_write(store, {
+		"scope_kind": "project",
+		"scope_id": "project-42",
+		"content": "project memory"
+	})
+	assert_equal(write_project["ok"], true)
+
+	session_query := memory_store_query(store, {
+		"scope_kind": "session",
+		"scope_id": "session-42"
+	})
+	assert_equal(session_query["ok"], true)
+	assert_equal(session_query["count"], 1)
+
+	user_query := memory_store_query(store, {
+		"scope_kind": "user",
+		"scope_id": "user-42"
+	})
+	assert_equal(user_query["ok"], true)
+	assert_equal(user_query["count"], 1)
+
+	project_query := memory_store_query(store, {
+		"scope_kind": "project",
+		"scope_id": "project-42"
+	})
+	assert_equal(project_query["ok"], true)
+	assert_equal(project_query["count"], 1)
+}
+
+test "memory query supports limit offset filtering with provenance summary" {
+	store_id := "mem-004-query"
+	reset_result := reset_in_memory_memory_store({
+		"store_id": store_id
+	})
+	assert_equal(reset_result["ok"], true)
+
+	store := create_in_memory_memory_store({
+		"store_id": store_id
+	})
+
+	memory_store_write(store, {
+		"scope_kind": "session",
+		"scope_id": "session-77",
+		"content": "first",
+		"provenance": {
+			"source": "runner"
+		}
+	})
+	memory_store_write(store, {
+		"scope_kind": "session",
+		"scope_id": "session-77",
+		"content": "second",
+		"provenance": {
+			"source": "runner"
+		}
+	})
+	memory_store_write(store, {
+		"scope_kind": "session",
+		"scope_id": "session-77",
+		"content": "third",
+		"provenance": {
+			"source": "retrieval"
+		}
+	})
+
+	query_result := memory_store_query(store, {
+		"scope_kind": "session",
+		"scope_id": "session-77",
+		"offset": 1,
+		"limit": 1
+	})
+
+	assert_equal(query_result["ok"], true)
+	assert_equal(query_result["type"], "MemoryQueryResult")
+	assert_equal(query_result["count"], 3)
+	assert_equal(query_result["total_count"], 3)
+	assert_equal(len(query_result["entries"]), 1)
+	assert_equal(query_result["provenance"]["type"], "MemoryQueryProvenance")
+	assert_equal(query_result["provenance"]["scope_kind"], "session")
+	assert_equal(query_result["provenance"]["scope_id"], "session-77")
+	assert_equal(query_result["provenance"]["entries_with_provenance"] >= 0, true)
+}

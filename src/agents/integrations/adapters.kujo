@@ -1,0 +1,484 @@
+func dict_get_or(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	if type(value) == "dict" {
+		return value
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned := {}
+		for key in keys(source) {
+			cloned[key] := clone_value(source[key])
+		}
+		return cloned
+	}
+
+	if type(value) == "array" {
+		cloned := []
+		for item in value {
+			cloned = push(cloned, clone_value(item))
+		}
+		return cloned
+	}
+
+	return value
+}
+
+func create_external_tool_provider_adapter_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "ExternalToolProviderAdapter",
+		"provider_name": normalize_string(dict_get_or(options_map, "provider_name", "external"), "external"),
+		"list_tools_fn": dict_get_or(options_map, "list_tools_fn", null),
+		"invoke_tool_fn": dict_get_or(options_map, "invoke_tool_fn", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func external_provider_list_tools_impl(provider_input, options) {
+	provider := normalize_dict(provider_input)
+	list_tools_fn := dict_get_or(provider, "list_tools_fn", null)
+	if type(list_tools_fn) != "function" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "not_implemented",
+				"message": "External tool provider does not expose list_tools_fn.",
+				"details": {
+					"provider_name": normalize_string(dict_get_or(provider, "provider_name", "external"), "external")
+				}
+			}
+		}
+	}
+
+	tools := list_tools_fn(provider, normalize_dict(options))
+
+	return {
+		"ok": true,
+		"tools": normalize_array(tools)
+	}
+}
+
+func external_provider_invoke_tool_impl(provider_input, tool_name_input, input_payload, context_input) {
+	provider := normalize_dict(provider_input)
+	invoke_tool_fn := dict_get_or(provider, "invoke_tool_fn", null)
+	if type(invoke_tool_fn) != "function" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "not_implemented",
+				"message": "External tool provider does not expose invoke_tool_fn.",
+				"details": {
+					"provider_name": normalize_string(dict_get_or(provider, "provider_name", "external"), "external")
+				}
+			}
+		}
+	}
+
+	tool_name := normalize_string(tool_name_input, "")
+	if tool_name == "" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "invalid_request",
+				"message": "Tool name is required for provider invocation.",
+				"details": {}
+			}
+		}
+	}
+
+	return invoke_tool_fn(provider, tool_name, normalize_dict(input_payload), normalize_dict(context_input))
+}
+
+func map_external_tool_to_registry_entry_impl(external_tool_input, options) {
+	external_tool := normalize_dict(external_tool_input)
+	options_map := normalize_dict(options)
+	provider_name := normalize_string(dict_get_or(options_map, "provider_name", dict_get_or(external_tool, "provider_name", "external")), "external")
+	tool_name := normalize_string(dict_get_or(external_tool, "name", dict_get_or(external_tool, "tool_name", "external_tool")), "external_tool")
+	tool_id := normalize_string(dict_get_or(external_tool, "id", provider_name + "." + tool_name), provider_name + "." + tool_name)
+
+	return {
+		"id": tool_id,
+		"name": tool_name,
+		"description": normalize_string(dict_get_or(external_tool, "description", "External provider tool"), "External provider tool"),
+		"input_schema": clone_value(dict_get_or(external_tool, "input_schema", {})),
+		"output_schema": clone_value(dict_get_or(external_tool, "output_schema", {})),
+		"permissions": clone_value(dict_get_or(external_tool, "permissions", [])),
+		"risk_level": normalize_string(dict_get_or(external_tool, "risk_level", "medium"), "medium"),
+		"timeout_ms": dict_get_or(external_tool, "timeout_ms", 0),
+		"metadata": {
+			"integration_provider": provider_name,
+			"integration_kind": "external_tool_provider",
+			"approval_required": dict_get_or(external_tool, "approval_required", false),
+			"external_contract": clone_value(external_tool)
+		}
+	}
+}
+
+func create_dispatch_integration_hooks_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "DispatchIntegrationHooks",
+		"run_agent_step_fn": dict_get_or(options_map, "run_agent_step_fn", null),
+		"invoke_workflow_fn": dict_get_or(options_map, "invoke_workflow_fn", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func dispatch_run_agent_step_impl(dispatch_hooks_input, step_payload_input, options) {
+	dispatch_hooks := normalize_dict(dispatch_hooks_input)
+	run_agent_step_fn := dict_get_or(dispatch_hooks, "run_agent_step_fn", null)
+	if type(run_agent_step_fn) != "function" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "not_implemented",
+				"message": "Dispatch integration does not expose run_agent_step_fn.",
+				"details": {}
+			}
+		}
+	}
+
+	return run_agent_step_fn(normalize_dict(step_payload_input), normalize_dict(options))
+}
+
+func dispatch_invoke_workflow_as_tool_impl(dispatch_hooks_input, workflow_name_input, workflow_input_input, options) {
+	dispatch_hooks := normalize_dict(dispatch_hooks_input)
+	invoke_workflow_fn := dict_get_or(dispatch_hooks, "invoke_workflow_fn", null)
+	if type(invoke_workflow_fn) != "function" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "not_implemented",
+				"message": "Dispatch integration does not expose invoke_workflow_fn.",
+				"details": {}
+			}
+		}
+	}
+
+	workflow_name := normalize_string(workflow_name_input, "")
+	if workflow_name == "" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "invalid_request",
+				"message": "Workflow name is required for Dispatch invocation.",
+				"details": {}
+			}
+		}
+	}
+
+	return invoke_workflow_fn(workflow_name, normalize_dict(workflow_input_input), normalize_dict(options))
+}
+
+func create_watchdog_trace_adapter_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "WatchdogTraceAdapter",
+		"transform_trace_fn": dict_get_or(options_map, "transform_trace_fn", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func watchdog_transform_trace_event_impl(adapter_input, trace_event_input, options) {
+	adapter := normalize_dict(adapter_input)
+	trace_event := normalize_dict(trace_event_input)
+	transform_trace_fn := dict_get_or(adapter, "transform_trace_fn", null)
+
+	if type(transform_trace_fn) == "function" {
+		return transform_trace_fn(trace_event, normalize_dict(options))
+	}
+
+	return {
+		"ok": true,
+		"record": {
+			"trace_id": normalize_string(dict_get_or(trace_event, "trace_id", ""), ""),
+			"run_id": normalize_string(dict_get_or(trace_event, "run_id", ""), ""),
+			"agent_id": normalize_string(dict_get_or(trace_event, "agent_id", ""), ""),
+			"event_kind": normalize_string(dict_get_or(trace_event, "event_kind", "run_failed"), "run_failed"),
+			"timestamp": normalize_string(dict_get_or(trace_event, "timestamp", ""), ""),
+			"sequence": dict_get_or(trace_event, "sequence", 0),
+			"payload": clone_value(dict_get_or(trace_event, "payload", {})),
+			"metadata": {
+				"source": "agents.trace",
+				"adapter": "watchdog",
+				"version": "0.1.0"
+			}
+		}
+	}
+}
+
+func create_scout_code_context_provider_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "ScoutCodeContextProvider",
+		"provider_name": normalize_string(dict_get_or(options_map, "provider_name", "scout"), "scout"),
+		"resolve_context_fn": dict_get_or(options_map, "resolve_context_fn", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func normalize_scout_context_entry_impl(entry_input, default_id_input) {
+	entry := normalize_dict(entry_input)
+	entry_id := normalize_string(dict_get_or(entry, "entry_id", default_id_input), default_id_input)
+	file_path := normalize_string(dict_get_or(entry, "file_path", dict_get_or(entry, "path", "")), "")
+	symbol_name := normalize_string(dict_get_or(entry, "symbol_name", dict_get_or(entry, "symbol", "")), "")
+	title := normalize_string(dict_get_or(entry, "title", symbol_name), symbol_name)
+	if title == "" {
+		title = file_path
+	}
+	if title == "" {
+		title = entry_id
+	}
+
+	return {
+		"entry_id": entry_id,
+		"file_path": file_path,
+		"symbol_name": symbol_name,
+		"title": title,
+		"snippet": normalize_string(dict_get_or(entry, "snippet", dict_get_or(entry, "content", "")), ""),
+		"score": dict_get_or(entry, "score", 0),
+		"start_line": dict_get_or(entry, "start_line", 0),
+		"end_line": dict_get_or(entry, "end_line", 0),
+		"metadata": clone_value(dict_get_or(entry, "metadata", {}))
+	}
+}
+
+func create_scout_context_payload_impl(provider_name_input, request_input, raw_result_input) {
+	provider_name := normalize_string(provider_name_input, "scout")
+	request := normalize_dict(request_input)
+	raw_result := normalize_dict(raw_result_input)
+	entries_input := normalize_array(dict_get_or(raw_result, "entries", dict_get_or(raw_result, "contexts", [])))
+	entries := []
+	entry_index := 0
+
+	while entry_index < len(entries_input) {
+		entry_value := entries_input[entry_index]
+		default_id := "ctx-" + to_string(entry_index + 1)
+		entries = push(entries, normalize_scout_context_entry_impl(entry_value, default_id))
+		entry_index = entry_index + 1
+	}
+
+	summary := normalize_string(dict_get_or(raw_result, "summary", ""), "")
+	if summary == "" {
+		summary = normalize_string(dict_get_or(request, "query_text", ""), "")
+	}
+
+	query_text := normalize_string(dict_get_or(request, "query_text", ""), "")
+
+	return {
+		"ok": true,
+		"context": {
+			"provider_name": provider_name,
+			"query_text": query_text,
+			"entries": entries,
+			"summary": summary,
+			"metadata": clone_value(dict_get_or(raw_result, "metadata", {}))
+		},
+		"count": len(entries),
+		"metadata": {
+			"integration_provider": "scout",
+			"provider_name": provider_name,
+			"query_text": query_text,
+			"entry_count": len(entries),
+			"adapter_version": "0.1.0"
+		}
+	}
+}
+
+func scout_provider_resolve_context_impl(provider_input, query_input, options) {
+	provider := normalize_dict(provider_input)
+	resolve_context_fn := dict_get_or(provider, "resolve_context_fn", null)
+	if type(resolve_context_fn) != "function" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "not_implemented",
+				"message": "Scout code-context provider does not expose resolve_context_fn.",
+				"details": {
+					"provider_name": normalize_string(dict_get_or(provider, "provider_name", "scout"), "scout")
+				}
+			}
+		}
+	}
+
+	query_map := normalize_dict(query_input)
+	query_text := normalize_string(dict_get_or(query_map, "query_text", dict_get_or(query_map, "query", "")), "")
+	if query_text == "" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "invalid_request",
+				"message": "Scout code-context query_text is required.",
+				"details": {
+					"field": "query_text"
+				}
+			}
+		}
+	}
+
+	request_payload := {
+		"query_text": query_text,
+		"path_hints": clone_value(dict_get_or(query_map, "path_hints", [])),
+		"language_hint": normalize_string(dict_get_or(query_map, "language_hint", ""), ""),
+		"top_k": dict_get_or(query_map, "top_k", 5),
+		"metadata": clone_value(dict_get_or(query_map, "metadata", {}))
+	}
+
+	raw_result := resolve_context_fn(provider, request_payload, normalize_dict(options))
+	if type(raw_result) != "dict" {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "integration_error",
+				"message": "Scout code-context provider returned an invalid payload.",
+				"details": {
+					"provider_name": normalize_string(dict_get_or(provider, "provider_name", "scout"), "scout")
+				}
+			}
+		}
+	}
+
+	if dict_get_or(raw_result, "ok", true) == false {
+		return raw_result
+	}
+
+	provider_name := normalize_string(dict_get_or(provider, "provider_name", "scout"), "scout")
+	return create_scout_context_payload_impl(provider_name, request_payload, raw_result)
+}
+
+func map_scout_context_to_retrieval_enrichment_impl(context_result_input, options) {
+	context_result := normalize_dict(context_result_input)
+	if dict_get_or(context_result, "ok", true) == false {
+		return context_result
+	}
+
+	context := normalize_dict(dict_get_or(context_result, "context", context_result))
+	entries_input := normalize_array(dict_get_or(context, "entries", []))
+	documents := []
+	citations := []
+	entry_index := 0
+
+	while entry_index < len(entries_input) {
+		entry := normalize_dict(entries_input[entry_index])
+		document_id := normalize_string(dict_get_or(entry, "document_id", "scout-doc-" + to_string(entry_index + 1)), "scout-doc-" + to_string(entry_index + 1))
+		entry_id := normalize_string(dict_get_or(entry, "entry_id", "ctx-" + to_string(entry_index + 1)), "ctx-" + to_string(entry_index + 1))
+		file_path := normalize_string(dict_get_or(entry, "file_path", ""), "")
+		symbol_name := normalize_string(dict_get_or(entry, "symbol_name", ""), "")
+		title := normalize_string(dict_get_or(entry, "title", symbol_name), symbol_name)
+		if title == "" {
+			title = file_path
+		}
+
+		doc_metadata := {
+			"integration_provider": "scout",
+			"entry_id": entry_id,
+			"file_path": file_path,
+			"symbol_name": symbol_name,
+			"start_line": dict_get_or(entry, "start_line", 0),
+			"end_line": dict_get_or(entry, "end_line", 0)
+		}
+		documents = push(documents, {
+			"document_id": document_id,
+			"title": title,
+			"content": normalize_string(dict_get_or(entry, "snippet", ""), ""),
+			"score": dict_get_or(entry, "score", 0),
+			"source": file_path,
+			"metadata": doc_metadata
+		})
+		citations = push(citations, {
+			"citation_id": "scout-citation-" + to_string(entry_index + 1),
+			"document_id": document_id,
+			"span": file_path,
+			"score": dict_get_or(entry, "score", 0),
+			"metadata": doc_metadata
+		})
+
+		entry_index = entry_index + 1
+	}
+
+	return {
+		"ok": true,
+		"retrieval_enrichment": {
+			"documents": documents,
+			"citations": citations,
+			"summary": normalize_string(dict_get_or(context, "summary", ""), ""),
+			"metadata": {
+				"integration_provider": "scout",
+				"provider_name": normalize_string(dict_get_or(context, "provider_name", "scout"), "scout"),
+				"query_text": normalize_string(dict_get_or(context, "query_text", ""), ""),
+				"entry_count": len(documents),
+				"adapter_version": "0.1.0"
+			}
+		}
+	}
+}
+
+func describe_integration_adapters_module_impl() {
+	return {
+		"module": "agents.integrations.adapters",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_external_tool_provider_adapter",
+			"external_provider_list_tools",
+			"external_provider_invoke_tool",
+			"map_external_tool_to_registry_entry",
+			"create_dispatch_integration_hooks",
+			"dispatch_run_agent_step",
+			"dispatch_invoke_workflow_as_tool",
+			"create_watchdog_trace_adapter",
+			"watchdog_transform_trace_event",
+			"create_scout_code_context_provider",
+			"scout_provider_resolve_context",
+			"map_scout_context_to_retrieval_enrichment"
+		]
+	}
+}
+
+export create_external_tool_provider_adapter := create_external_tool_provider_adapter_impl
+export external_provider_list_tools := external_provider_list_tools_impl
+export external_provider_invoke_tool := external_provider_invoke_tool_impl
+export map_external_tool_to_registry_entry := map_external_tool_to_registry_entry_impl
+export create_dispatch_integration_hooks := create_dispatch_integration_hooks_impl
+export dispatch_run_agent_step := dispatch_run_agent_step_impl
+export dispatch_invoke_workflow_as_tool := dispatch_invoke_workflow_as_tool_impl
+export create_watchdog_trace_adapter := create_watchdog_trace_adapter_impl
+export watchdog_transform_trace_event := watchdog_transform_trace_event_impl
+export create_scout_code_context_provider := create_scout_code_context_provider_impl
+export scout_provider_resolve_context := scout_provider_resolve_context_impl
+export map_scout_context_to_retrieval_enrichment := map_scout_context_to_retrieval_enrichment_impl
+export describe_integration_adapters_module := describe_integration_adapters_module_impl

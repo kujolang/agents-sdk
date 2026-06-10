@@ -1,0 +1,95 @@
+func dict_get_or(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	if type(value) == "dict" {
+		return value
+	}
+	return {}
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_bool(value, fallback) {
+	if type(value) == "bool" {
+		return value
+	}
+	return fallback
+}
+
+func create_cancellation_token_impl(options) {
+	options_map := normalize_dict(options)
+	is_cancelled_fn := dict_get_or(options_map, "is_cancelled_fn", null)
+	if type(is_cancelled_fn) != "function" {
+		is_cancelled_fn = null
+	}
+
+	return {
+		"type": "CancellationToken",
+		"mode": normalize_string(dict_get_or(options_map, "mode", "manual"), "manual"),
+		"cancelled": normalize_bool(dict_get_or(options_map, "cancelled", false), false),
+		"cancel_at_stage": normalize_string(dict_get_or(options_map, "cancel_at_stage", ""), ""),
+		"is_cancelled_fn": is_cancelled_fn,
+		"metadata": normalize_dict(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func cancellation_requested_impl(token_input, stage, context) {
+	token := dict_get_or(token_input, "_self", token_input)
+	if type(token) != "dict" {
+		token = create_cancellation_token_impl({})
+	}
+
+	if normalize_bool(dict_get_or(token, "cancelled", false), false) {
+		return true
+	}
+
+	stage_name := normalize_string(stage, "")
+	if stage_name != "" {
+		target_stage := normalize_string(dict_get_or(token, "cancel_at_stage", ""), "")
+		if target_stage == stage_name {
+			return true
+		}
+	}
+
+	is_cancelled_fn := dict_get_or(token, "is_cancelled_fn", null)
+	if type(is_cancelled_fn) == "function" {
+		callback_result := is_cancelled_fn(stage_name, normalize_dict(context), token)
+		if type(callback_result) == "bool" {
+			return callback_result
+		}
+	}
+
+	return false
+}
+
+func describe_cancellation_module_impl() {
+	return {
+		"module": "agents.runtime.cancellation",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_cancellation_token",
+			"cancellation_requested"
+		]
+	}
+}
+
+export create_cancellation_token := create_cancellation_token_impl
+export cancellation_requested := cancellation_requested_impl
+export describe_cancellation_module := describe_cancellation_module_impl

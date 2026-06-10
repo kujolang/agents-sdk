@@ -1,0 +1,63 @@
+from src.agents.testing.no_network import create_no_network_harness
+from src.agents.runner import create_agent_runner, run_agent
+from src.agents.core_types import create_agent, create_agent_run_request
+from src.agents.artifacts.store import create_in_memory_artifact_store, reset_in_memory_artifact_store
+from src.agents.artifacts.store import artifact_store_list
+
+func run_artifact_agent_example_impl() {
+	store_id := "example-artifact-store"
+	reset_in_memory_artifact_store({
+		"store_id": store_id
+	})
+	artifact_store := create_in_memory_artifact_store({
+		"store_id": store_id
+	})
+
+	harness_result := create_no_network_harness({
+		"model": {
+			"output_text": "artifact-agent-offline"
+		}
+	})
+	if harness_result["ok"] == false {
+		return {
+			"ok": false,
+			"requires_network": false,
+			"error": harness_result["error"]
+		}
+	}
+
+	harness := harness_result
+	runner := create_agent_runner({
+		"ai_adapter": harness["model_adapter"]
+	})
+	agent := create_agent({
+		"id": "example-artifact-agent",
+		"name": "Example Artifact Agent",
+		"policy": {
+			"retrieval": {
+				"enabled": true,
+				"max_documents": 1
+			}
+		}
+	})
+	run_request := create_agent_run_request("Create artifact output", {
+		"run_id": "run-example-artifact",
+		"session_id": "session-example-artifact"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"artifact_store": artifact_store,
+		"retrieval_provider": harness["retrieval_provider"]
+	})
+	listed := artifact_store_list(artifact_store, {})
+
+	return {
+		"ok": true,
+		"requires_network": false,
+		"scenario": "artifact_agent",
+		"result": result,
+		"listed_artifacts": listed
+	}
+}
+
+export run_artifact_agent_example := run_artifact_agent_example_impl

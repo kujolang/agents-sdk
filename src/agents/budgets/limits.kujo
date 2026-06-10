@@ -1,0 +1,370 @@
+from src.agents.errors import create_agent_error
+
+func key_in_dict(obj, expected_key) {
+	if type(obj) != "dict" {
+		return false
+	}
+
+	for key in keys(obj) {
+		if key == expected_key {
+			return true
+		}
+	}
+
+	return false
+}
+
+func unwrap_dict(value) {
+	if type(value) != "dict" {
+		return value
+	}
+
+	if key_in_dict(value, "_self") {
+		inner := value["_self"]
+		if type(inner) == "dict" {
+			return inner
+		}
+	}
+
+	return value
+}
+
+func dict_get_or(obj, key, default_value) {
+	source := unwrap_dict(obj)
+	if type(source) != "dict" {
+		return default_value
+	}
+	if key_in_dict(source, key) {
+		return source[key]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	unwrapped := unwrap_dict(value)
+	if type(unwrapped) == "dict" {
+		return unwrapped
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned := {}
+		for key in keys(source) {
+			cloned[key] := clone_value(source[key])
+		}
+		return cloned
+	}
+
+	if type(value) == "array" {
+		cloned := []
+		for item in value {
+			cloned = push(cloned, clone_value(item))
+		}
+		return cloned
+	}
+
+	return value
+}
+
+func budget_counter_keys_impl() {
+	return [
+		"model_calls",
+		"tool_calls",
+		"steps",
+		"handoffs",
+		"memory_ops",
+		"artifact_bytes",
+		"input_tokens",
+		"output_tokens",
+		"total_tokens",
+		"cost_microunits",
+		"elapsed_ms"
+	]
+}
+
+func budget_limit_keys_impl() {
+	return [
+		"max_model_calls",
+		"max_tool_calls",
+		"max_steps",
+		"max_handoffs",
+		"max_memory_ops",
+		"max_artifact_bytes",
+		"max_input_tokens",
+		"max_output_tokens",
+		"max_total_tokens",
+		"max_cost_microunits",
+		"max_elapsed_ms"
+	]
+}
+
+func default_budget_counters() {
+	return {
+		"model_calls": 0,
+		"tool_calls": 0,
+		"steps": 0,
+		"handoffs": 0,
+		"memory_ops": 0,
+		"artifact_bytes": 0,
+		"input_tokens": 0,
+		"output_tokens": 0,
+		"total_tokens": 0,
+		"cost_microunits": 0,
+		"elapsed_ms": 0
+	}
+}
+
+func default_budget_limits() {
+	return {
+		"max_model_calls": 0,
+		"max_tool_calls": 0,
+		"max_steps": 0,
+		"max_handoffs": 0,
+		"max_memory_ops": 0,
+		"max_artifact_bytes": 0,
+		"max_input_tokens": 0,
+		"max_output_tokens": 0,
+		"max_total_tokens": 0,
+		"max_cost_microunits": 0,
+		"max_elapsed_ms": 0
+	}
+}
+
+func normalize_budget_counters(counters_input) {
+	counters := normalize_dict(counters_input)
+	defaults := default_budget_counters()
+	normalized := {}
+
+	keys_list := budget_counter_keys_impl()
+	index := 0
+	total := len(keys_list)
+	while index < total {
+		key_name := keys_list[index]
+		normalized[key_name] := normalize_non_negative_int(dict_get_or(counters, key_name, dict_get_or(defaults, key_name, 0)), dict_get_or(defaults, key_name, 0))
+		index = index + 1
+	}
+
+	return normalized
+}
+
+func normalize_budget_limits(limits_input) {
+	limits := normalize_dict(limits_input)
+	defaults := default_budget_limits()
+	normalized := {}
+
+	keys_list := budget_limit_keys_impl()
+	index := 0
+	total := len(keys_list)
+	while index < total {
+		key_name := keys_list[index]
+		normalized[key_name] := normalize_non_negative_int(dict_get_or(limits, key_name, dict_get_or(defaults, key_name, 0)), dict_get_or(defaults, key_name, 0))
+		index = index + 1
+	}
+
+	return normalized
+}
+
+func create_agent_budget_impl(options) {
+	options_map := normalize_dict(options)
+	limits := normalize_budget_limits(dict_get_or(options_map, "limits", options_map))
+
+	return {
+		"type": "AgentBudget",
+		"budget_id": normalize_string(dict_get_or(options_map, "budget_id", "budget-default"), "budget-default"),
+		"limits": limits,
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_budget_usage_impl(options) {
+	options_map := normalize_dict(options)
+	counters := normalize_budget_counters(dict_get_or(options_map, "counters", options_map))
+
+	return {
+		"type": "BudgetUsage",
+		"run_id": normalize_string(dict_get_or(options_map, "run_id", ""), ""),
+		"counters": counters,
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_budget_limit_policy_impl(options) {
+	options_map := normalize_dict(options)
+	mode := normalize_string(dict_get_or(options_map, "mode", "enforce"), "enforce")
+	if mode != "enforce" && mode != "observe" {
+		mode = "enforce"
+	}
+
+	return {
+		"type": "BudgetLimitPolicy",
+		"mode": mode,
+		"budget": create_agent_budget_impl(dict_get_or(options_map, "budget", options_map)),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func increment_budget_usage_impl(usage_input, delta_input) {
+	usage := create_budget_usage_impl(usage_input)
+	delta := normalize_budget_counters(delta_input)
+	updated := normalize_budget_counters(dict_get_or(usage, "counters", {}))
+
+	keys_list := budget_counter_keys_impl()
+	index := 0
+	total := len(keys_list)
+	while index < total {
+		key_name := keys_list[index]
+		updated[key_name] := normalize_non_negative_int(dict_get_or(updated, key_name, 0), 0) + normalize_non_negative_int(dict_get_or(delta, key_name, 0), 0)
+		index = index + 1
+	}
+
+	return {
+		"type": "BudgetUsage",
+		"run_id": normalize_string(dict_get_or(usage, "run_id", ""), ""),
+		"counters": updated,
+		"metadata": clone_value(dict_get_or(usage, "metadata", {}))
+	}
+}
+
+func build_budget_limit_pairs_impl() {
+	return [
+		{"counter": "model_calls", "limit": "max_model_calls"},
+		{"counter": "tool_calls", "limit": "max_tool_calls"},
+		{"counter": "steps", "limit": "max_steps"},
+		{"counter": "handoffs", "limit": "max_handoffs"},
+		{"counter": "memory_ops", "limit": "max_memory_ops"},
+		{"counter": "artifact_bytes", "limit": "max_artifact_bytes"},
+		{"counter": "input_tokens", "limit": "max_input_tokens"},
+		{"counter": "output_tokens", "limit": "max_output_tokens"},
+		{"counter": "total_tokens", "limit": "max_total_tokens"},
+		{"counter": "cost_microunits", "limit": "max_cost_microunits"},
+		{"counter": "elapsed_ms", "limit": "max_elapsed_ms"}
+	]
+}
+
+func evaluate_budget_limits_impl(policy_input, usage_input, options) {
+	policy := create_budget_limit_policy_impl(policy_input)
+	budget := normalize_dict(dict_get_or(policy, "budget", {}))
+	limits := normalize_budget_limits(dict_get_or(budget, "limits", {}))
+	usage := create_budget_usage_impl(usage_input)
+	counters := normalize_budget_counters(dict_get_or(usage, "counters", {}))
+	exceeded := []
+
+	pairs := build_budget_limit_pairs_impl()
+	index := 0
+	total := len(pairs)
+	while index < total {
+		pair := normalize_dict(pairs[index])
+		counter_key := normalize_string(dict_get_or(pair, "counter", ""), "")
+		limit_key := normalize_string(dict_get_or(pair, "limit", ""), "")
+		counter_value := normalize_non_negative_int(dict_get_or(counters, counter_key, 0), 0)
+		limit_value := normalize_non_negative_int(dict_get_or(limits, limit_key, 0), 0)
+
+		if limit_value > 0 {
+			if counter_value > limit_value {
+				exceeded = push(exceeded, {
+					"counter": counter_key,
+					"limit": limit_key,
+					"value": counter_value,
+					"max": limit_value
+				})
+			}
+		}
+
+		index = index + 1
+	}
+
+	if len(exceeded) == 0 {
+		return {
+			"type": "BudgetLimitEvaluation",
+			"ok": true,
+			"status": "within_limits",
+			"policy": policy,
+			"usage": usage,
+			"exceeded": [],
+			"error": null,
+			"metadata": clone_value(dict_get_or(normalize_dict(options), "metadata", {}))
+		}
+	}
+
+	first := normalize_dict(exceeded[0])
+	error_payload := create_agent_error("budget_exceeded", "Run budget limits were exceeded.", {
+		"details": {
+			"counter": normalize_string(dict_get_or(first, "counter", ""), ""),
+			"limit": normalize_string(dict_get_or(first, "limit", ""), ""),
+			"value": normalize_non_negative_int(dict_get_or(first, "value", 0), 0),
+			"max": normalize_non_negative_int(dict_get_or(first, "max", 0), 0),
+			"exceeded": exceeded
+		}
+	})
+
+	status := "budget_exceeded"
+	if normalize_string(dict_get_or(policy, "mode", "enforce"), "enforce") == "observe" {
+		status = "exceeded_observe"
+	}
+
+	return {
+		"type": "BudgetLimitEvaluation",
+		"ok": false,
+		"status": status,
+		"policy": policy,
+		"usage": usage,
+		"exceeded": exceeded,
+		"error": error_payload,
+		"metadata": clone_value(dict_get_or(normalize_dict(options), "metadata", {}))
+	}
+}
+
+func describe_budget_limits_module_impl() {
+	return {
+		"module": "agents.budgets.limits",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"budget_counter_keys",
+			"budget_limit_keys",
+			"create_agent_budget",
+			"create_budget_usage",
+			"create_budget_limit_policy",
+			"increment_budget_usage",
+			"evaluate_budget_limits"
+		]
+	}
+}
+
+export budget_counter_keys := budget_counter_keys_impl
+export budget_limit_keys := budget_limit_keys_impl
+export create_agent_budget := create_agent_budget_impl
+export create_budget_usage := create_budget_usage_impl
+export create_budget_limit_policy := create_budget_limit_policy_impl
+export increment_budget_usage := increment_budget_usage_impl
+export evaluate_budget_limits := evaluate_budget_limits_impl
+export describe_budget_limits_module := describe_budget_limits_module_impl

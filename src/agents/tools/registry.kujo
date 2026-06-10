@@ -1,0 +1,1146 @@
+from src.agents.errors import create_agent_error
+from src.agents.security.approval import create_approval_request, evaluate_approval_policy
+from src.agents.security.approval import create_approval_provider_request, resolve_approval_provider_decision
+from src.agents.artifacts.store import artifact_store_create
+
+func key_in_dict(obj, expected_key) {
+	if type(obj) != "dict" {
+		return false
+	}
+
+	for key in keys(obj) {
+		if key == expected_key {
+			return true
+		}
+	}
+
+	return false
+}
+
+func unwrap_dict(value) {
+	if type(value) != "dict" {
+		return value
+	}
+
+	if has_key(value, "_self") {
+		inner := value["_self"]
+		if type(inner) == "dict" {
+			return inner
+		}
+	}
+
+	return value
+}
+
+func dict_get_or(obj, key, default_value) {
+	source := unwrap_dict(obj)
+	if type(source) != "dict" {
+		return default_value
+	}
+	if key_in_dict(source, key) {
+		return source[key]
+	}
+	return default_value
+}
+
+func normalize_dict(value) {
+	unwrapped := unwrap_dict(value)
+	if type(unwrapped) == "dict" {
+		return unwrapped
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func normalize_bool(value, fallback) {
+	if type(value) == "bool" {
+		return value
+	}
+	return fallback
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned_dict := {}
+		for key in keys(source) {
+			cloned_dict[key] := clone_value(source[key])
+		}
+		return cloned_dict
+	}
+
+	if type(value) == "array" {
+		cloned_array := []
+		for item in value {
+			cloned_array = push(cloned_array, clone_value(item))
+		}
+		return cloned_array
+	}
+
+	return value
+}
+
+func clone_array_shallow(value) {
+	items := normalize_array(value)
+	cloned := []
+	for item in items {
+		cloned = push(cloned, item)
+	}
+	return cloned
+}
+
+func normalize_risk(value) {
+	risk := normalize_string(value, "medium")
+	if risk == "low" || risk == "medium" || risk == "high" || risk == "critical" {
+		return risk
+	}
+	return "medium"
+}
+
+func validate_tool_contract(tool_input) {
+	tool_map := normalize_dict(tool_input)
+	errors := []
+
+	id := normalize_string(dict_get_or(tool_map, "id", ""), "")
+	if id == "" {
+		errors = push(errors, {
+			"field": "id",
+			"message": "Tool id is required."
+		})
+	}
+
+	name := normalize_string(dict_get_or(tool_map, "name", ""), "")
+	if name == "" {
+		errors = push(errors, {
+			"field": "name",
+			"message": "Tool name is required."
+		})
+	}
+
+	if len(errors) > 0 {
+		return {
+			"ok": false,
+			"errors": errors
+		}
+	}
+
+	return {
+		"ok": true,
+		"errors": []
+	}
+}
+
+func create_tool_impl(tool_input) {
+	tool_map := normalize_dict(tool_input)
+	validation := validate_tool_contract(tool_map)
+	if dict_get_or(validation, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": create_agent_error("tool_input_invalid", "Tool contract is invalid.", {
+				"details": {
+					"violations": dict_get_or(validation, "errors", [])
+				}
+			})
+		}
+	}
+
+	handler := dict_get_or(tool_map, "handler", null)
+	if type(handler) != "function" {
+		handler = null
+	}
+
+	tool_metadata := clone_value(dict_get_or(tool_map, "metadata", {}))
+
+	return {
+		"ok": true,
+		"tool": {
+			"type": "Tool",
+			"id": normalize_string(dict_get_or(tool_map, "id", ""), ""),
+			"name": normalize_string(dict_get_or(tool_map, "name", ""), ""),
+			"description": normalize_string(dict_get_or(tool_map, "description", ""), ""),
+			"input_schema": normalize_dict(dict_get_or(tool_map, "input_schema", {})),
+			"output_schema": normalize_dict(dict_get_or(tool_map, "output_schema", {})),
+			"permissions": clone_array_shallow(dict_get_or(tool_map, "permissions", [])),
+			"risk": normalize_risk(dict_get_or(tool_map, "risk", "medium")),
+			"timeout_ms": normalize_non_negative_int(dict_get_or(tool_map, "timeout_ms", 30000), 30000),
+			"handler": handler,
+			"metadata": tool_metadata
+		}
+	}
+}
+
+func create_tool_registry_impl(options) {
+	options_map := normalize_dict(options)
+	return {
+		"type": "ToolRegistry",
+		"tools": [],
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func normalize_registry(registry_input) {
+	registry := normalize_dict(registry_input)
+	return {
+		"type": "ToolRegistry",
+		"tools": clone_array_shallow(dict_get_or(registry, "tools", [])),
+		"metadata": {}
+	}
+}
+
+func build_tool_contract_view(tool_input, include_handler) {
+	tool := normalize_dict(tool_input)
+	contract := {
+		"id": normalize_string(dict_get_or(tool, "id", ""), ""),
+		"name": normalize_string(dict_get_or(tool, "name", ""), ""),
+		"description": normalize_string(dict_get_or(tool, "description", ""), ""),
+		"input_schema": normalize_dict(dict_get_or(tool, "input_schema", {})),
+		"output_schema": normalize_dict(dict_get_or(tool, "output_schema", {})),
+		"permissions": clone_array_shallow(dict_get_or(tool, "permissions", [])),
+		"risk": normalize_risk(dict_get_or(tool, "risk", "medium")),
+		"timeout_ms": normalize_non_negative_int(dict_get_or(tool, "timeout_ms", 30000), 30000),
+		"metadata": clone_value(dict_get_or(tool, "metadata", {})),
+		"handler": null
+	}
+
+	if include_handler {
+		contract["handler"] := dict_get_or(tool, "handler", null)
+	}
+
+	return contract
+}
+
+func tool_metadata_view(tool_input) {
+	return build_tool_contract_view(tool_input, false)
+}
+
+func create_tool_execution_context_impl(options) {
+	options_map := normalize_dict(options)
+	agent_map := normalize_dict(dict_get_or(options_map, "agent", {}))
+	artifact_handles := normalize_dict(dict_get_or(options_map, "artifact_handles", {}))
+	option_artifact_store := dict_get_or(options_map, "artifact_store", null)
+	if type(option_artifact_store) == "dict" {
+		artifact_handles["artifact_store"] := option_artifact_store
+	}
+
+	agent_id := normalize_string(dict_get_or(agent_map, "id", dict_get_or(options_map, "agent_id", "")), "")
+	agent_name := normalize_string(dict_get_or(agent_map, "name", dict_get_or(options_map, "agent_name", "")), "")
+	agent_metadata := clone_value(dict_get_or(agent_map, "metadata", dict_get_or(options_map, "agent_metadata", {})))
+
+	return {
+		"type": "ToolExecutionContext",
+		"run_id": normalize_string(dict_get_or(options_map, "run_id", ""), ""),
+		"session_id": normalize_string(dict_get_or(options_map, "session_id", ""), ""),
+		"agent_id": agent_id,
+		"agent_name": agent_name,
+		"agent_metadata": agent_metadata,
+		"tool_name": normalize_string(dict_get_or(options_map, "tool_name", ""), ""),
+		"cancellation_token": dict_get_or(options_map, "cancellation_token", null),
+		"policy_handles": normalize_dict(dict_get_or(options_map, "policy_handles", {})),
+		"artifact_handles": artifact_handles,
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func with_tool_execution_invocation_impl(context_input, tool_name_input, input_payload) {
+	context := normalize_dict(context_input)
+
+	return {
+		"type": normalize_string(dict_get_or(context, "type", "ToolExecutionContext"), "ToolExecutionContext"),
+		"run_id": normalize_string(dict_get_or(context, "run_id", ""), ""),
+		"session_id": normalize_string(dict_get_or(context, "session_id", ""), ""),
+		"agent_id": normalize_string(dict_get_or(context, "agent_id", ""), ""),
+		"agent_name": normalize_string(dict_get_or(context, "agent_name", ""), ""),
+		"agent_metadata": clone_value(dict_get_or(context, "agent_metadata", {})),
+		"tool_name": normalize_string(tool_name_input, normalize_string(dict_get_or(context, "tool_name", ""), "")),
+		"cancellation_token": dict_get_or(context, "cancellation_token", null),
+		"policy_handles": normalize_dict(dict_get_or(context, "policy_handles", {})),
+		"artifact_handles": normalize_dict(dict_get_or(context, "artifact_handles", {})),
+		"metadata": clone_value(dict_get_or(context, "metadata", {})),
+		"input": clone_value(normalize_dict(input_payload))
+	}
+}
+
+func resolve_tool_artifact_store(context_input, options_input) {
+	options := normalize_dict(options_input)
+	context := normalize_dict(context_input)
+
+	option_store := dict_get_or(options, "artifact_store", null)
+	if type(option_store) == "dict" {
+		return option_store
+	}
+
+	handles := normalize_dict(dict_get_or(context, "artifact_handles", {}))
+	handle_store := dict_get_or(handles, "artifact_store", null)
+	if type(handle_store) == "dict" {
+		return handle_store
+	}
+
+	return null
+}
+
+func emit_tool_handler_artifacts(tool_name_input, context_input, options_input, artifacts_input) {
+	artifact_store := resolve_tool_artifact_store(context_input, options_input)
+	artifacts := normalize_array(artifacts_input)
+	context := normalize_dict(context_input)
+	metadata := normalize_dict(dict_get_or(context, "metadata", {}))
+	emitted := []
+	writes := []
+
+	if type(artifact_store) != "dict" || len(artifacts) == 0 {
+		return {
+			"artifacts": emitted,
+			"writes": writes
+		}
+	}
+
+	run_id := normalize_string(dict_get_or(context, "run_id", ""), "")
+	step_id := normalize_string(dict_get_or(metadata, "step_id", ""), "")
+	tool_name := normalize_string(tool_name_input, normalize_string(dict_get_or(context, "tool_name", ""), ""))
+
+	index := 0
+	total := len(artifacts)
+	while index < total {
+		candidate := normalize_dict(artifacts[index])
+		if len(keys(candidate)) > 0 {
+			create_result := artifact_store_create(artifact_store, {
+				"artifact_id": normalize_string(dict_get_or(candidate, "artifact_id", dict_get_or(candidate, "id", "")), ""),
+				"artifact_kind": normalize_string(dict_get_or(candidate, "artifact_kind", dict_get_or(candidate, "kind", "other")), "other"),
+				"title": normalize_string(dict_get_or(candidate, "title", ""), ""),
+				"content": normalize_string(dict_get_or(candidate, "content", dict_get_or(candidate, "text", "")), ""),
+				"media_type": normalize_string(dict_get_or(candidate, "media_type", dict_get_or(candidate, "mime_type", "text/plain")), "text/plain"),
+				"bytes": normalize_non_negative_int(dict_get_or(candidate, "bytes", -1), -1),
+				"producer_run_id": normalize_string(dict_get_or(candidate, "producer_run_id", run_id), run_id),
+				"producer_step_id": normalize_string(dict_get_or(candidate, "producer_step_id", step_id), step_id),
+				"producer_tool_name": normalize_string(dict_get_or(candidate, "producer_tool_name", tool_name), tool_name),
+				"created_at": normalize_string(dict_get_or(candidate, "created_at", ""), ""),
+				"metadata": normalize_dict(dict_get_or(candidate, "metadata", {}))
+			})
+			writes = push(writes, create_result)
+
+			result_map := normalize_dict(create_result)
+			artifact := dict_get_or(result_map, "artifact", null)
+			if dict_get_or(result_map, "ok", false) && type(artifact) == "dict" {
+				emitted = push(emitted, artifact)
+			}
+		}
+
+		index = index + 1
+	}
+
+	return {
+		"artifacts": emitted,
+		"writes": writes
+	}
+}
+
+func create_tool_execution_failed_error(tool_name_input, message_input, details_input) {
+	tool_name := normalize_string(tool_name_input, "")
+	details := normalize_dict(details_input)
+	if tool_name != "" {
+		details["tool_name"] := tool_name
+	}
+
+	return create_agent_error("tool_execution_failed", normalize_string(message_input, "Tool execution failed."), {
+		"tool_name": tool_name,
+		"details": details
+	})
+}
+
+func resolve_tool_timeout_ms(tool_input, options_input) {
+	tool := normalize_dict(tool_input)
+	options := normalize_dict(options_input)
+	default_timeout := normalize_non_negative_int(dict_get_or(tool, "timeout_ms", 30000), 30000)
+	requested_timeout := dict_get_or(options, "timeout_ms", default_timeout)
+	return normalize_non_negative_int(requested_timeout, default_timeout)
+}
+
+func resolve_tool_elapsed_ms(started_ms, finished_ms, options_input) {
+	options := normalize_dict(options_input)
+	override_elapsed := dict_get_or(options, "elapsed_ms_override", null)
+	if type(override_elapsed) == "int" {
+		if override_elapsed >= 0 {
+			return override_elapsed
+		}
+	}
+
+	if type(started_ms) == "int" && type(finished_ms) == "int" {
+		if finished_ms >= started_ms {
+			return finished_ms - started_ms
+		}
+	}
+
+	return 0
+}
+
+func validate_tool_timeout_limit(tool_name, timeout_ms, elapsed_ms) {
+	if elapsed_ms > timeout_ms {
+		return {
+			"ok": false,
+			"error": create_tool_execution_failed_error(tool_name, "Tool execution timed out.", {
+				"reason": "timeout",
+				"timeout_ms": timeout_ms,
+				"elapsed_ms": elapsed_ms
+			})
+		}
+	}
+
+	return {
+		"ok": true
+	}
+}
+
+func resolve_tool_approval_policy(context_input, options_input) {
+	context := normalize_dict(context_input)
+	options := normalize_dict(options_input)
+
+	option_policy := dict_get_or(options, "approval_policy", null)
+	if type(option_policy) == "dict" {
+		return option_policy
+	}
+
+	policy_handles := normalize_dict(dict_get_or(context, "policy_handles", {}))
+	handle_policy := dict_get_or(policy_handles, "approval_policy", null)
+	if type(handle_policy) == "dict" {
+		return handle_policy
+	}
+
+	return null
+}
+
+func resolve_tool_approval_provider(context_input, options_input) {
+	context := normalize_dict(context_input)
+	options := normalize_dict(options_input)
+
+	option_provider := dict_get_or(options, "approval_provider", null)
+	if type(option_provider) == "dict" {
+		return option_provider
+	}
+
+	policy_handles := normalize_dict(dict_get_or(context, "policy_handles", {}))
+	handle_provider := dict_get_or(policy_handles, "approval_provider", null)
+	if type(handle_provider) == "dict" {
+		return handle_provider
+	}
+
+	return null
+}
+
+func resolve_tool_output_sanitizer(context_input, options_input) {
+	context := normalize_dict(context_input)
+	options := normalize_dict(options_input)
+
+	option_sanitizer := dict_get_or(options, "output_sanitizer", null)
+	if type(option_sanitizer) == "function" {
+		return option_sanitizer
+	}
+
+	option_tool_sanitizer := dict_get_or(options, "tool_output_sanitizer", null)
+	if type(option_tool_sanitizer) == "function" {
+		return option_tool_sanitizer
+	}
+
+	policy_handles := normalize_dict(dict_get_or(context, "policy_handles", {}))
+	handle_sanitizer := dict_get_or(policy_handles, "tool_output_sanitizer", null)
+	if type(handle_sanitizer) == "function" {
+		return handle_sanitizer
+	}
+
+	return null
+}
+
+func sanitize_tool_output(tool_name_input, output_input, context_input, options_input) {
+	tool_name := normalize_string(tool_name_input, "")
+	original_output := clone_value(output_input)
+	output_sanitizer := resolve_tool_output_sanitizer(context_input, options_input)
+
+	if type(output_sanitizer) != "function" {
+		return {
+			"ok": true,
+			"output": original_output,
+			"metadata": {
+				"tool_name": tool_name,
+				"sanitizer_applied": false,
+				"sanitizer_failed": false,
+				"failure_reason": ""
+			}
+		}
+	}
+
+	sanitizer_result := {}
+	callback_failed := false
+	callback_error_message := ""
+	try {
+		sanitizer_result = output_sanitizer(clone_value(output_input))
+	} except err {
+		callback_failed = true
+		callback_error_message = normalize_string(err, "")
+	}
+
+	if callback_failed {
+		return {
+			"ok": true,
+			"output": original_output,
+			"metadata": {
+				"tool_name": tool_name,
+				"sanitizer_applied": true,
+				"sanitizer_failed": true,
+				"failure_reason": "callback_error",
+				"error_message": callback_error_message
+			}
+		}
+	}
+
+	if type(sanitizer_result) != "dict" {
+		return {
+			"ok": true,
+			"output": original_output,
+			"metadata": {
+				"tool_name": tool_name,
+				"sanitizer_applied": true,
+				"sanitizer_failed": true,
+				"failure_reason": "invalid_result_type",
+				"result_type": type(sanitizer_result)
+			}
+		}
+	}
+
+	sanitizer_ok := normalize_bool(dict_get_or(sanitizer_result, "ok", true), true)
+	if sanitizer_ok == false {
+		return {
+			"ok": true,
+			"output": original_output,
+			"metadata": {
+				"tool_name": tool_name,
+				"sanitizer_applied": true,
+				"sanitizer_failed": true,
+				"failure_reason": "sanitizer_rejected",
+				"error": normalize_dict(dict_get_or(sanitizer_result, "error", {}))
+			}
+		}
+	}
+
+	return {
+		"ok": true,
+		"output": clone_value(dict_get_or(sanitizer_result, "output", original_output)),
+		"metadata": {
+			"tool_name": tool_name,
+			"sanitizer_applied": true,
+			"sanitizer_failed": false,
+			"failure_reason": ""
+		}
+	}
+}
+
+func approval_decision_view(decision_input) {
+	decision := normalize_dict(decision_input)
+
+	return {
+		"outcome": normalize_string(dict_get_or(decision, "outcome", "allow"), "allow"),
+		"allowed": normalize_bool(dict_get_or(decision, "allowed", false), false),
+		"denied": normalize_bool(dict_get_or(decision, "denied", false), false),
+		"requires_approval": normalize_bool(dict_get_or(decision, "requires_approval", false), false),
+		"mode": normalize_string(dict_get_or(decision, "mode", ""), ""),
+		"reason": normalize_string(dict_get_or(decision, "reason", ""), ""),
+		"tool_name": normalize_string(dict_get_or(decision, "tool_name", ""), "")
+	}
+}
+
+func approval_provider_decision_view(decision_input) {
+	decision := normalize_dict(decision_input)
+
+	return {
+		"decision_id": normalize_string(dict_get_or(decision, "decision_id", ""), ""),
+		"status": normalize_string(dict_get_or(decision, "status", "pending"), "pending"),
+		"approved": normalize_bool(dict_get_or(decision, "approved", false), false),
+		"denied": normalize_bool(dict_get_or(decision, "denied", false), false),
+		"requires_manual_review": normalize_bool(dict_get_or(decision, "requires_manual_review", false), false),
+		"provider_kind": normalize_string(dict_get_or(decision, "provider_kind", ""), ""),
+		"reason": normalize_string(dict_get_or(decision, "reason", ""), "")
+	}
+}
+
+func evaluate_tool_approval_gate(tool_input, context_input, options_input) {
+	tool := normalize_dict(tool_input)
+	context := normalize_dict(context_input)
+	options := normalize_dict(options_input)
+
+	approval_policy := resolve_tool_approval_policy(context, options)
+	if type(approval_policy) != "dict" {
+		return {
+			"ok": true,
+			"status": "approval_not_configured",
+			"approval_decision": {},
+			"approval_provider_decision": {}
+		}
+	}
+
+	approval_request := create_approval_request(tool, context, {
+		"requested_by": "tool_execution"
+	})
+	approval_decision := approval_decision_view(evaluate_approval_policy(approval_policy, approval_request))
+	outcome := normalize_string(dict_get_or(approval_decision, "outcome", "allow"), "allow")
+
+	if outcome == "allow" {
+		return {
+			"ok": true,
+			"status": "approved_by_policy",
+			"approval_decision": approval_decision,
+			"approval_provider_decision": {},
+			"approval_provider": resolve_tool_approval_provider(context, options)
+		}
+	}
+
+	if outcome == "deny" {
+		return {
+			"ok": false,
+			"status": "approval_denied",
+			"approval_decision": approval_decision,
+			"approval_provider_decision": {},
+			"approval_provider": resolve_tool_approval_provider(context, options)
+		}
+	}
+
+	approval_provider := resolve_tool_approval_provider(context, options)
+	if type(approval_provider) != "dict" {
+		return {
+			"ok": false,
+			"status": "approval_required",
+			"approval_decision": approval_decision,
+			"approval_provider_decision": {},
+			"approval_provider": null
+		}
+	}
+
+	provider_request := create_approval_provider_request(approval_request, {
+		"request_id": normalize_string(dict_get_or(options, "approval_request_id", "approval-request"), "approval-request")
+	})
+	provider_resolution := resolve_approval_provider_decision(approval_provider, provider_request)
+	provider_decision := approval_provider_decision_view(dict_get_or(provider_resolution, "decision", {}))
+	provider_status := normalize_string(dict_get_or(provider_decision, "status", "pending"), "pending")
+	updated_provider := dict_get_or(provider_resolution, "provider", approval_provider)
+
+	if provider_status == "approved" {
+		return {
+			"ok": true,
+			"status": "approved_by_provider",
+			"approval_decision": approval_decision,
+			"approval_provider_decision": provider_decision,
+			"approval_provider": updated_provider
+		}
+	}
+
+	if provider_status == "denied" {
+		return {
+			"ok": false,
+			"status": "approval_denied",
+			"approval_decision": approval_decision,
+			"approval_provider_decision": provider_decision,
+			"approval_provider": updated_provider
+		}
+	}
+
+	return {
+		"ok": false,
+		"status": "approval_required",
+		"approval_decision": approval_decision,
+		"approval_provider_decision": provider_decision,
+		"approval_provider": updated_provider
+	}
+}
+
+func execute_tool_impl(tool_input, input_payload, context_input, options_input) {
+	tool := normalize_dict(tool_input)
+	options := normalize_dict(options_input)
+	tool_name := normalize_string(dict_get_or(tool, "name", ""), "")
+
+	input_validation := validate_tool_input_impl(tool, input_payload)
+	if dict_get_or(input_validation, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(input_validation, "error", create_agent_error("tool_input_invalid", "Tool input does not match the declared input schema.", {})),
+			"violations": dict_get_or(input_validation, "violations", [])
+		}
+	}
+
+	tool_context := with_tool_execution_invocation_impl(context_input, tool_name, dict_get_or(input_validation, "normalized_input", {}))
+	approval_gate := evaluate_tool_approval_gate(tool, tool_context, options)
+	if dict_get_or(approval_gate, "ok", false) == false {
+		approval_status := normalize_string(dict_get_or(approval_gate, "status", "approval_required"), "approval_required")
+		approval_decision := normalize_dict(dict_get_or(approval_gate, "approval_decision", {}))
+		approval_provider_decision := normalize_dict(dict_get_or(approval_gate, "approval_provider_decision", {}))
+		error_message := "Approval is required before this tool can execute."
+		if approval_status == "approval_denied" {
+			error_message = "Approval policy denied this tool execution."
+		}
+
+		return {
+			"ok": false,
+			"status": approval_status,
+			"error": create_agent_error(approval_status, error_message, {
+				"tool_name": tool_name,
+				"details": {
+					"approval_decision_outcome": normalize_string(dict_get_or(approval_decision, "outcome", ""), ""),
+					"approval_provider_status": normalize_string(dict_get_or(approval_provider_decision, "status", ""), "")
+				}
+			}),
+			"metadata": {
+				"tool_name": tool_name,
+				"timed_out": false,
+				"approval_decision": approval_decision,
+				"approval_provider_decision": approval_provider_decision
+			}
+		}
+	}
+
+	timeout_ms := resolve_tool_timeout_ms(tool, options)
+	start_ms := current_timestamp()
+
+	pre_elapsed := resolve_tool_elapsed_ms(start_ms, start_ms, options)
+	pre_timeout := validate_tool_timeout_limit(tool_name, timeout_ms, pre_elapsed)
+	if dict_get_or(pre_timeout, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(pre_timeout, "error", create_tool_execution_failed_error(tool_name, "Tool execution timed out.", {})),
+			"metadata": {
+				"tool_name": tool_name,
+				"timeout_ms": timeout_ms,
+				"elapsed_ms": pre_elapsed,
+				"timed_out": true
+			}
+		}
+	}
+
+	handler := dict_get_or(tool, "handler", null)
+	if type(handler) != "function" {
+		return {
+			"ok": false,
+			"error": create_tool_execution_failed_error(tool_name, "Tool handler is not configured.", {
+				"reason": "handler_missing"
+			})
+		}
+	}
+
+	handler_result := handler(dict_get_or(input_validation, "normalized_input", {}), tool_context)
+	finish_ms := current_timestamp()
+	elapsed_ms := resolve_tool_elapsed_ms(start_ms, finish_ms, options)
+
+	post_timeout := validate_tool_timeout_limit(tool_name, timeout_ms, elapsed_ms)
+	if dict_get_or(post_timeout, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(post_timeout, "error", create_tool_execution_failed_error(tool_name, "Tool execution timed out.", {})),
+			"metadata": {
+				"tool_name": tool_name,
+				"timeout_ms": timeout_ms,
+				"elapsed_ms": elapsed_ms,
+				"timed_out": true
+			}
+		}
+	}
+
+	if type(handler_result) != "dict" {
+		return {
+			"ok": false,
+			"error": create_tool_execution_failed_error(tool_name, "Tool handler returned an invalid result payload.", {
+				"reason": "invalid_handler_result_type",
+				"handler_result_type": type(handler_result)
+			}),
+			"metadata": {
+				"tool_name": tool_name,
+				"timeout_ms": timeout_ms,
+				"elapsed_ms": elapsed_ms,
+				"timed_out": false
+			}
+		}
+	}
+
+	handler_ok := normalize_bool(dict_get_or(handler_result, "ok", true), true)
+	if handler_ok == false {
+		handler_error := normalize_dict(dict_get_or(handler_result, "error", {}))
+		handler_message := normalize_string(dict_get_or(handler_error, "message", "Tool execution failed."), "Tool execution failed.")
+		return {
+			"ok": false,
+			"error": create_tool_execution_failed_error(tool_name, handler_message, {
+				"reason": "handler_failed",
+				"handler_error": handler_error
+			}),
+			"metadata": {
+				"tool_name": tool_name,
+				"timeout_ms": timeout_ms,
+				"elapsed_ms": elapsed_ms,
+				"timed_out": false
+			}
+		}
+	}
+
+	raw_output := dict_get_or(handler_result, "output", handler_result)
+	sanitized_output := sanitize_tool_output(tool_name, raw_output, tool_context, options)
+	artifact_emission := emit_tool_handler_artifacts(tool_name, tool_context, options, dict_get_or(handler_result, "artifacts", []))
+
+	return {
+		"ok": true,
+		"output": dict_get_or(sanitized_output, "output", raw_output),
+		"artifacts": normalize_array(dict_get_or(artifact_emission, "artifacts", [])),
+		"metadata": {
+			"tool_name": tool_name,
+			"timeout_ms": timeout_ms,
+			"elapsed_ms": elapsed_ms,
+			"timed_out": false,
+			"approval_decision": dict_get_or(approval_gate, "approval_decision", {}),
+			"approval_provider_decision": dict_get_or(approval_gate, "approval_provider_decision", {}),
+			"sanitizer": normalize_dict(dict_get_or(sanitized_output, "metadata", {})),
+			"artifact_writes": normalize_array(dict_get_or(artifact_emission, "writes", []))
+		}
+	}
+}
+
+func execute_registered_tool_impl(registry_input, tool_name_input, input_payload, context_input, options_input) {
+	resolved := resolve_tool_impl(registry_input, tool_name_input)
+	if dict_get_or(resolved, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(resolved, "error", create_agent_error("tool_not_found", "Tool is not registered in the registry.", {}))
+		}
+	}
+
+	return execute_tool_impl(dict_get_or(resolved, "tool", {}), input_payload, context_input, options_input)
+}
+
+func resolve_tool_input_schema(tool_input) {
+	tool := normalize_dict(tool_input)
+	schema := normalize_dict(dict_get_or(tool, "input_schema", {}))
+
+	allow_unknown_fields := dict_get_or(schema, "allow_unknown_fields", false)
+	if type(allow_unknown_fields) != "bool" {
+		allow_unknown_fields = false
+	}
+
+	return {
+		"required": normalize_array(dict_get_or(schema, "required", [])),
+		"properties": normalize_dict(dict_get_or(schema, "properties", {})),
+		"allow_unknown_fields": allow_unknown_fields
+	}
+}
+
+func collect_missing_required_violations(required_fields_input, payload_input) {
+	required_fields := normalize_array(required_fields_input)
+	payload := normalize_dict(payload_input)
+	violations := []
+
+	index := 0
+	total := len(required_fields)
+	while index < total {
+		field_name := required_fields[index]
+		if type(field_name) == "string" {
+			if key_in_dict(payload, field_name) {
+				// Field is present; no violation.
+			} else {
+				violations = push(violations, {
+					"field": field_name,
+					"code": "missing_required",
+					"message": "Required field is missing."
+				})
+			}
+		}
+		index = index + 1
+	}
+
+	return violations
+}
+
+func collect_unknown_field_violations(payload_input, properties_input, allow_unknown_fields) {
+	payload := normalize_dict(payload_input)
+	properties := normalize_dict(properties_input)
+	violations := []
+
+	if allow_unknown_fields {
+		return violations
+	}
+
+	property_keys := keys(properties)
+	if len(property_keys) == 0 {
+		return violations
+	}
+
+	payload_keys := keys(payload)
+	index := 0
+	total := len(payload_keys)
+	while index < total {
+		field_name := payload_keys[index]
+		if key_in_dict(properties, field_name) {
+			// Field is declared.
+		} else {
+			violations = push(violations, {
+				"field": field_name,
+				"code": "unknown_field",
+				"message": "Field is not declared in input_schema.properties."
+			})
+		}
+		index = index + 1
+	}
+
+	return violations
+}
+
+func merge_violations(left_input, right_input) {
+	merged := clone_array_shallow(left_input)
+	right := normalize_array(right_input)
+
+	index := 0
+	total := len(right)
+	while index < total {
+		merged = push(merged, right[index])
+		index = index + 1
+	}
+
+	return merged
+}
+
+func validate_tool_input_impl(tool_input, input_payload) {
+	tool := normalize_dict(tool_input)
+	normalized_input := normalize_dict(input_payload)
+	schema := resolve_tool_input_schema(tool)
+
+	required_violations := collect_missing_required_violations(dict_get_or(schema, "required", []), normalized_input)
+	unknown_violations := collect_unknown_field_violations(normalized_input, dict_get_or(schema, "properties", {}), dict_get_or(schema, "allow_unknown_fields", false))
+	violations := merge_violations(required_violations, unknown_violations)
+
+	if len(violations) > 0 {
+		return {
+			"ok": false,
+			"violations": violations,
+			"normalized_input": clone_value(normalized_input),
+			"error": create_agent_error("tool_input_invalid", "Tool input does not match the declared input schema.", {
+				"details": {
+					"tool_name": normalize_string(dict_get_or(tool, "name", ""), ""),
+					"violations": violations
+				}
+			})
+		}
+	}
+
+	return {
+		"ok": true,
+		"violations": [],
+		"normalized_input": clone_value(normalized_input)
+	}
+}
+
+func validate_registered_tool_input_impl(registry_input, tool_name_input, input_payload) {
+	resolved := resolve_tool_impl(registry_input, tool_name_input)
+	if dict_get_or(resolved, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(resolved, "error", create_agent_error("tool_not_found", "Tool is not registered in the registry.", {}))
+		}
+	}
+
+	resolved_tool := dict_get_or(resolved, "tool", {})
+	validation := validate_tool_input_impl(resolved_tool, input_payload)
+	if dict_get_or(validation, "ok", false) == false {
+		return {
+			"ok": false,
+			"tool": resolved_tool,
+			"violations": dict_get_or(validation, "violations", []),
+			"error": dict_get_or(validation, "error", create_agent_error("tool_input_invalid", "Tool input does not match the declared input schema.", {}))
+		}
+	}
+
+	return {
+		"ok": true,
+		"tool": resolved_tool,
+		"normalized_input": dict_get_or(validation, "normalized_input", {})
+	}
+}
+
+func find_tool_index(tools_input, tool_name_input) {
+	tools := normalize_array(tools_input)
+	tool_name := normalize_string(tool_name_input, "")
+
+	index := 0
+	for tool in tools {
+		if normalize_string(dict_get_or(normalize_dict(tool), "name", ""), "") == tool_name {
+			return index
+		}
+		index = index + 1
+	}
+
+	return -1
+}
+
+func register_tool_impl(registry_input, tool_input) {
+	registry := normalize_registry(registry_input)
+	created := create_tool_impl(tool_input)
+	if dict_get_or(created, "ok", false) == false {
+		return {
+			"ok": false,
+			"registry": registry,
+			"error": dict_get_or(created, "error", create_agent_error("tool_input_invalid", "Tool contract is invalid.", {}))
+		}
+	}
+
+	tool := dict_get_or(created, "tool", {})
+	tool_name := normalize_string(dict_get_or(tool, "name", ""), "")
+	tools := clone_array_shallow(dict_get_or(registry, "tools", []))
+
+	if find_tool_index(tools, tool_name) >= 0 {
+		return {
+			"ok": false,
+			"registry": registry,
+			"error": create_agent_error("tool_input_invalid", "Tool with this name is already registered.", {
+				"code": "tool_duplicate_name",
+				"details": {
+					"tool_name": tool_name
+				}
+			})
+		}
+	}
+
+	tools = push(tools, tool)
+
+	updated_registry := {
+		"type": "ToolRegistry",
+		"tools": tools,
+		"metadata": {}
+	}
+
+	return {
+		"ok": true,
+		"registry": updated_registry,
+		"tool": {
+			"id": normalize_string(dict_get_or(tool, "id", ""), ""),
+			"name": tool_name,
+			"risk": normalize_risk(dict_get_or(tool, "risk", "medium"))
+		}
+	}
+}
+
+func resolve_tool_impl(registry_input, tool_name_input) {
+	registry := normalize_registry(registry_input)
+	tool_name := normalize_string(tool_name_input, "")
+	tools := normalize_array(dict_get_or(registry, "tools", []))
+
+	if tool_name == "" {
+		return {
+			"ok": false,
+			"error": create_agent_error("tool_not_found", "Tool is not registered in the registry.", {
+				"details": {
+					"tool_name": tool_name
+				}
+			})
+		}
+	}
+
+	index := find_tool_index(tools, tool_name)
+	if index >= 0 {
+		return {
+			"ok": true,
+			"tool": build_tool_contract_view(tools[index], true)
+		}
+	}
+
+	return {
+		"ok": false,
+		"error": create_agent_error("tool_not_found", "Tool is not registered in the registry.", {
+			"details": {
+				"tool_name": tool_name
+			}
+		})
+	}
+}
+
+func list_tools_impl(registry_input) {
+	registry := normalize_registry(registry_input)
+	tools := normalize_array(dict_get_or(registry, "tools", []))
+
+	metadata_list := []
+	for tool in tools {
+		metadata_list = push(metadata_list, tool_metadata_view(tool))
+	}
+
+	return metadata_list
+}
+
+func get_tool_metadata_impl(registry_input, tool_name_input) {
+	resolved := resolve_tool_impl(registry_input, tool_name_input)
+	if dict_get_or(resolved, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(resolved, "error", create_agent_error("tool_not_found", "Tool is not registered in the registry.", {}))
+		}
+	}
+
+	return {
+		"ok": true,
+		"metadata": tool_metadata_view(dict_get_or(resolved, "tool", {}))
+	}
+}
+
+func describe_tools_registry_module_impl() {
+	return {
+		"module": "agents.tools.registry",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_tool",
+			"validate_tool_contract",
+			"validate_tool_input",
+			"create_tool_registry",
+			"create_tool_execution_context",
+			"with_tool_execution_invocation",
+			"execute_tool",
+			"execute_registered_tool",
+			"register_tool",
+			"resolve_tool",
+			"resolve_registry_tool",
+			"list_tools",
+			"list_registered_tools",
+			"get_tool_metadata",
+			"validate_registered_tool_input",
+			"get_registered_tool_metadata"
+		]
+	}
+}
+
+export create_tool := create_tool_impl
+export validate_tool_contract := validate_tool_contract
+export validate_tool_input := validate_tool_input_impl
+export create_tool_registry := create_tool_registry_impl
+export create_tool_execution_context := create_tool_execution_context_impl
+export with_tool_execution_invocation := with_tool_execution_invocation_impl
+export execute_tool := execute_tool_impl
+export execute_registered_tool := execute_registered_tool_impl
+export register_tool := register_tool_impl
+export resolve_tool := resolve_tool_impl
+export resolve_registry_tool := resolve_tool_impl
+export list_tools := list_tools_impl
+export list_registered_tools := list_tools_impl
+export get_tool_metadata := get_tool_metadata_impl
+export validate_registered_tool_input := validate_registered_tool_input_impl
+export get_registered_tool_metadata := get_tool_metadata_impl
+export describe_tools_registry_module := describe_tools_registry_module_impl

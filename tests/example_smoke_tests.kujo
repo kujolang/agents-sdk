@@ -1,0 +1,65 @@
+test_setup {
+	from examples.hello_agent import run_hello_agent_example
+	from examples.tool_agent import run_tool_agent_example
+	from examples.approval_agent import run_approval_agent_example
+	from examples.retrieval_agent import run_retrieval_agent_example
+	from examples.handoff_agent import run_handoff_agent_example
+	from examples.traced_agent import run_traced_agent_example
+	from examples.artifact_agent import run_artifact_agent_example
+}
+
+test "hello agent example smoke passes offline" {
+	result := run_hello_agent_example()
+	assert_equal(result["ok"], true)
+	assert_equal(result["requires_network"], false)
+	assert_equal(result["result"]["status"], "completed")
+}
+
+test "tool agent example smoke passes offline" {
+	result := run_tool_agent_example()
+	assert_equal(result["ok"], true)
+	assert_equal(result["requires_network"], false)
+	assert_equal(result["result"]["status"], "completed")
+	assert_equal(len(result["result"]["metadata"]["tool_calls"]) >= 1, true)
+}
+
+test "approval agent example smoke passes offline" {
+	result := run_approval_agent_example()
+	assert_equal(result["ok"], true)
+	assert_equal(result["requires_network"], false)
+	assert_equal(result["result"]["status"], "failed")
+	assert_equal(result["result"]["error"]["kind"], "approval_denied")
+}
+
+test "retrieval agent example smoke passes offline" {
+	result := run_retrieval_agent_example()
+	assert_equal(result["ok"], true)
+	assert_equal(result["requires_network"], false)
+	assert_equal(result["result"]["status"], "completed")
+	assert_equal(result["result"]["metadata"]["retrieval"]["applied"], true)
+}
+
+test "handoff agent example smoke passes offline" {
+	result := run_handoff_agent_example()
+	assert_equal(result["ok"], true)
+	assert_equal(result["requires_network"], false)
+	assert_equal(result["result"]["status"], "completed")
+	assert_equal(result["result"]["metadata"]["handoff"]["executed"], true)
+}
+
+test "traced agent example smoke passes offline" {
+	result := run_traced_agent_example()
+	assert_equal(result["ok"], true)
+	assert_equal(result["requires_network"], false)
+	assert_equal(result["result"]["status"], "completed")
+	assert_equal(result["trace_append"]["ok"], true)
+	assert_equal(len(result["trace_list"]["traces"]) >= 1, true)
+}
+
+test "artifact agent example smoke passes offline" {
+	result := run_artifact_agent_example()
+	assert_equal(result["ok"], true)
+	assert_equal(result["requires_network"], false)
+	assert_equal(result["result"]["status"], "completed")
+	assert_equal(len(result["result"]["artifacts"]) >= 1, true)
+}

@@ -1,0 +1,80 @@
+test_setup {
+	from src.agents.events import event_kind_values, required_event_fields
+	from src.agents.events import create_event_id, create_agent_event, create_lifecycle_event, validate_event_shape
+}
+
+test "event kind registry includes lifecycle baseline kinds" {
+	kinds := event_kind_values()
+	kind_map := {}
+	for kind in kinds {
+		kind_map[kind] := true
+	}
+
+	assert_true(len(kinds) >= 20)
+	assert_equal(has_key(kind_map, "run_started"), 1)
+	assert_equal(has_key(kind_map, "model_request_completed"), 1)
+	assert_equal(has_key(kind_map, "tool_call_failed"), 1)
+	assert_equal(has_key(kind_map, "guardrail_blocked"), 1)
+	assert_equal(has_key(kind_map, "artifact_created"), 1)
+}
+
+test "required event fields list is stable" {
+	fields := required_event_fields()
+	field_map := {}
+	for field_name in fields {
+		field_map[field_name] := true
+	}
+
+	assert_equal(has_key(field_map, "kind"), 1)
+	assert_equal(has_key(field_map, "run_id"), 1)
+	assert_equal(has_key(field_map, "event_id"), 1)
+	assert_equal(has_key(field_map, "timestamp"), 1)
+	assert_equal(has_key(field_map, "payload"), 1)
+}
+
+test "create_agent_event returns required deterministic shape" {
+	event_payload := create_agent_event("tool_call_requested", {"tool_name": "search_docs"}, {
+		"event_id": "evt-100",
+		"timestamp": "2026-05-22 10:00:00",
+		"run_id": "run-55",
+		"agent_id": "planner",
+		"session_id": "session-7",
+		"step_id": "step-2",
+		"parent_event_id": "evt-99",
+		"metadata": {"risk": "low"}
+	})
+
+	assert_equal(event_payload["type"], "AgentEvent")
+	assert_equal(event_payload["kind"], "tool_call_requested")
+	assert_equal(event_payload["event_id"], "evt-100")
+	assert_equal(event_payload["timestamp"], "2026-05-22 10:00:00")
+	assert_equal(event_payload["run_id"], "run-55")
+	assert_equal(event_payload["payload"]["tool_name"], "search_docs")
+	assert_equal(event_payload["metadata"]["risk"], "low")
+
+	validation := validate_event_shape(event_payload)
+	assert_true(validation["ok"])
+}
+
+test "invalid kind is normalized to run_failed with requested kind payload" {
+	event_payload := create_agent_event("invalid_event_kind", {"phase": "model"}, {
+		"event_id": "evt-invalid",
+		"run_id": "run-1"
+	})
+
+	assert_equal(event_payload["kind"], "run_failed")
+	assert_equal(event_payload["payload"]["requested_kind"], "invalid_event_kind")
+}
+
+test "lifecycle helper creates ready-to-validate event" {
+	event_payload := create_lifecycle_event("run_started", "run-abc", "agent-x", "session-z", "step-1", {
+		"input": "hello"
+	})
+	validation := validate_event_shape(event_payload)
+	assert_true(validation["ok"])
+}
+
+test "event id helper supports deterministic prefix and seed" {
+	event_id := create_event_id({"prefix": "trace", "seed": "42"})
+	assert_equal(event_id, "trace-42")
+}

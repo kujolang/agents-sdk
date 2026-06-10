@@ -1,0 +1,379 @@
+func dict_get_or(obj, key, default_value) {
+	source := unwrap_dict(obj)
+	if type(source) != "dict" {
+		return default_value
+	}
+
+	for existing_key in keys(source) {
+		if existing_key == key {
+			return source[existing_key]
+		}
+	}
+
+	return default_value
+}
+
+func unwrap_dict(value) {
+	if type(value) != "dict" {
+		return value
+	}
+
+	if has_key(value, "_self") {
+		inner := value["_self"]
+		if type(inner) == "dict" {
+			return inner
+		}
+	}
+
+	return value
+}
+
+func normalize_dict(value) {
+	unwrapped := unwrap_dict(value)
+	if type(unwrapped) == "dict" {
+		return unwrapped
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+
+	if type(value) == "dict" {
+		if has_key(value, "_self") == 1 {
+			inner := value["_self"]
+			if type(inner) == "array" {
+				return inner
+			}
+		}
+	}
+
+	return []
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func normalize_bool(value, fallback) {
+	if type(value) == "bool" {
+		return value
+	}
+	return fallback
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned := {}
+		for key in keys(source) {
+			cloned[key] := clone_value(source[key])
+		}
+		return cloned
+	}
+
+	if type(value) == "array" {
+		cloned := []
+		for item in value {
+			cloned = push(cloned, clone_value(item))
+		}
+		return cloned
+	}
+
+	return value
+}
+
+func direct_option_value(options_input, expected_key, default_value) {
+	options_map := unwrap_dict(options_input)
+	if type(options_map) != "dict" {
+		return default_value
+	}
+
+	for key in keys(options_map) {
+		if key == expected_key {
+			return options_map[key]
+		}
+	}
+
+	return default_value
+}
+
+func create_retrieval_query_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "RetrievalQuery",
+		"query_text": normalize_string(dict_get_or(options_map, "query_text", dict_get_or(options_map, "text", "")), ""),
+		"top_k": normalize_non_negative_int(dict_get_or(options_map, "top_k", 5), 5),
+		"scope": normalize_dict(dict_get_or(options_map, "scope", {})),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_retrieved_document_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "RetrievedDocument",
+		"document_id": normalize_string(dict_get_or(options_map, "document_id", "doc-default"), "doc-default"),
+		"title": normalize_string(dict_get_or(options_map, "title", ""), ""),
+		"content": normalize_string(dict_get_or(options_map, "content", ""), ""),
+		"score": dict_get_or(options_map, "score", 0),
+		"source": normalize_string(dict_get_or(options_map, "source", ""), ""),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_retrieval_citation_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "RetrievalCitation",
+		"citation_id": normalize_string(dict_get_or(options_map, "citation_id", "citation-default"), "citation-default"),
+		"document_id": normalize_string(dict_get_or(options_map, "document_id", ""), ""),
+		"span": normalize_string(dict_get_or(options_map, "span", ""), ""),
+		"score": dict_get_or(options_map, "score", 0),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_retrieved_context_impl(options) {
+	options_map := normalize_dict(options)
+	documents_input := normalize_array(direct_option_value(options_map, "documents", []))
+	documents := []
+	for document in documents_input {
+		documents = push(documents, create_retrieved_document_impl(document))
+	}
+
+	citations_input := normalize_array(direct_option_value(options_map, "citations", []))
+	citations := []
+	for citation in citations_input {
+		citations = push(citations, create_retrieval_citation_impl(citation))
+	}
+
+	return {
+		"type": "RetrievedContext",
+		"context_id": normalize_string(direct_option_value(options_map, "context_id", "ctx-default"), "ctx-default"),
+		"documents": documents,
+		"summary": normalize_string(direct_option_value(options_map, "summary", ""), ""),
+		"citations": citations,
+		"metadata": clone_value(direct_option_value(options_map, "metadata", {}))
+	}
+}
+
+func create_retrieval_policy_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "RetrievalPolicy",
+		"enabled": normalize_bool(dict_get_or(options_map, "enabled", true), true),
+		"max_documents": normalize_non_negative_int(dict_get_or(options_map, "max_documents", 5), 5),
+		"min_score": dict_get_or(options_map, "min_score", 0),
+		"include_citations": normalize_bool(dict_get_or(options_map, "include_citations", true), true),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_retrieval_result_impl(options) {
+	options_map := normalize_dict(options)
+	query := create_retrieval_query_impl(direct_option_value(options_map, "query", {}))
+	context := create_retrieved_context_impl(direct_option_value(options_map, "context", {}))
+	documents := normalize_array(dict_get_or(context, "documents", []))
+	citations := normalize_array(dict_get_or(context, "citations", []))
+
+	return {
+		"type": "RetrievalResult",
+		"ok": normalize_bool(direct_option_value(options_map, "ok", true), true),
+		"query": query,
+		"context": context,
+		"documents": clone_value(documents),
+		"citations": clone_value(citations),
+		"count": normalize_non_negative_int(direct_option_value(options_map, "count", len(documents)), len(documents)),
+		"metadata": clone_value(direct_option_value(options_map, "metadata", {}))
+	}
+}
+
+func create_retrieval_provider_interface_impl(options) {
+	options_map := normalize_dict(options)
+
+	return {
+		"type": "RetrievalProvider",
+		"name": normalize_string(dict_get_or(options_map, "name", "RetrievalProvider"), "RetrievalProvider"),
+		"retrieve_fn": dict_get_or(options_map, "retrieve_fn", null),
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func create_mock_retrieval_response_impl(response_input, query_text_input) {
+	response_map := normalize_dict(response_input)
+	context_map := normalize_dict(dict_get_or(response_map, "context", {}))
+
+	documents_input := dict_get_or(context_map, "documents", dict_get_or(response_map, "documents", []))
+	citations_input := dict_get_or(context_map, "citations", dict_get_or(response_map, "citations", []))
+	summary_text := normalize_string(dict_get_or(context_map, "summary", dict_get_or(response_map, "summary", "")), "")
+	query_text := normalize_string(query_text_input, "")
+
+	context_payload := {
+		"context_id": normalize_string(dict_get_or(context_map, "context_id", "ctx-mock-" + query_text), "ctx-mock-" + query_text),
+		"documents": normalize_array(documents_input),
+		"summary": summary_text,
+		"citations": normalize_array(citations_input),
+		"metadata": clone_value(dict_get_or(context_map, "metadata", {}))
+	}
+	context := create_retrieved_context_impl(context_payload)
+	documents := normalize_array(dict_get_or(context, "documents", []))
+	citations := normalize_array(dict_get_or(context, "citations", []))
+
+	return {
+		"ok": normalize_bool(dict_get_or(response_map, "ok", true), true),
+		"context": context,
+		"documents": documents,
+		"citations": citations,
+		"summary": normalize_string(dict_get_or(context, "summary", summary_text), summary_text),
+		"count": normalize_non_negative_int(dict_get_or(response_map, "count", len(documents)), len(documents)),
+		"metadata": clone_value(dict_get_or(response_map, "metadata", {}))
+	}
+}
+
+func create_mock_retrieval_provider_impl(options) {
+	options_map := normalize_dict(options)
+	responses_map := normalize_dict(dict_get_or(options_map, "responses", {}))
+	default_response := normalize_dict(dict_get_or(options_map, "default_response", {}))
+	provider_name := normalize_string(dict_get_or(options_map, "name", "MockRetrievalProvider"), "MockRetrievalProvider")
+
+	retrieve_fn := func(provider, query, retrieve_options) {
+		query_text := normalize_string(dict_get_or(query, "query_text", ""), "")
+		seeded_response := dict_get_or(responses_map, query_text, dict_get_or(responses_map, "*", null))
+		if type(seeded_response) != "dict" {
+			seeded_response = default_response
+		}
+
+		if type(seeded_response) == "dict" {
+			resolved := create_mock_retrieval_response_impl(seeded_response, query_text)
+			resolved_metadata := normalize_dict(dict_get_or(resolved, "metadata", {}))
+			resolved_metadata["provider_kind"] := "mock"
+			resolved_metadata["query_text"] := query_text
+			resolved["metadata"] := resolved_metadata
+			return resolved
+		}
+
+		empty_response := create_mock_retrieval_response_impl({}, query_text)
+		empty_metadata := normalize_dict(dict_get_or(empty_response, "metadata", {}))
+		empty_metadata["provider_kind"] := "mock"
+		empty_metadata["query_text"] := query_text
+		empty_response["metadata"] := empty_metadata
+		return empty_response
+	}
+
+	return create_retrieval_provider_interface_impl({
+		"name": provider_name,
+		"retrieve_fn": retrieve_fn,
+		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+	})
+}
+
+func ensure_retrieval_provider_impl(provider_input) {
+	provider := normalize_dict(provider_input)
+	if normalize_string(dict_get_or(provider, "type", ""), "") == "RetrievalProvider" {
+		return provider
+	}
+
+	return create_retrieval_provider_interface_impl({})
+}
+
+func not_implemented_result(operation_name) {
+	return {
+		"ok": false,
+		"error": {
+			"kind": "not_implemented",
+			"message": "Retrieval provider operation is not implemented.",
+			"details": {
+				"operation": normalize_string(operation_name, "unknown")
+			}
+		}
+	}
+}
+
+func retrieval_provider_retrieve_impl(provider_input, query_input, options) {
+	provider := ensure_retrieval_provider_impl(provider_input)
+	retrieve_fn := dict_get_or(provider, "retrieve_fn", null)
+	if type(retrieve_fn) != "function" {
+		return not_implemented_result("retrieve")
+	}
+
+	query := create_retrieval_query_impl(query_input)
+	result := retrieve_fn(provider, query, normalize_dict(options))
+
+	if type(result) != "dict" {
+		return create_retrieval_result_impl({
+			"ok": false,
+			"query": query,
+			"context": {},
+			"count": 0,
+			"metadata": {
+				"error": "invalid_result"
+			}
+		})
+	}
+
+	result_map := normalize_dict(result)
+	context_map := direct_option_value(result_map, "context", {
+		"documents": direct_option_value(result_map, "documents", []),
+		"citations": direct_option_value(result_map, "citations", [])
+	})
+
+	return create_retrieval_result_impl({
+		"ok": direct_option_value(result_map, "ok", true),
+		"query": query,
+		"context": context_map,
+		"count": direct_option_value(result_map, "count", len(direct_option_value(context_map, "documents", []))),
+		"metadata": direct_option_value(result_map, "metadata", {})
+	})
+}
+
+func describe_retrieval_provider_module_impl() {
+	return {
+		"module": "agents.retrieval.provider",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_retrieval_query",
+			"create_retrieved_document",
+			"create_retrieval_citation",
+			"create_retrieved_context",
+			"create_retrieval_policy",
+			"create_retrieval_result",
+			"create_retrieval_provider_interface",
+			"create_mock_retrieval_provider",
+			"retrieval_provider_retrieve"
+		]
+	}
+}
+
+export create_retrieval_query := create_retrieval_query_impl
+export create_retrieved_document := create_retrieved_document_impl
+export create_retrieval_citation := create_retrieval_citation_impl
+export create_retrieved_context := create_retrieved_context_impl
+export create_retrieval_policy := create_retrieval_policy_impl
+export create_retrieval_result := create_retrieval_result_impl
+export create_retrieval_provider_interface := create_retrieval_provider_interface_impl
+export create_mock_retrieval_provider := create_mock_retrieval_provider_impl
+export retrieval_provider_retrieve := retrieval_provider_retrieve_impl
+export describe_retrieval_provider_module := describe_retrieval_provider_module_impl

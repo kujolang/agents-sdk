@@ -1,0 +1,73 @@
+test_setup {
+	from src.agents.core_types import default_agent_config, create_agent_config, validate_agent_config
+	from src.agents.core_types import create_agent_message, create_agent_step, create_agent_run_request, create_agent_context, create_agent_run_result
+	from src.agents.core_types import agent_message_role_values, agent_step_kind_values, agent_run_status_values
+}
+
+test "default agent config exposes stable baseline fields" {
+	defaults := default_agent_config()
+	assert_equal(defaults["id"], "agent-default")
+	assert_equal(defaults["name"], "Default Agent")
+	assert_equal(defaults["max_iterations"], 8)
+	assert_equal(defaults["timeout_ms"], 120000)
+	assert_equal(type(defaults["tools"]), "array")
+	assert_equal(type(defaults["metadata"]), "dict")
+}
+
+test "create_agent_config normalizes overrides and keeps defaults" {
+	config := create_agent_config({
+		"id": "writer",
+		"name": "Writer Agent",
+		"max_iterations": 14,
+		"timeout_ms": 45000,
+		"role": "assistant",
+		"tools": [{"name": "search_docs"}],
+		"metadata": {"team": "sdk"}
+	})
+
+	assert_equal(config["id"], "writer")
+	assert_equal(config["name"], "Writer Agent")
+	assert_equal(config["max_iterations"], 14)
+	assert_equal(config["timeout_ms"], 45000)
+	assert_equal(config["role"], "assistant")
+	assert_equal(len(config["tools"]), 1)
+	assert_equal(config["metadata"]["team"], "sdk")
+}
+
+test "validate_agent_config rejects missing required fields and invalid limits" {
+	validation := validate_agent_config({
+		"id": "",
+		"name": "",
+		"max_iterations": 0,
+		"timeout_ms": -1,
+		"role": "unknown"
+	})
+
+	assert_false(validation["ok"])
+	assert_true(len(validation["errors"]) >= 4)
+}
+
+test "message step request context and result constructors produce stable contracts" {
+	message := create_agent_message("assistant", "Hello", {"token_count": 2})
+	step := create_agent_step("tool_call", "call search", {"tool": "search_docs"}, {})
+	request := create_agent_run_request("Find release notes", {"run_id": "run-123", "session_id": "session-123", "stream": true})
+	context := create_agent_context({"id": "writer", "name": "Writer Agent"}, request, {"mode": "test"})
+	result := create_agent_run_result("completed", {"text": "done"}, {"steps": [step], "metadata": {"source": "test"}})
+
+	assert_equal(message["type"], "AgentMessage")
+	assert_equal(step["type"], "AgentStep")
+	assert_equal(request["type"], "AgentRunRequest")
+	assert_equal(context["type"], "AgentContext")
+	assert_equal(result["type"], "AgentRunResult")
+	assert_equal(result["status"], "completed")
+}
+
+test "core enum helpers provide expected values" {
+	roles := agent_message_role_values()
+	step_kinds := agent_step_kind_values()
+	statuses := agent_run_status_values()
+
+	assert_equal(roles[0], "system")
+	assert_true(len(step_kinds) >= 5)
+	assert_true(len(statuses) >= 5)
+}

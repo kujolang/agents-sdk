@@ -1,0 +1,543 @@
+test_setup {
+	from src.agents.security.approval import approval_policy_mode_values
+	from src.agents.security.approval import create_approval_policy, create_approval_request
+	from src.agents.security.approval import evaluate_approval_policy
+	from src.agents.security.approval import approval_provider_kind_values, approval_provider_status_values
+	from src.agents.security.approval import create_auto_approval_provider, create_deny_all_approval_provider
+	from src.agents.security.approval import create_manual_stub_approval_provider, create_approval_provider_request
+	from src.agents.security.approval import resolve_approval_provider_decision
+	from src.agents.security.approval import guardrail_stage_values, guardrail_action_values
+	from src.agents.security.approval import create_guardrail_rule, create_guardrail_policy, create_guardrail_context
+	from src.agents.security.approval import evaluate_guardrail_rule, evaluate_guardrails
+	from src.agents.security.approval import create_builtin_guardrails, create_minimal_guardrail_policy
+	from src.agents.security.approval import create_redaction_policy, redact_event_payload, redact_trace_payload, redact_tool_io
+	from src.agents.security.approval import memory_scope_kind_values, memory_data_class_values
+	from src.agents.security.approval import create_memory_write_policy, create_memory_write_request
+	from src.agents.security.approval import evaluate_memory_write_policy
+	from src.agents.runtime.clock_ids import create_fixed_runtime_services
+}
+
+test "approval policy mode registry exposes required modes" {
+	modes := approval_policy_mode_values()
+	assert_equal(len(modes), 5)
+	assert_equal(modes[0], "always_allow")
+	assert_equal(modes[1], "always_deny")
+	assert_equal(modes[2], "write_tool")
+	assert_equal(modes[3], "high_risk")
+	assert_equal(modes[4], "permission_based")
+}
+
+test "always-allow and always-deny policies produce deterministic outcomes" {
+	request := create_approval_request({
+		"name": "echo",
+		"risk": "low",
+		"permissions": ["read"]
+	}, {
+		"run_id": "run-approval-1"
+	}, {})
+
+	allow_policy := create_approval_policy({
+		"mode": "always_allow"
+	})
+	allow_decision := evaluate_approval_policy(allow_policy, request)
+	assert_equal(allow_decision["outcome"], "allow")
+	assert_equal(allow_decision["allowed"], true)
+	assert_equal(allow_decision["requires_approval"], false)
+
+	deny_policy := create_approval_policy({
+		"mode": "always_deny",
+		"deny_reason": "Denied for testing"
+	})
+	deny_decision := evaluate_approval_policy(deny_policy, request)
+	assert_equal(deny_decision["outcome"], "deny")
+	assert_equal(deny_decision["allowed"], false)
+	assert_equal(deny_decision["reason"], "Denied for testing")
+}
+
+test "write_tool mode requires approval for write-like permissions" {
+	policy := create_approval_policy({
+		"mode": "write_tool"
+	})
+
+	read_request := create_approval_request({
+		"name": "reader",
+		"permissions": ["read"]
+	}, {}, {})
+	read_decision := evaluate_approval_policy(policy, read_request)
+	assert_equal(read_decision["outcome"], "allow")
+
+	write_request := create_approval_request({
+		"name": "writer",
+		"permissions": ["read", "write"]
+	}, {}, {})
+	write_decision := evaluate_approval_policy(policy, write_request)
+	assert_equal(write_decision["outcome"], "require_approval")
+	assert_equal(write_decision["requires_approval"], true)
+}
+
+test "high-risk and permission-based modes trigger approvals as expected" {
+	high_risk_policy := create_approval_policy({
+		"mode": "high_risk"
+	})
+	high_risk_request := create_approval_request({
+		"name": "network_tool",
+		"risk": "high",
+		"permissions": ["read"]
+	}, {}, {})
+	high_risk_decision := evaluate_approval_policy(high_risk_policy, high_risk_request)
+	assert_equal(high_risk_decision["outcome"], "require_approval")
+
+	permission_policy := create_approval_policy({
+		"mode": "permission_based",
+		"required_permissions": ["filesystem_write"]
+	})
+	permission_request := create_approval_request({
+		"name": "fs_tool",
+		"permissions": ["filesystem_write"]
+	}, {}, {})
+	permission_decision := evaluate_approval_policy(permission_policy, permission_request)
+	assert_equal(permission_decision["outcome"], "require_approval")
+
+	safe_request := create_approval_request({
+		"name": "safe_tool",
+		"permissions": ["read"]
+	}, {}, {})
+	safe_decision := evaluate_approval_policy(permission_policy, safe_request)
+	assert_equal(safe_decision["outcome"], "allow")
+}
+
+test "approval provider registries include required kind and status values" {
+	kinds := approval_provider_kind_values()
+	statuses := approval_provider_status_values()
+
+	assert_equal(len(kinds), 3)
+	assert_equal(kinds[0], "auto")
+	assert_equal(kinds[1], "deny_all")
+	assert_equal(kinds[2], "manual_stub")
+
+	assert_equal(len(statuses), 3)
+	assert_equal(statuses[0], "approved")
+	assert_equal(statuses[1], "denied")
+	assert_equal(statuses[2], "pending")
+}
+
+test "approval providers resolve approved denied and pending paths" {
+	runtime_services := create_fixed_runtime_services(0, "2026-05-22 00:00:00", 1)
+	approval_request := create_approval_request({
+		"name": "db_tool",
+		"risk": "high",
+		"permissions": ["write"]
+	}, {
+		"run_id": "run-sec-2"
+	}, {})
+	provider_request := create_approval_provider_request(approval_request, {
+		"request_id": "approval-request-1"
+	})
+
+	auto_result := resolve_approval_provider_decision(create_auto_approval_provider({
+		"runtime_services": runtime_services
+	}), provider_request)
+	auto_decision := auto_result["decision"]
+	assert_equal(auto_decision["status"], "approved")
+	assert_equal(auto_decision["decision_id"], "apd-1")
+
+	deny_result := resolve_approval_provider_decision(create_deny_all_approval_provider({
+		"runtime_services": runtime_services
+	}), provider_request)
+	deny_decision := deny_result["decision"]
+	assert_equal(deny_decision["status"], "denied")
+	assert_equal(deny_decision["decision_id"], "apd-1")
+
+	manual_result := resolve_approval_provider_decision(create_manual_stub_approval_provider({
+		"runtime_services": runtime_services
+	}), provider_request)
+	manual_decision := manual_result["decision"]
+	assert_equal(manual_decision["status"], "pending")
+	assert_equal(manual_decision["requires_manual_review"], true)
+	assert_equal(manual_decision["approved"], false)
+}
+
+test "guardrail stage and action registries expose required values" {
+	stages := guardrail_stage_values()
+	actions := guardrail_action_values()
+
+	assert_equal(len(stages), 5)
+	assert_equal(stages[0], "before_model")
+	assert_equal(stages[1], "after_model")
+	assert_equal(stages[2], "before_tool")
+	assert_equal(stages[3], "after_tool")
+	assert_equal(stages[4], "before_final_output")
+
+	assert_equal(len(actions), 3)
+	assert_equal(actions[0], "pass")
+	assert_equal(actions[1], "warn")
+	assert_equal(actions[2], "block")
+}
+
+test "guardrail rule returns pass when stage does not apply" {
+	rule := create_guardrail_rule({
+		"rule_id": "gr-stage-mismatch",
+		"stage": "before_model",
+		"on_match": "block",
+		"matcher_fn": func(context, rule_map) {
+			return true
+		}
+	})
+
+	context := create_guardrail_context("after_model", {
+		"input": "safe"
+	}, {})
+
+	result := evaluate_guardrail_rule(rule, context)
+	assert_equal(result["action"], "pass")
+	assert_equal(result["blocked"], false)
+}
+
+test "guardrail rule supports warn and block actions" {
+	warn_rule := create_guardrail_rule({
+		"rule_id": "gr-warn",
+		"stage": "before_tool",
+		"on_match": "warn",
+		"matcher_fn": func(context, rule_map) {
+			return true
+		}
+	})
+
+	block_rule := create_guardrail_rule({
+		"rule_id": "gr-block",
+		"stage": "before_tool",
+		"on_match": "block",
+		"matcher_fn": func(context, rule_map) {
+			return {
+				"matched": true,
+				"reason": "Blocking condition matched."
+			}
+		}
+	})
+
+	context := create_guardrail_context("before_tool", {
+		"tool_name": "unsafe_tool"
+	}, {
+		"tool_name": "unsafe_tool"
+	})
+
+	warn_result := evaluate_guardrail_rule(warn_rule, context)
+	assert_equal(warn_result["action"], "warn")
+	assert_equal(warn_result["warned"], true)
+
+	block_result := evaluate_guardrail_rule(block_rule, context)
+	assert_equal(block_result["action"], "block")
+	assert_equal(block_result["blocked"], true)
+	assert_equal(block_result["reason"], "Blocking condition matched.")
+}
+
+test "guardrail evaluation handles each stage and aggregates highest action" {
+	policy := create_guardrail_policy({
+		"default_action": "pass",
+		"rules": [
+			{
+				"rule_id": "gr-before-model",
+				"stage": "before_model",
+				"on_match": "warn",
+				"matcher_fn": func(context, rule_map) {
+					return true
+				}
+			},
+			{
+				"rule_id": "gr-after-model",
+				"stage": "after_model",
+				"on_match": "warn",
+				"matcher_fn": func(context, rule_map) {
+					return true
+				}
+			},
+			{
+				"rule_id": "gr-before-tool",
+				"stage": "before_tool",
+				"on_match": "warn",
+				"matcher_fn": func(context, rule_map) {
+					return true
+				}
+			},
+			{
+				"rule_id": "gr-after-tool",
+				"stage": "after_tool",
+				"on_match": "warn",
+				"matcher_fn": func(context, rule_map) {
+					return true
+				}
+			},
+			{
+				"rule_id": "gr-before-final",
+				"stage": "before_final_output",
+				"on_match": "block",
+				"matcher_fn": func(context, rule_map) {
+					return true
+				}
+			}
+		]
+	})
+
+	before_model_eval := evaluate_guardrails(policy, {
+		"stage": "before_model",
+		"payload": {
+			"text": "hello"
+		}
+	})
+	assert_equal(before_model_eval["action"], "warn")
+
+	after_model_eval := evaluate_guardrails(policy, {
+		"stage": "after_model",
+		"payload": {
+			"output": "hello"
+		}
+	})
+	assert_equal(after_model_eval["action"], "warn")
+
+	before_tool_eval := evaluate_guardrails(policy, {
+		"stage": "before_tool",
+		"payload": {
+			"tool": "safe_tool"
+		}
+	})
+	assert_equal(before_tool_eval["action"], "warn")
+
+	after_tool_eval := evaluate_guardrails(policy, {
+		"stage": "after_tool",
+		"payload": {
+			"tool_result": "ok"
+		}
+	})
+	assert_equal(after_tool_eval["action"], "warn")
+
+	before_final_eval := evaluate_guardrails(policy, {
+		"stage": "before_final_output",
+		"payload": {
+			"final_text": "unsafe"
+		}
+	})
+	assert_equal(before_final_eval["action"], "block")
+	assert_equal(before_final_eval["blocked"], true)
+}
+
+test "built-in minimal guardrails return pass for safe payloads" {
+	builtins := create_builtin_guardrails({
+		"max_input_chars": 30,
+		"blocked_terms": ["forbidden"],
+		"blocked_risk_levels": ["critical"],
+		"max_output_chars": 20,
+		"final_output_action": "warn"
+	})
+	assert_equal(len(builtins), 4)
+
+	policy := create_minimal_guardrail_policy({
+		"max_input_chars": 30,
+		"blocked_terms": ["forbidden"],
+		"blocked_risk_levels": ["critical"],
+		"max_output_chars": 20,
+		"final_output_action": "warn"
+	})
+
+	evaluation := evaluate_guardrails(policy, {
+		"stage": "before_model",
+		"payload": {
+			"text": "safe input"
+		}
+	})
+
+	assert_equal(evaluation["action"], "pass")
+	assert_equal(evaluation["passed"], true)
+}
+
+test "built-in final output size guardrail can warn" {
+	policy := create_minimal_guardrail_policy({
+		"max_output_chars": 10,
+		"final_output_action": "warn"
+	})
+
+	evaluation := evaluate_guardrails(policy, {
+		"stage": "before_final_output",
+		"payload": {
+			"final_text": "this output is longer than ten"
+		}
+	})
+
+	assert_equal(evaluation["action"], "warn")
+	assert_equal(evaluation["warned"], true)
+}
+
+test "built-in blocked term and risk guardrails block deterministically" {
+	policy := create_minimal_guardrail_policy({
+		"max_input_chars": 12,
+		"blocked_terms": ["forbidden"],
+		"blocked_risk_levels": ["high", "critical"],
+		"max_output_chars": 100,
+		"final_output_action": "warn"
+	})
+
+	blocked_term_eval := evaluate_guardrails(policy, {
+		"stage": "before_model",
+		"payload": {
+			"text": "this contains forbidden content"
+		}
+	})
+	assert_equal(blocked_term_eval["action"], "block")
+	assert_equal(blocked_term_eval["blocked"], true)
+
+	high_risk_eval := evaluate_guardrails(policy, {
+		"stage": "before_tool",
+		"payload": {
+			"tool_risk": "high"
+		}
+	})
+	assert_equal(high_risk_eval["action"], "block")
+	assert_equal(high_risk_eval["blocked"], true)
+}
+
+test "redaction policy defaults include sensitive key and value rules" {
+	policy := create_redaction_policy({})
+
+	assert_equal(policy["mask_event_payload"], true)
+	assert_equal(policy["mask_trace_payload"], true)
+	assert_equal(policy["mask_tool_io"], true)
+	assert_equal(policy["replacement"], "[REDACTED]")
+	assert_equal(len(policy["masked_keys"]) >= 7, true)
+}
+
+test "event payload redaction masks configured sensitive fields deterministically" {
+	result := redact_event_payload({
+		"kind": "tool_call_completed",
+		"payload": {
+			"token": "abc123",
+			"access_token": "xyz789",
+			"safe": "value"
+		},
+		"metadata": {
+			"source": "test"
+		}
+	}, {
+		"masked_keys": ["token", "access_token"],
+		"replacement": "[MASKED]"
+	})
+
+	assert_equal(result["redacted"], true)
+	assert_equal(result["redacted_fields_count"], 2)
+	assert_equal(result["event"]["payload"]["token"], "[MASKED]")
+	assert_equal(result["event"]["payload"]["access_token"], "[MASKED]")
+	assert_equal(result["event"]["metadata"]["redacted"], true)
+	assert_equal(result["event"]["metadata"]["redacted_fields_count"], 2)
+}
+
+test "trace and tool io redaction masks configured keys deterministically" {
+	trace_result := redact_trace_payload({
+		"authorization": "Bearer abcdef",
+		"notes": ["safe", "visible"]
+	}, {
+		"masked_keys": ["authorization", "api_key"],
+		"replacement": "[SCRUBBED]"
+	})
+
+	assert_equal(trace_result["redacted"], true)
+	assert_equal(trace_result["payload"]["authorization"], "[SCRUBBED]")
+
+	tool_io_result := redact_tool_io({
+		"authorization": "Bearer tool-secret",
+		"api_key": "key-1"
+	}, {
+		"masked_keys": ["authorization", "api_key"],
+		"replacement": "[SAFE]"
+	})
+
+	assert_equal(tool_io_result["redacted"], true)
+	assert_equal(tool_io_result["tool_io"]["authorization"], "[SAFE]")
+	assert_equal(tool_io_result["tool_io"]["api_key"], "[SAFE]")
+}
+
+test "redaction toggles can disable event trace and tool io masking" {
+	event_result := redact_event_payload({
+		"payload": {
+			"token": "keep"
+		}
+	}, {
+		"mask_event_payload": false
+	})
+	assert_equal(event_result["redacted"], false)
+	assert_equal(event_result["event"]["payload"]["token"], "keep")
+
+	trace_result := redact_trace_payload({
+		"token": "keep"
+	}, {
+		"mask_trace_payload": false
+	})
+	assert_equal(trace_result["redacted"], false)
+	assert_equal(trace_result["payload"]["token"], "keep")
+
+	tool_result := redact_tool_io({
+		"token": "keep"
+	}, {
+		"mask_tool_io": false
+	})
+	assert_equal(tool_result["redacted"], false)
+	assert_equal(tool_result["tool_io"]["token"], "keep")
+}
+
+test "memory scope and data class registries expose required values" {
+	scope_kinds := memory_scope_kind_values()
+	data_classes := memory_data_class_values()
+
+	assert_equal(len(scope_kinds), 3)
+	assert_equal(scope_kinds[0], "session")
+	assert_equal(scope_kinds[1], "user")
+	assert_equal(scope_kinds[2], "project")
+
+	assert_equal(len(data_classes), 5)
+	assert_equal(data_classes[0], "general")
+	assert_equal(data_classes[1], "pii")
+	assert_equal(data_classes[2], "credentials")
+	assert_equal(data_classes[3], "secret")
+	assert_equal(data_classes[4], "system")
+}
+
+test "memory write policy allows and denies writes with structured errors" {
+	policy := create_memory_write_policy({
+		"mode": "restricted",
+		"allowed_scopes": ["session", "user"],
+		"denied_scopes": ["project"],
+		"blocked_data_classes": ["secret"]
+	})
+
+	allowed_request := create_memory_write_request("session", "session-1", {
+		"data_class": "general",
+		"content": "safe memory"
+	})
+	allowed_decision := evaluate_memory_write_policy(policy, allowed_request)
+	assert_equal(allowed_decision["allowed"], true)
+	assert_equal(allowed_decision["denied"], false)
+
+	denied_scope_request := create_memory_write_request("project", "project-1", {
+		"data_class": "general"
+	})
+	denied_scope_decision := evaluate_memory_write_policy(policy, denied_scope_request)
+	assert_equal(denied_scope_decision["allowed"], false)
+	assert_equal(denied_scope_decision["denied"], true)
+	assert_equal(denied_scope_decision["error"]["kind"], "memory_write_denied")
+	assert_equal(denied_scope_decision["error"]["code"], "scope_restricted")
+
+	denied_data_request := create_memory_write_request("user", "user-1", {
+		"data_class": "secret"
+	})
+	denied_data_decision := evaluate_memory_write_policy(policy, denied_data_request)
+	assert_equal(denied_data_decision["allowed"], false)
+	assert_equal(denied_data_decision["denied"], true)
+	assert_equal(denied_data_decision["error"]["kind"], "memory_write_denied")
+	assert_equal(denied_data_decision["error"]["code"], "data_class_restricted")
+
+	deny_all_policy := create_memory_write_policy({
+		"mode": "deny_all",
+		"deny_reason": "Writes are disabled."
+	})
+	deny_all_decision := evaluate_memory_write_policy(deny_all_policy, allowed_request)
+	assert_equal(deny_all_decision["denied"], true)
+	assert_equal(deny_all_decision["error"]["code"], "policy_deny_all")
+	assert_equal(deny_all_decision["reason"], "Writes are disabled.")
+}

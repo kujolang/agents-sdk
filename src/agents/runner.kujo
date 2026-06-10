@@ -1,0 +1,3503 @@
+from src.agents.core_types import create_agent_run_request, create_agent_context, create_agent_message
+from src.agents.core_types import create_agent_step, create_agent_run_result, validate_agent_config
+from src.agents.events import create_agent_event
+from src.agents.errors import create_agent_error
+from src.agents.ai.adapter import build_ai_request_options, call_chat, call_chat_stream
+from src.agents.runtime.cancellation import create_cancellation_token, cancellation_requested
+from src.agents.runtime.clock_ids import runtime_now_ms
+from src.agents.tools.registry import resolve_registry_tool, create_tool_execution_context, execute_tool
+from src.agents.sessions.store import session_store_get_run_state, session_store_save_run_state
+from src.agents.memory.store import memory_store_write
+from src.agents.retrieval.provider import retrieval_provider_retrieve
+from src.agents.artifacts.store import artifact_store_create
+from src.agents.security.approval import create_approval_policy, create_auto_approval_provider, create_deny_all_approval_provider
+from src.agents.handoffs.handoff import create_handoff_request_from_parts, create_handoff_result
+from src.agents.budgets.limits import create_budget_limit_policy, create_budget_usage, increment_budget_usage, evaluate_budget_limits
+from src.agents.streaming.events import map_ai_sdk_stream_event
+
+func dict_get_or(obj, key, default_value) {
+	source := unwrap_dict(obj)
+	if type(source) != "dict" {
+		return default_value
+	}
+	target_key := to_string(key)
+	for existing_key in keys(source) {
+		if to_string(existing_key) == target_key {
+			return source[existing_key]
+		}
+	}
+	return default_value
+}
+
+func unwrap_dict(value) {
+	if type(value) != "dict" {
+		return value
+	}
+
+	if has_key(value, "_self") == 1 {
+		inner := value["_self"]
+		if type(inner) == "dict" {
+			return inner
+		}
+	}
+
+	return value
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "dict" {
+		if has_key(value, "_self") == 1 {
+			inner := value["_self"]
+			if type(inner) == "string" {
+				trimmed_inner := trim(inner)
+				if trimmed_inner != "" {
+					return trimmed_inner
+				}
+			}
+		}
+	}
+
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_text(value, fallback) {
+	text := normalize_string(value, "")
+	if text != "" {
+		return text
+	}
+
+	if type(value) == "null" {
+		return fallback
+	}
+
+	if type(value) == "dict" {
+		if has_key(value, "value") == 1 {
+			return normalize_text(value["value"], fallback)
+		}
+	}
+
+	if type(value) != "array" && type(value) != "dict" {
+		coerced := trim(to_string(value))
+		if coerced != "" {
+			return coerced
+		}
+	}
+
+	return fallback
+}
+
+func normalize_dict(value) {
+	unwrapped := unwrap_dict(value)
+	if type(unwrapped) == "dict" {
+		return unwrapped
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+
+	if type(value) == "dict" {
+		if has_key(value, "_self") == 1 {
+			inner := value["_self"]
+			if type(inner) == "array" {
+				return inner
+			}
+		}
+	}
+
+	return []
+}
+
+func normalize_string_array(values_input) {
+	values := normalize_array(values_input)
+	normalized := []
+
+	index := 0
+	total := len(values)
+	while index < total {
+		value_text := normalize_text(values[index], "")
+		if value_text != "" {
+			normalized = push(normalized, value_text)
+		}
+		index = index + 1
+	}
+
+	return normalized
+}
+
+func string_array_contains(values_input, expected_input) {
+	values := normalize_string_array(values_input)
+	expected := normalize_text(expected_input, "")
+	if expected == "" {
+		return false
+	}
+
+	index := 0
+	total := len(values)
+	while index < total {
+		if normalize_text(values[index], "") == expected {
+			return true
+		}
+		index = index + 1
+	}
+
+	return false
+}
+
+func resolve_handoff_loop_state(run_request_input, options_map_input, agent_id_input) {
+	run_request := normalize_dict(run_request_input)
+	options_map := normalize_dict(options_map_input)
+	metadata := normalize_dict(dict_get_or(run_request, "metadata", {}))
+	agent_id := normalize_text(agent_id_input, "")
+
+	depth := normalize_non_negative_int(dict_get_or(options_map, "handoff_depth", dict_get_or(run_request, "handoff_depth", dict_get_or(metadata, "handoff_depth", 0))), 0)
+	max_depth := normalize_non_negative_int(dict_get_or(options_map, "handoff_max_depth", dict_get_or(run_request, "handoff_max_depth", dict_get_or(metadata, "handoff_max_depth", 3))), 3)
+	if max_depth <= 0 {
+		max_depth = 1
+	}
+
+	visited_targets := normalize_string_array(dict_get_or(options_map, "handoff_visited_targets", dict_get_or(run_request, "handoff_visited_targets", dict_get_or(metadata, "handoff_visited_targets", []))))
+	if agent_id != "" {
+		if string_array_contains(visited_targets, agent_id) == false {
+			visited_targets = push(visited_targets, agent_id)
+		}
+	}
+
+	return {
+		"depth": depth,
+		"max_depth": max_depth,
+		"visited_targets": visited_targets
+	}
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func normalize_bool(value, fallback) {
+	if type(value) == "bool" {
+		return value
+	}
+	if type(value) == "int" {
+		return value != 0
+	}
+	return fallback
+}
+
+func copy_dict(source_input) {
+	source := normalize_dict(source_input)
+	cloned := {}
+	for key in keys(source) {
+		cloned[key] := source[key]
+	}
+	return cloned
+}
+
+func clone_value(value) {
+	if type(value) == "dict" {
+		source := normalize_dict(value)
+		cloned := {}
+		for key in keys(source) {
+			cloned[key] := clone_value(source[key])
+		}
+		return cloned
+	}
+
+	if type(value) == "array" {
+		cloned := []
+		for item in value {
+			cloned = push(cloned, clone_value(item))
+		}
+		return cloned
+	}
+
+	return value
+}
+
+func append_lifecycle_result(results_input, stage_input, result_input) {
+	results := normalize_array(results_input)
+	result := normalize_dict(result_input)
+
+	return push(results, {
+		"stage": normalize_string(stage_input, "unknown"),
+		"ok": dict_get_or(result, "ok", false),
+		"result": result
+	})
+}
+
+func normalize_cancellation_token(token_input) {
+	if type(token_input) == "dict" {
+		if dict_get_or(token_input, "type", "") == "CancellationToken" {
+			return token_input
+		}
+		return create_cancellation_token(token_input)
+	}
+	return create_cancellation_token({})
+}
+
+func resolve_retry_policy(options_map, run_request, agent_map) {
+	policy := normalize_dict(dict_get_or(options_map, "retry_policy", dict_get_or(run_request, "retry_policy", dict_get_or(agent_map, "retry_policy", {}))))
+
+	return {
+		"max_model_retries": normalize_non_negative_int(dict_get_or(policy, "max_model_retries", 0), 0),
+		"max_tool_retries": normalize_non_negative_int(dict_get_or(policy, "max_tool_retries", 0), 0)
+	}
+}
+
+func create_retry_counters(retry_policy, model_attempts, model_retries_used, tool_attempts, tool_retries_used) {
+	policy := normalize_dict(retry_policy)
+
+	return {
+		"max_model_retries": normalize_non_negative_int(dict_get_or(policy, "max_model_retries", 0), 0),
+		"max_tool_retries": normalize_non_negative_int(dict_get_or(policy, "max_tool_retries", 0), 0),
+		"model_attempts": normalize_non_negative_int(model_attempts, 0),
+		"model_retries_used": normalize_non_negative_int(model_retries_used, 0),
+		"tool_attempts": normalize_non_negative_int(tool_attempts, 0),
+		"tool_retries_used": normalize_non_negative_int(tool_retries_used, 0)
+	}
+}
+
+func is_retryable_model_result(model_result) {
+	if dict_get_or(model_result, "ok", false) {
+		return false
+	}
+
+	error_payload := normalize_dict(dict_get_or(model_result, "error", {}))
+	if dict_get_or(error_payload, "retryable", false) == true {
+		return true
+	}
+
+	error_kind := normalize_string(dict_get_or(error_payload, "kind", ""), "")
+	if error_kind == "timeout" || error_kind == "provider_error" {
+		return true
+	}
+
+	status_code := dict_get_or(model_result, "status_code", 0)
+	if type(status_code) == "int" {
+		if status_code == 408 || status_code == 429 || status_code >= 500 {
+			return true
+		}
+	}
+
+	return false
+}
+
+func with_retry_attempt_options(request_options, attempt, max_attempts) {
+	options := copy_dict(request_options)
+	metadata := normalize_dict(dict_get_or(options, "metadata", {}))
+
+	metadata["retry_attempt"] := attempt
+	metadata["retry_max_attempts"] := max_attempts
+
+	options["metadata"] := metadata
+	options["retry_attempt"] := attempt
+	options["retry_max_attempts"] := max_attempts
+
+	return options
+}
+
+func execute_model_with_retry_attempt(ai_adapter, messages, request_options, attempt, max_attempts) {
+	attempt_options := with_retry_attempt_options(request_options, attempt, max_attempts)
+	model_result := call_chat(ai_adapter, messages, attempt_options)
+
+	if dict_get_or(model_result, "ok", false) {
+		return {
+			"model_result": model_result,
+			"model_attempts": attempt,
+			"model_retries_used": attempt - 1
+		}
+	}
+
+	if attempt >= max_attempts || is_retryable_model_result(model_result) == false {
+		return {
+			"model_result": model_result,
+			"model_attempts": attempt,
+			"model_retries_used": attempt - 1
+		}
+	}
+
+	return execute_model_with_retry_attempt(ai_adapter, messages, request_options, attempt + 1, max_attempts)
+}
+
+func execute_model_with_retry_policy(ai_adapter, messages, request_options, retry_policy) {
+	max_model_retries := normalize_non_negative_int(dict_get_or(retry_policy, "max_model_retries", 0), 0)
+	max_attempts := max_model_retries + 1
+
+	return execute_model_with_retry_attempt(ai_adapter, messages, request_options, 1, max_attempts)
+}
+
+func resolve_stream_enabled(options_map_input, run_request_input, agent_map_input) {
+	options_map := normalize_dict(options_map_input)
+	run_request := normalize_dict(run_request_input)
+	agent_map := normalize_dict(agent_map_input)
+
+	from_options := dict_get_or(options_map, "stream", null)
+	if type(from_options) == "bool" || type(from_options) == "int" {
+		return normalize_bool(from_options, false)
+	}
+
+	from_request := dict_get_or(run_request, "stream", null)
+	if type(from_request) == "bool" || type(from_request) == "int" {
+		return normalize_bool(from_request, false)
+	}
+
+	from_policy := dict_get_or(normalize_dict(dict_get_or(agent_map, "policy", {})), "stream", null)
+	if type(from_policy) == "bool" || type(from_policy) == "int" {
+		return normalize_bool(from_policy, false)
+	}
+
+	return false
+}
+
+func infer_ai_stream_event_type(ai_event_input) {
+	ai_event := normalize_dict(ai_event_input)
+	fallback_type := "delta"
+
+	try {
+		candidate_type := normalize_string(ai_event["type"], "")
+		if candidate_type != "" {
+			return candidate_type
+		}
+	} except err {
+		// Some wrapped map values can fail direct key access even when key iteration reports presence.
+	}
+
+	ai_event_text := ""
+	try {
+		ai_event_text = to_string(ai_event_input)
+	} except err {
+		ai_event_text = ""
+	}
+	if index_of(ai_event_text, "guardrail_blocked") >= 0 {
+		fallback_type = "guardrail_blocked"
+	}
+
+	return fallback_type
+}
+
+func map_ai_stream_event_with_fallback(ai_event_input, run_id, agent_id, session_id, step_id, sequence_value, runtime_services_input) {
+	context := {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"step_id": step_id,
+		"sequence": sequence_value,
+		"runtime_services": runtime_services_input
+	}
+
+	try {
+		return {
+			"event": map_ai_sdk_stream_event(ai_event_input, context),
+			"mapping_error": ""
+		}
+	} except err {
+		fallback_type := infer_ai_stream_event_type(ai_event_input)
+		fallback_payload := {}
+		if fallback_type == "guardrail_blocked" {
+			fallback_payload = {
+				"reason": "guardrail_blocked"
+			}
+		}
+
+		fallback_event := map_ai_sdk_stream_event({
+			"type": fallback_type,
+			"payload": fallback_payload
+		}, context)
+
+		fallback_event_map := normalize_dict(fallback_event)
+		metadata := normalize_dict(dict_get_or(fallback_event_map, "metadata", {}))
+		metadata["mapping_error"] := to_string(err)
+		fallback_event_map["metadata"] := metadata
+
+		return {
+			"event": fallback_event_map,
+			"mapping_error": to_string(err)
+		}
+	}
+}
+
+func execute_model_with_stream(ai_adapter, messages, request_options, run_id, agent_id, session_id, step_id, runtime_services_input, options_map_input) {
+	options_map := normalize_dict(options_map_input)
+	runtime_services := runtime_services_input
+	stream_state := {
+		"sequence": 0,
+		"events": [],
+		"callback_error": "",
+		"guardrail_blocked": false,
+		"stage": "initialized",
+		"runtime_services": runtime_services
+	}
+
+	on_stream_event := func(ai_event_input) {
+		sequence_value := normalize_non_negative_int(dict_get_or(stream_state, "sequence", 0), 0) + 1
+		stream_state["sequence"] := sequence_value
+
+		mapped := map_ai_stream_event_with_fallback(ai_event_input, run_id, agent_id, session_id, step_id, sequence_value, dict_get_or(stream_state, "runtime_services", runtime_services))
+		stream_event := normalize_dict(dict_get_or(mapped, "event", {}))
+
+		stream_events := normalize_array(dict_get_or(stream_state, "events", []))
+		stream_events = push(stream_events, stream_event)
+		stream_state["events"] := stream_events
+		stream_state["runtime_services"] := dict_get_or(stream_event, "runtime_services", dict_get_or(stream_state, "runtime_services", runtime_services))
+
+		if normalize_string(dict_get_or(stream_event, "kind", ""), "") == "guardrail_blocked" {
+			stream_state["guardrail_blocked"] := true
+			stream_state["guardrail_event"] := stream_event
+		}
+
+		event_callback := dict_get_or(options_map, "on_stream_event", null)
+		if type(event_callback) == "function" {
+			try {
+				event_callback(stream_event)
+			} except err {
+				if normalize_string(dict_get_or(stream_state, "callback_error", ""), "") == "" {
+					stream_state["callback_error"] := to_string(err)
+				}
+			}
+		}
+	}
+
+	try {
+		stream_state["stage"] := "call_chat_stream"
+		model_result := call_chat_stream(ai_adapter, messages, request_options, on_stream_event)
+		stream_state["stage"] := "collect_stream_state"
+		runtime_services = dict_get_or(stream_state, "runtime_services", runtime_services)
+		stream_events := normalize_array(dict_get_or(stream_state, "events", []))
+
+		if len(stream_events) == 0 {
+			stream_state["stage"] := "replay_emitted_events"
+			try {
+				raw_result := normalize_dict(dict_get_or(model_result, "raw", {}))
+				emitted_events := normalize_array(dict_get_or(model_result, "emitted_events", dict_get_or(raw_result, "emitted_events", [])))
+				event_callback := dict_get_or(options_map, "on_stream_event", null)
+
+				index := 0
+				total_events := len(emitted_events)
+				while index < total_events {
+					sequence_value := normalize_non_negative_int(dict_get_or(stream_state, "sequence", 0), 0) + 1
+					stream_state["sequence"] := sequence_value
+					mapped := map_ai_stream_event_with_fallback(emitted_events[index], run_id, agent_id, session_id, step_id, sequence_value, dict_get_or(stream_state, "runtime_services", runtime_services))
+					stream_event := normalize_dict(dict_get_or(mapped, "event", {}))
+
+					stream_events = push(stream_events, stream_event)
+					stream_state["runtime_services"] := dict_get_or(stream_event, "runtime_services", dict_get_or(stream_state, "runtime_services", runtime_services))
+
+					if normalize_string(dict_get_or(stream_event, "kind", ""), "") == "guardrail_blocked" {
+						stream_state["guardrail_blocked"] := true
+						stream_state["guardrail_event"] := stream_event
+					}
+
+					if type(event_callback) == "function" {
+						try {
+							event_callback(stream_event)
+						} except err {
+							if normalize_string(dict_get_or(stream_state, "callback_error", ""), "") == "" {
+								stream_state["callback_error"] := to_string(err)
+							}
+						}
+					}
+
+					index = index + 1
+				}
+
+				stream_state["events"] := stream_events
+			} except err {
+				sequence_value := normalize_non_negative_int(dict_get_or(stream_state, "sequence", 0), 0) + 1
+				stream_state["sequence"] := sequence_value
+				synthetic_event := map_ai_sdk_stream_event({
+					"type": "guardrail_blocked",
+					"payload": {
+						"reason": "emitted_events_mapping_failed"
+					}
+				}, {
+					"run_id": run_id,
+					"agent_id": agent_id,
+					"session_id": session_id,
+					"step_id": step_id,
+					"sequence": sequence_value,
+					"runtime_services": dict_get_or(stream_state, "runtime_services", runtime_services)
+				})
+				stream_events = push(stream_events, synthetic_event)
+				stream_state["events"] := stream_events
+				stream_state["guardrail_blocked"] := true
+				stream_state["guardrail_event"] := synthetic_event
+			}
+		}
+
+		stream_state["stage"] := "evaluate_callback_error"
+		runtime_services = dict_get_or(stream_state, "runtime_services", runtime_services)
+		callback_error := normalize_string(dict_get_or(stream_state, "callback_error", ""), "")
+
+		if callback_error != "" {
+			return {
+				"model_result": {
+					"ok": false,
+					"error": create_agent_error("model_error", "Stream callback failed while processing model events.", {
+						"details": {
+							"error": callback_error
+						}
+					})
+				},
+				"model_attempts": 1,
+				"model_retries_used": 0,
+				"stream_events": stream_events,
+				"runtime_services": runtime_services
+			}
+		}
+
+		if dict_get_or(stream_state, "guardrail_blocked", false) {
+			return {
+				"model_result": {
+					"ok": false,
+					"error": create_agent_error("guardrail_blocked", "Streaming run was blocked by guardrail event.", {
+						"details": {
+							"event": clone_value(dict_get_or(stream_state, "guardrail_event", {}))
+						}
+					})
+				},
+				"model_attempts": 1,
+				"model_retries_used": 0,
+				"stream_events": stream_events,
+				"runtime_services": runtime_services
+			}
+		}
+
+		return {
+			"model_result": model_result,
+			"model_attempts": 1,
+			"model_retries_used": 0,
+			"stream_events": stream_events,
+			"runtime_services": runtime_services
+		}
+	} except err {
+		return {
+			"model_result": {
+				"ok": false,
+				"error": create_agent_error("model_error", "Stream processing failed before completion.", {
+					"details": {
+						"stage": normalize_string(dict_get_or(stream_state, "stage", ""), ""),
+						"error": to_string(err)
+					}
+				})
+			},
+			"model_attempts": 1,
+			"model_retries_used": 0,
+			"stream_events": normalize_array(dict_get_or(stream_state, "events", [])),
+			"runtime_services": dict_get_or(stream_state, "runtime_services", runtime_services)
+		}
+	}
+}
+
+func create_agent_runner_impl(options) {
+	options_map := normalize_dict(options)
+	return {
+		"type": "AgentRunner",
+		"ai_adapter": dict_get_or(options_map, "ai_adapter", null),
+		"handoff_registry": normalize_dict(dict_get_or(options_map, "handoff_registry", {})),
+		"metadata": normalize_dict(dict_get_or(options_map, "metadata", {}))
+	}
+}
+
+func build_model_messages(agent, run_request) {
+	agent_map := normalize_dict(agent)
+	run_request_map := normalize_dict(run_request)
+
+	messages := normalize_array(dict_get_or(run_request_map, "messages", []))
+	instructions := normalize_string(dict_get_or(agent_map, "instructions", ""), "")
+	if instructions != "" {
+		messages = push(messages, create_agent_message("system", instructions, {
+			"source": "agent.instructions"
+		}))
+	}
+
+	user_input := normalize_string(dict_get_or(run_request_map, "input", ""), "")
+	if user_input != "" {
+		messages = push(messages, create_agent_message("user", user_input, {
+			"source": "run_request.input"
+		}))
+	}
+
+	return messages
+}
+
+func as_run_request(run_request_input) {
+	if type(run_request_input) == "dict" {
+		return run_request_input
+	}
+	return create_agent_run_request(to_string(run_request_input), {})
+}
+
+func create_runner_error_result(run_status, error_payload, steps, metadata) {
+	return create_agent_run_result(run_status, {
+		"text": ""
+	}, {
+		"error": error_payload,
+		"steps": steps,
+		"metadata": metadata
+	})
+}
+
+func create_runner_cancelled_result(cancelled_stage, steps, metadata) {
+	stage_name := normalize_string(cancelled_stage, "unknown")
+	error_payload := create_agent_error("cancelled", "Run cancelled at stage: " + stage_name + ".", {
+		"details": {
+			"cancelled_stage": stage_name
+		}
+	})
+
+	return create_runner_error_result("cancelled", error_payload, steps, metadata)
+}
+
+func budget_check_passed(evaluation_input) {
+	evaluation := normalize_dict(evaluation_input)
+	if dict_get_or(evaluation, "ok", false) {
+		return true
+	}
+
+	return normalize_string(dict_get_or(evaluation, "status", ""), "") == "exceeded_observe"
+}
+
+func append_budget_check_result(checks_input, stage_input, evaluation_input) {
+	checks := normalize_array(checks_input)
+	evaluation := normalize_dict(evaluation_input)
+	return push(checks, {
+		"stage": normalize_string(stage_input, "unknown"),
+		"ok": budget_check_passed(evaluation),
+		"status": normalize_string(dict_get_or(evaluation, "status", "unknown"), "unknown"),
+		"evaluation": evaluation
+	})
+}
+
+func build_budget_exceeded_error(stage_input, evaluation_input) {
+	evaluation := normalize_dict(evaluation_input)
+	error_payload := dict_get_or(evaluation, "error", null)
+	if type(error_payload) == "dict" {
+		return error_payload
+	}
+
+	return create_agent_error("budget_exceeded", "Run budget limits were exceeded.", {
+		"details": {
+			"stage": normalize_string(stage_input, "unknown"),
+			"evaluation": evaluation
+		}
+	})
+}
+
+func create_budget_exceeded_result(stage_input, evaluation_input, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks) {
+	error_payload := build_budget_exceeded_error(stage_input, evaluation_input)
+
+	return create_runner_error_result("budget_exceeded", error_payload, steps, {
+		"events": events,
+		"context": context,
+		"retrieval": retrieval_state,
+		"retry_counters": retry_counters,
+		"session_store": {
+			"restore": session_restore_result,
+			"writes": session_store_results
+		},
+		"memory_store_writes": memory_store_results,
+		"artifact_store_writes": artifact_store_results,
+		"budget": {
+			"policy": budget_policy,
+			"usage": budget_usage,
+			"checks": budget_checks,
+			"last_evaluation": evaluation_input
+		}
+	})
+}
+
+func resolve_timeout_ms(options_map, run_request, agent_map) {
+	from_options := dict_get_or(options_map, "timeout_ms", null)
+	if type(from_options) == "int" {
+		return normalize_non_negative_int(from_options, 0)
+	}
+
+	from_request := dict_get_or(run_request, "timeout_ms", null)
+	if type(from_request) == "int" {
+		return normalize_non_negative_int(from_request, 0)
+	}
+
+	from_agent := dict_get_or(agent_map, "timeout_ms", null)
+	if type(from_agent) == "int" {
+		return normalize_non_negative_int(from_agent, 0)
+	}
+
+	return 0
+}
+
+func current_elapsed_ms(started_ms_input, runtime_services_input) {
+	started_ms := normalize_non_negative_int(started_ms_input, 0)
+	now_ms := runtime_now_ms(runtime_services_input)
+	if type(now_ms) == "int" {
+		if now_ms >= started_ms {
+			return now_ms - started_ms
+		}
+	}
+	return 0
+}
+
+func with_elapsed_budget_usage(usage_input, elapsed_ms_input) {
+	usage := create_budget_usage(usage_input)
+	counters := normalize_dict(dict_get_or(usage, "counters", {}))
+	counters["elapsed_ms"] := normalize_non_negative_int(elapsed_ms_input, 0)
+
+	return create_budget_usage({
+		"run_id": normalize_string(dict_get_or(usage, "run_id", ""), ""),
+		"counters": counters,
+		"metadata": dict_get_or(usage, "metadata", {})
+	})
+}
+
+func evaluate_timeout_boundary(stage_input, timeout_ms_input, elapsed_ms_input) {
+	timeout_ms := normalize_non_negative_int(timeout_ms_input, 0)
+	elapsed_ms := normalize_non_negative_int(elapsed_ms_input, 0)
+	exceeded := false
+	if timeout_ms > 0 {
+		if elapsed_ms > timeout_ms {
+			exceeded = true
+		}
+	}
+	status := "within_timeout"
+	if exceeded {
+		status = "timeout_exceeded"
+	}
+
+	return {
+		"stage": normalize_string(stage_input, "unknown"),
+		"timeout_ms": timeout_ms,
+		"elapsed_ms": elapsed_ms,
+		"exceeded": exceeded,
+		"status": status
+	}
+}
+
+func create_timeout_result(stage_input, timeout_check_input, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_checks) {
+	timeout_check := normalize_dict(timeout_check_input)
+	error_payload := create_agent_error("timeout", "Run exceeded configured timeout deadline.", {
+		"details": {
+			"stage": normalize_string(stage_input, "unknown"),
+			"timeout_ms": normalize_non_negative_int(dict_get_or(timeout_check, "timeout_ms", 0), 0),
+			"elapsed_ms": normalize_non_negative_int(dict_get_or(timeout_check, "elapsed_ms", 0), 0)
+		}
+	})
+
+	return create_runner_error_result("timeout", error_payload, steps, {
+		"events": events,
+		"context": context,
+		"retrieval": retrieval_state,
+		"retry_counters": retry_counters,
+		"session_store": {
+			"restore": session_restore_result,
+			"writes": session_store_results
+		},
+		"memory_store_writes": memory_store_results,
+		"artifact_store_writes": artifact_store_results,
+		"budget": {
+			"policy": budget_policy,
+			"usage": budget_usage,
+			"checks": budget_checks
+		},
+		"timeout": {
+			"checks": timeout_checks,
+			"last_check": timeout_check
+		}
+	})
+}
+
+func create_max_iterations_result(stage_input, max_iterations, steps_count, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_ms, timeout_checks) {
+	error_payload := create_agent_error("internal_error", "Run reached the configured max iterations limit.", {
+		"details": {
+			"stop_reason": "max_iterations",
+			"stage": normalize_string(stage_input, "unknown"),
+			"max_iterations": normalize_non_negative_int(max_iterations, 0),
+			"steps_count": normalize_non_negative_int(steps_count, 0)
+		}
+	})
+
+	return create_runner_error_result("max_iterations", error_payload, steps, {
+		"events": events,
+		"context": context,
+		"retrieval": retrieval_state,
+		"retry_counters": retry_counters,
+		"session_store": {
+			"restore": session_restore_result,
+			"writes": session_store_results
+		},
+		"memory_store_writes": memory_store_results,
+		"artifact_store_writes": artifact_store_results,
+		"budget": {
+			"policy": budget_policy,
+			"usage": budget_usage,
+			"checks": budget_checks
+		},
+		"timeout": {
+			"timeout_ms": timeout_ms,
+			"checks": timeout_checks
+		}
+	})
+}
+
+func push_cancelled_event(events, run_id, agent_id, session_id, step_id, cancelled_stage, runtime_services) {
+	run_cancelled := create_agent_event("run_cancelled", {
+		"cancelled_stage": normalize_string(cancelled_stage, "unknown")
+	}, {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"step_id": normalize_string(step_id, ""),
+		"runtime_services": runtime_services
+	})
+
+	return {
+		"events": push(events, run_cancelled),
+		"runtime_services": dict_get_or(run_cancelled, "runtime_services", runtime_services)
+	}
+}
+
+func resolve_tool_registry(runner_map, options_map, run_request) {
+	from_options := dict_get_or(options_map, "tool_registry", null)
+	if type(from_options) == "dict" {
+		return from_options
+	}
+
+	from_request := dict_get_or(run_request, "tool_registry", null)
+	if type(from_request) == "dict" {
+		return from_request
+	}
+
+	from_runner := dict_get_or(runner_map, "tool_registry", null)
+	if type(from_runner) == "dict" {
+		return from_runner
+	}
+
+	return null
+}
+
+func resolve_tool_approval_policy(options_map, run_request, agent_map) {
+	from_options := dict_get_or(options_map, "approval_policy", null)
+	if type(from_options) == "dict" {
+		return create_approval_policy(from_options)
+	}
+
+	from_request := dict_get_or(run_request, "approval_policy", null)
+	if type(from_request) == "dict" {
+		return create_approval_policy(from_request)
+	}
+
+	agent_policy := normalize_dict(dict_get_or(agent_map, "policy", {}))
+	from_agent := dict_get_or(agent_policy, "approval", null)
+	if type(from_agent) == "dict" {
+		return create_approval_policy(from_agent)
+	}
+
+	return null
+}
+
+func resolve_tool_approval_provider(runner_map, options_map, run_request) {
+	from_options := dict_get_or(options_map, "approval_provider", null)
+	if type(from_options) == "dict" {
+		provider_kind := normalize_string(dict_get_or(from_options, "kind", "auto"), "auto")
+		if provider_kind == "deny_all" {
+			return create_deny_all_approval_provider(from_options)
+		}
+		return create_auto_approval_provider(from_options)
+	}
+
+	from_request := dict_get_or(run_request, "approval_provider", null)
+	if type(from_request) == "dict" {
+		provider_kind := normalize_string(dict_get_or(from_request, "kind", "auto"), "auto")
+		if provider_kind == "deny_all" {
+			return create_deny_all_approval_provider(from_request)
+		}
+		return create_auto_approval_provider(from_request)
+	}
+
+	from_runner := dict_get_or(runner_map, "approval_provider", null)
+	if type(from_runner) == "dict" {
+		provider_kind := normalize_string(dict_get_or(from_runner, "kind", "auto"), "auto")
+		if provider_kind == "deny_all" {
+			return create_deny_all_approval_provider(from_runner)
+		}
+		return create_auto_approval_provider(from_runner)
+	}
+
+	return null
+}
+
+func resolve_tool_output_sanitizer(options_map, run_request) {
+	from_options := dict_get_or(options_map, "tool_output_sanitizer", null)
+	if type(from_options) == "function" {
+		return from_options
+	}
+
+	from_request := dict_get_or(run_request, "tool_output_sanitizer", null)
+	if type(from_request) == "function" {
+		return from_request
+	}
+
+	return null
+}
+
+func resolve_session_store(runner_map, options_map, run_request) {
+	from_options := dict_get_or(options_map, "session_store", null)
+	if type(from_options) == "dict" {
+		return from_options
+	}
+
+	from_request := dict_get_or(run_request, "session_store", null)
+	if type(from_request) == "dict" {
+		return from_request
+	}
+
+	from_runner := dict_get_or(runner_map, "session_store", null)
+	if type(from_runner) == "dict" {
+		return from_runner
+	}
+
+	return null
+}
+
+func resolve_memory_store(runner_map, options_map, run_request) {
+	from_options := dict_get_or(options_map, "memory_store", null)
+	if type(from_options) == "dict" {
+		return from_options
+	}
+
+	from_request := dict_get_or(run_request, "memory_store", null)
+	if type(from_request) == "dict" {
+		return from_request
+	}
+
+	from_runner := dict_get_or(runner_map, "memory_store", null)
+	if type(from_runner) == "dict" {
+		return from_runner
+	}
+
+	return null
+}
+
+func resolve_artifact_store(runner_map, options_map, run_request) {
+	from_options := dict_get_or(options_map, "artifact_store", null)
+	if type(from_options) == "dict" {
+		return from_options
+	}
+
+	from_request := dict_get_or(run_request, "artifact_store", null)
+	if type(from_request) == "dict" {
+		return from_request
+	}
+
+	from_runner := dict_get_or(runner_map, "artifact_store", null)
+	if type(from_runner) == "dict" {
+		return from_runner
+	}
+
+	return null
+}
+
+func resolve_budget_policy(runner_map, options_map, run_request, agent_map) {
+	from_options := dict_get_or(options_map, "budget_policy", null)
+	if type(from_options) == "dict" {
+		return create_budget_limit_policy(from_options)
+	}
+
+	from_request := dict_get_or(run_request, "budget_policy", null)
+	if type(from_request) == "dict" {
+		return create_budget_limit_policy(from_request)
+	}
+
+	from_runner := dict_get_or(runner_map, "budget_policy", null)
+	if type(from_runner) == "dict" {
+		return create_budget_limit_policy(from_runner)
+	}
+
+	agent_budget := normalize_dict(dict_get_or(agent_map, "budget", {}))
+	if len(keys(agent_budget)) > 0 {
+		return create_budget_limit_policy({
+			"mode": "enforce",
+			"budget": agent_budget
+		})
+	}
+
+	return create_budget_limit_policy({
+		"mode": "enforce",
+		"budget": {}
+	})
+}
+
+func initialize_budget_usage(run_id_input, options_map, run_request) {
+	initial_counters := normalize_dict(dict_get_or(options_map, "budget_usage", dict_get_or(run_request, "budget_usage", {})))
+	return create_budget_usage({
+		"run_id": normalize_string(run_id_input, ""),
+		"counters": initial_counters
+	})
+}
+
+func build_model_budget_delta(model_result_input, model_attempts_input) {
+	model_result := normalize_dict(model_result_input)
+	budget_usage := normalize_dict(dict_get_or(model_result, "budget_usage", dict_get_or(model_result, "usage", {})))
+
+	return {
+		"model_calls": normalize_non_negative_int(model_attempts_input, 0),
+		"input_tokens": normalize_non_negative_int(dict_get_or(budget_usage, "input_tokens", 0), 0),
+		"output_tokens": normalize_non_negative_int(dict_get_or(budget_usage, "output_tokens", 0), 0),
+		"total_tokens": normalize_non_negative_int(dict_get_or(budget_usage, "total_tokens", 0), 0),
+		"cost_microunits": normalize_non_negative_int(dict_get_or(budget_usage, "cost_microunits", 0), 0)
+	}
+}
+
+func resolve_retrieval_provider(runner_map, options_map, run_request) {
+	from_options := dict_get_or(options_map, "retrieval_provider", null)
+	if type(from_options) == "dict" {
+		return from_options
+	}
+
+	from_request := dict_get_or(run_request, "retrieval_provider", null)
+	if type(from_request) == "dict" {
+		return from_request
+	}
+
+	from_runner := dict_get_or(runner_map, "retrieval_provider", null)
+	if type(from_runner) == "dict" {
+		return from_runner
+	}
+
+	return null
+}
+
+func resolve_retrieval_config(agent_map, run_request, options_map) {
+	from_options := normalize_dict(dict_get_or(options_map, "retrieval", {}))
+	if len(keys(from_options)) > 0 {
+		return from_options
+	}
+
+	from_request := normalize_dict(dict_get_or(run_request, "retrieval", {}))
+	if len(keys(from_request)) > 0 {
+		return from_request
+	}
+
+	agent_policy := normalize_dict(dict_get_or(agent_map, "policy", {}))
+	from_agent := normalize_dict(dict_get_or(agent_policy, "retrieval", {}))
+	if len(keys(from_agent)) > 0 {
+		return from_agent
+	}
+
+	return {}
+}
+
+func resolve_handoff_registry(runner_map, options_map, run_request) {
+	from_options := normalize_dict(dict_get_or(options_map, "handoff_registry", {}))
+	if len(keys(from_options)) > 0 {
+		return from_options
+	}
+
+	from_request := normalize_dict(dict_get_or(run_request, "handoff_registry", dict_get_or(dict_get_or(run_request, "metadata", {}), "handoff_registry", {})))
+	if len(keys(from_request)) > 0 {
+		return from_request
+	}
+
+	from_runner := normalize_dict(dict_get_or(runner_map, "handoff_registry", {}))
+	if len(keys(from_runner)) > 0 {
+		return from_runner
+	}
+
+	return {}
+}
+
+func resolve_explicit_handoff_request(run_request, options_map, agent_map_input, handoff_registry_input) {
+	run_request_map := normalize_dict(run_request)
+	metadata_map := normalize_dict(dict_get_or(run_request_map, "metadata", {}))
+	agent_map := normalize_dict(agent_map_input)
+	handoff_registry_map := normalize_dict(handoff_registry_input)
+	handoff_map := normalize_dict(dict_get_or(options_map, "handoff_request", dict_get_or(options_map, "handoff", {})))
+
+	if len(keys(handoff_map)) == 0 {
+		request_handoff := normalize_dict(dict_get_or(run_request_map, "handoff_request", dict_get_or(run_request_map, "handoff", {})))
+		if len(keys(request_handoff)) > 0 {
+			handoff_map = request_handoff
+		}
+	}
+
+	if len(keys(handoff_map)) == 0 {
+		metadata_handoff := normalize_dict(dict_get_or(metadata_map, "handoff_request", dict_get_or(metadata_map, "handoff", {})))
+		if len(keys(metadata_handoff)) > 0 {
+			handoff_map = metadata_handoff
+		}
+	}
+
+	target_agent_id := normalize_text(dict_get_or(handoff_map, "target_agent_id", dict_get_or(handoff_map, "target", "")), "")
+	if target_agent_id == "" {
+		target_payload := normalize_dict(dict_get_or(handoff_map, "target", {}))
+		target_agent_id = normalize_text(dict_get_or(target_payload, "target_agent_id", dict_get_or(target_payload, "id", "")), "")
+	}
+	if target_agent_id == "" {
+		target_agent_id = normalize_text(dict_get_or(options_map, "handoff_target_agent_id", ""), "")
+	}
+	if target_agent_id == "" {
+		target_agent_id = normalize_text(dict_get_or(run_request_map, "handoff_target_agent_id", ""), "")
+	}
+	if target_agent_id == "" {
+		target_agent_id = normalize_text(dict_get_or(metadata_map, "handoff_target_agent_id", ""), "")
+	}
+	if target_agent_id == "" {
+		target_agent_id = normalize_text(dict_get_or(options_map, "target_agent_id", ""), "")
+	}
+	if target_agent_id == "" {
+		target_agent_id = normalize_text(dict_get_or(run_request_map, "target_agent_id", ""), "")
+	}
+	if target_agent_id == "" {
+		target_agent_id = normalize_text(dict_get_or(metadata_map, "target_agent_id", ""), "")
+	}
+	if target_agent_id == "" {
+		requested_tools := normalize_array(dict_get_or(run_request_map, "requested_tools", dict_get_or(metadata_map, "requested_tools", [])))
+		index := 0
+		total := len(requested_tools)
+		while index < total {
+			entry_raw := requested_tools[index]
+			if type(entry_raw) == "string" {
+				candidate_target_agent_id := normalize_text(entry_raw, "")
+				if candidate_target_agent_id != "" {
+					target_agent_id = candidate_target_agent_id
+					break
+				}
+			}
+
+			entry_map := normalize_dict(entry_raw)
+			if len(keys(entry_map)) > 0 {
+				candidate_target_agent_id := normalize_text(dict_get_or(entry_map, "handoff_target_agent_id", dict_get_or(entry_map, "target_agent_id", "")), "")
+				if candidate_target_agent_id != "" {
+					target_agent_id = candidate_target_agent_id
+					break
+				}
+			}
+			index = index + 1
+		}
+	}
+
+	reason_text := normalize_text(dict_get_or(handoff_map, "reason", ""), "")
+	if reason_text == "" {
+		reason_text = normalize_text(dict_get_or(options_map, "handoff_reason", ""), "")
+	}
+	if reason_text == "" {
+		reason_text = normalize_text(dict_get_or(run_request_map, "handoff_reason", ""), "")
+	}
+	if reason_text == "" {
+		reason_text = normalize_text(dict_get_or(metadata_map, "handoff_reason", ""), "")
+	}
+	if reason_text == "" {
+		reason_text = normalize_text(dict_get_or(options_map, "target_agent_reason", ""), "")
+	}
+	if reason_text == "" {
+		reason_text = normalize_text(dict_get_or(run_request_map, "target_agent_reason", ""), "")
+	}
+	if reason_text == "" {
+		reason_text = normalize_text(dict_get_or(metadata_map, "target_agent_reason", ""), "")
+	}
+
+	request_id := normalize_text(dict_get_or(handoff_map, "request_id", ""), "")
+	if request_id == "" {
+		request_id = normalize_text(dict_get_or(options_map, "handoff_request_id", ""), "")
+	}
+	if request_id == "" {
+		request_id = normalize_text(dict_get_or(run_request_map, "handoff_request_id", ""), "")
+	}
+	if request_id == "" {
+		request_id = normalize_text(dict_get_or(metadata_map, "handoff_request_id", ""), "")
+	}
+	if reason_text == "" || request_id == "" {
+		requested_tools := normalize_array(dict_get_or(run_request_map, "requested_tools", dict_get_or(metadata_map, "requested_tools", [])))
+		index := 0
+		total := len(requested_tools)
+		while index < total {
+			entry_raw := requested_tools[index]
+			entry_map := normalize_dict(entry_raw)
+			if len(keys(entry_map)) > 0 {
+				candidate_target_agent_id := normalize_text(dict_get_or(entry_map, "handoff_target_agent_id", dict_get_or(entry_map, "target_agent_id", "")), "")
+				if candidate_target_agent_id == target_agent_id {
+					if reason_text == "" {
+						reason_text = normalize_text(dict_get_or(entry_map, "reason", ""), "")
+					}
+					if request_id == "" {
+						request_id = normalize_text(dict_get_or(entry_map, "request_id", ""), "")
+					}
+					break
+				}
+			}
+			index = index + 1
+		}
+	}
+	if request_id == "" {
+		request_id = "handoff-request"
+	}
+
+	if target_agent_id == "" {
+		agent_policy := normalize_dict(dict_get_or(agent_map, "policy", {}))
+		agent_handoff := normalize_dict(dict_get_or(agent_policy, "handoff", {}))
+		target_agent_id = normalize_text(dict_get_or(agent_handoff, "target_agent_id", dict_get_or(agent_handoff, "target", "")), "")
+		if reason_text == "" {
+			reason_text = normalize_text(dict_get_or(agent_handoff, "reason", ""), "")
+		}
+		if request_id == "handoff-request" {
+			request_id = normalize_text(dict_get_or(agent_handoff, "request_id", ""), "")
+			if request_id == "" {
+				request_id = "handoff-request"
+			}
+		}
+
+		if target_agent_id == "" {
+			target_agent_id = normalize_text(dict_get_or(agent_policy, "target_agent_id", ""), "")
+		}
+		if reason_text == "" {
+			reason_text = normalize_text(dict_get_or(agent_policy, "target_agent_reason", ""), "")
+		}
+		if request_id == "handoff-request" {
+			policy_request_id := normalize_text(dict_get_or(agent_policy, "request_id", ""), "")
+			if policy_request_id != "" {
+				request_id = policy_request_id
+			}
+		}
+	}
+
+	if target_agent_id == "" {
+		is_handoff_child_run := normalize_text(dict_get_or(metadata_map, "handoff_parent_run_id", ""), "") != ""
+		if is_handoff_child_run == false {
+			registry_keys := keys(handoff_registry_map)
+			if len(registry_keys) == 1 {
+				for candidate_key in registry_keys {
+					single_target_agent := normalize_dict(handoff_registry_map[candidate_key])
+					candidate_target := normalize_text(dict_get_or(single_target_agent, "id", ""), "")
+					if candidate_target == "" {
+						candidate_target = normalize_text(candidate_key, "")
+					}
+					target_agent_id = candidate_target
+					break
+				}
+				if reason_text == "" {
+					reason_text = "Auto-selected single configured handoff target."
+				}
+			}
+		}
+	}
+
+	return {
+		"enabled": target_agent_id != "",
+		"target_agent_id": target_agent_id,
+		"reason": reason_text,
+		"request_id": request_id
+	}
+}
+
+func resolve_handoff_target_agent(handoff_registry_input, target_agent_id_input) {
+	handoff_registry := normalize_dict(handoff_registry_input)
+	target_agent_id := normalize_string(target_agent_id_input, "")
+	if target_agent_id == "" {
+		return {
+			"ok": false,
+			"target_agent": {}
+		}
+	}
+
+	for candidate_id in keys(handoff_registry) {
+		if candidate_id == target_agent_id {
+			target_agent := normalize_dict(dict_get_or(handoff_registry, candidate_id, {}))
+			if type(target_agent) == "dict" && len(keys(target_agent)) > 0 {
+				return {
+					"ok": true,
+					"target_agent": target_agent
+				}
+			}
+		}
+	}
+
+	return {
+		"ok": false,
+		"target_agent": {}
+	}
+}
+
+func build_retrieval_context_message(retrieval_result_input, max_documents_input) {
+	retrieval_result := normalize_dict(retrieval_result_input)
+	context_payload := normalize_dict(dict_get_or(retrieval_result, "context", {}))
+	summary_text := normalize_string(dict_get_or(context_payload, "summary", ""), "")
+	documents := normalize_array(dict_get_or(context_payload, "documents", []))
+	max_documents := normalize_non_negative_int(max_documents_input, 3)
+	if max_documents <= 0 {
+		max_documents = len(documents)
+	}
+
+	context_text := "Retrieved context:"
+	if summary_text != "" {
+		context_text = context_text + "\nSummary: " + summary_text
+	}
+
+	document_count := len(documents)
+	if document_count > 0 {
+		context_text = context_text + "\nDocuments:"
+		limit := document_count
+		if max_documents > 0 {
+			if max_documents < limit {
+				limit = max_documents
+			}
+		}
+
+		index := 0
+		while index < limit {
+			document := normalize_dict(documents[index])
+			document_id := normalize_string(dict_get_or(document, "document_id", "doc-" + to_string(index + 1)), "doc-" + to_string(index + 1))
+			title_text := normalize_string(dict_get_or(document, "title", ""), "")
+			content_text := normalize_string(dict_get_or(document, "content", ""), "")
+
+			line := "- [" + document_id + "] "
+			if title_text != "" {
+				line = line + title_text
+			} else {
+				line = line + "Document"
+			}
+
+			if content_text != "" {
+				line = line + ": " + content_text
+			}
+
+			context_text = context_text + "\n" + line
+			index = index + 1
+		}
+	}
+
+	if context_text == "Retrieved context:" {
+		return ""
+	}
+
+	return context_text
+}
+
+func maybe_inject_retrieval_context(messages_input, retrieval_provider, retrieval_config_input, run_request) {
+	messages := normalize_array(messages_input)
+	retrieval_config := normalize_dict(retrieval_config_input)
+	retrieval_enabled := normalize_bool(dict_get_or(retrieval_config, "enabled", false), false)
+	provider_configured := type(retrieval_provider) == "dict"
+	query_text := normalize_string(dict_get_or(retrieval_config, "query_text", dict_get_or(run_request, "input", "")), "")
+	max_documents := normalize_non_negative_int(dict_get_or(retrieval_config, "max_documents", dict_get_or(retrieval_config, "top_k", 3)), 3)
+
+	default_state := {
+		"enabled": retrieval_enabled,
+		"provider_configured": provider_configured,
+		"applied": false,
+		"query_text": query_text,
+		"result": {},
+		"context_message": "",
+		"reason": "disabled"
+	}
+
+	if retrieval_enabled == false {
+		return {
+			"messages": messages,
+			"state": default_state
+		}
+	}
+
+	if provider_configured == false {
+		state := clone_value(default_state)
+		state["reason"] := "provider_missing"
+		return {
+			"messages": messages,
+			"state": state
+		}
+	}
+
+	if query_text == "" {
+		state := clone_value(default_state)
+		state["reason"] := "query_missing"
+		return {
+			"messages": messages,
+			"state": state
+		}
+	}
+
+	retrieval_result := retrieval_provider_retrieve(retrieval_provider, {
+		"query_text": query_text,
+		"top_k": max_documents,
+		"scope": normalize_dict(dict_get_or(retrieval_config, "scope", {})),
+		"metadata": normalize_dict(dict_get_or(retrieval_config, "metadata", {}))
+	}, {
+		"source": "runner.pre_model"
+	})
+	retrieval_result_map := normalize_dict(retrieval_result)
+	retrieval_context := normalize_dict(dict_get_or(retrieval_result_map, "context", {}))
+	retrieval_documents := normalize_array(dict_get_or(retrieval_context, "documents", []))
+
+	if len(retrieval_documents) == 0 {
+		retrieve_fn := dict_get_or(retrieval_provider, "retrieve_fn", null)
+		if type(retrieve_fn) == "function" {
+			// Compatibility fallback: preserve raw provider payload when wrapper normalization omits documents.
+			raw_result := retrieve_fn(retrieval_provider, {
+				"query_text": query_text,
+				"top_k": max_documents,
+				"scope": normalize_dict(dict_get_or(retrieval_config, "scope", {})),
+				"metadata": normalize_dict(dict_get_or(retrieval_config, "metadata", {}))
+			}, {
+				"source": "runner.pre_model.raw_fallback"
+			})
+			raw_result_map := normalize_dict(raw_result)
+			raw_context := normalize_dict(dict_get_or(raw_result_map, "context", {}))
+			raw_documents := normalize_array(dict_get_or(raw_context, "documents", dict_get_or(raw_result_map, "documents", [])))
+			raw_citations := normalize_array(dict_get_or(raw_context, "citations", dict_get_or(raw_result_map, "citations", [])))
+			raw_summary := normalize_string(dict_get_or(raw_context, "summary", dict_get_or(raw_result_map, "summary", "")), "")
+
+			if len(raw_documents) > 0 || raw_summary != "" {
+				retrieval_result_map = {
+					"ok": true,
+					"query": normalize_dict(dict_get_or(retrieval_result_map, "query", {})),
+					"context": {
+						"context_id": normalize_string(dict_get_or(raw_context, "context_id", "ctx-raw"), "ctx-raw"),
+						"summary": raw_summary,
+						"documents": raw_documents,
+						"citations": raw_citations
+					},
+					"documents": raw_documents,
+					"citations": raw_citations,
+					"count": normalize_non_negative_int(dict_get_or(raw_result_map, "count", len(raw_documents)), len(raw_documents)),
+					"metadata": normalize_dict(dict_get_or(retrieval_result_map, "metadata", {}))
+				}
+			}
+		}
+	}
+
+	if dict_get_or(retrieval_result_map, "ok", false) == false {
+		state := clone_value(default_state)
+		state["reason"] := "provider_error"
+		state["result"] := retrieval_result_map
+		return {
+			"messages": messages,
+			"state": state
+		}
+	}
+
+	context_message := build_retrieval_context_message(retrieval_result_map, max_documents)
+	if context_message == "" {
+		state := clone_value(default_state)
+		state["reason"] := "empty_context"
+		state["result"] := retrieval_result_map
+		return {
+			"messages": messages,
+			"state": state
+		}
+	}
+
+	injected_messages := []
+	index := 0
+	total := len(messages)
+	while index < total {
+		injected_messages = push(injected_messages, messages[index])
+		index = index + 1
+	}
+
+	injected_messages = push(injected_messages, create_agent_message("system", context_message, {
+		"source": "retrieval.context"
+	}))
+
+	return {
+		"messages": injected_messages,
+		"state": {
+			"enabled": retrieval_enabled,
+			"provider_configured": provider_configured,
+			"applied": true,
+			"query_text": query_text,
+			"result": retrieval_result_map,
+			"context_message": context_message,
+			"reason": "applied"
+		}
+	}
+}
+
+func normalize_retrieval_citation_reference(citation_input, index_input) {
+	citation := normalize_dict(citation_input)
+	metadata := normalize_dict(dict_get_or(citation, "metadata", {}))
+	index_value := normalize_non_negative_int(index_input, 0)
+
+	return {
+		"citation_id": normalize_string(dict_get_or(citation, "citation_id", "citation-" + to_string(index_value + 1)), "citation-" + to_string(index_value + 1)),
+		"document_id": normalize_string(dict_get_or(citation, "document_id", ""), ""),
+		"path": normalize_string(dict_get_or(metadata, "path", dict_get_or(metadata, "source_path", "")), ""),
+		"score": dict_get_or(citation, "score", 0),
+		"span": normalize_string(dict_get_or(citation, "span", ""), ""),
+		"metadata": clone_value(metadata)
+	}
+}
+
+func extract_retrieval_citation_references(retrieval_state_input) {
+	retrieval_state := normalize_dict(retrieval_state_input)
+	retrieval_result := normalize_dict(dict_get_or(retrieval_state, "result", {}))
+	citations := normalize_array(dict_get_or(retrieval_result, "citations", dict_get_or(normalize_dict(dict_get_or(retrieval_result, "context", {})), "citations", [])))
+	normalized := []
+
+	index := 0
+	total := len(citations)
+	while index < total {
+		normalized = push(normalized, normalize_retrieval_citation_reference(citations[index], index))
+		index = index + 1
+	}
+
+	if len(normalized) == 0 {
+		context_map := normalize_dict(dict_get_or(retrieval_result, "context", {}))
+		documents := normalize_array(dict_get_or(context_map, "documents", dict_get_or(retrieval_result, "documents", [])))
+
+		doc_index := 0
+		doc_total := len(documents)
+		while doc_index < doc_total {
+			document := normalize_dict(documents[doc_index])
+			document_id := normalize_string(dict_get_or(document, "document_id", ""), "")
+			document_metadata := normalize_dict(dict_get_or(document, "metadata", {}))
+
+			normalized = push(normalized, {
+				"citation_id": normalize_string(dict_get_or(document_metadata, "citation_id", "citation-doc-" + to_string(doc_index + 1)), "citation-doc-" + to_string(doc_index + 1)),
+				"document_id": document_id,
+				"path": normalize_string(dict_get_or(document_metadata, "path", dict_get_or(document, "source", "")), ""),
+				"score": dict_get_or(document, "score", 0),
+				"span": "",
+				"metadata": clone_value(document_metadata)
+			})
+
+			doc_index = doc_index + 1
+		}
+	}
+
+	return normalized
+}
+
+func with_retrieval_citation_metadata(retrieval_state_input, citations_input) {
+	retrieval_state := normalize_dict(retrieval_state_input)
+	citations := normalize_array(citations_input)
+
+	return {
+		"enabled": normalize_bool(dict_get_or(retrieval_state, "enabled", false), false),
+		"provider_configured": normalize_bool(dict_get_or(retrieval_state, "provider_configured", false), false),
+		"applied": normalize_bool(dict_get_or(retrieval_state, "applied", false), false),
+		"query_text": normalize_string(dict_get_or(retrieval_state, "query_text", ""), ""),
+		"result": normalize_dict(dict_get_or(retrieval_state, "result", {})),
+		"context_message": normalize_string(dict_get_or(retrieval_state, "context_message", ""), ""),
+		"reason": normalize_string(dict_get_or(retrieval_state, "reason", "unknown"), "unknown"),
+		"citations": citations,
+		"citation_count": len(citations)
+	}
+}
+
+func restore_session_run_state(session_store, session_id) {
+	if type(session_store) != "dict" || normalize_string(session_id, "") == "" {
+		return {
+			"ok": false,
+			"skipped": true,
+			"run_state": {}
+		}
+	}
+
+	result := session_store_get_run_state(session_store, session_id, {
+		"source": "runner"
+	})
+	result_map := normalize_dict(result)
+
+	if dict_get_or(result_map, "ok", false) {
+		return {
+			"ok": true,
+			"skipped": false,
+			"run_state": normalize_dict(dict_get_or(result_map, "run_state", {}))
+		}
+	}
+
+	return {
+		"ok": false,
+		"skipped": false,
+		"run_state": {}
+	}
+}
+
+func persist_session_run_state(session_store, session_id, run_state_input, options_input) {
+	if type(session_store) != "dict" || normalize_string(session_id, "") == "" {
+		return {
+			"ok": false,
+			"skipped": true
+		}
+	}
+
+	result := session_store_save_run_state(session_store, session_id, normalize_dict(run_state_input), normalize_dict(options_input))
+	result_map := normalize_dict(result)
+
+	return {
+		"ok": dict_get_or(result_map, "ok", false),
+		"skipped": false,
+		"run_state": normalize_dict(dict_get_or(result_map, "run_state", {}))
+	}
+}
+
+func persist_memory_output(memory_store, session_id, output_text, run_id, agent_id, step_id) {
+	if type(memory_store) != "dict" || normalize_string(session_id, "") == "" || normalize_string(output_text, "") == "" {
+		return {
+			"ok": false,
+			"skipped": true
+		}
+	}
+
+	result := memory_store_write(memory_store, {
+		"scope_kind": "session",
+		"scope_id": session_id,
+		"data_class": "general",
+		"content": output_text,
+		"source": "runner.final_output",
+		"metadata": {
+			"run_id": normalize_string(run_id, ""),
+			"agent_id": normalize_string(agent_id, ""),
+			"step_id": normalize_string(step_id, "")
+		}
+	})
+
+	result_map := normalize_dict(result)
+	return {
+		"ok": dict_get_or(result_map, "ok", false),
+		"skipped": false,
+		"entry": dict_get_or(result_map, "entry", null)
+	}
+}
+
+func persist_output_artifact(artifact_store, output_text, run_id, session_id, agent_id, step_id, retrieval_citations_input) {
+	if type(artifact_store) != "dict" || normalize_string(output_text, "") == "" {
+		return {
+			"ok": false,
+			"skipped": true,
+			"artifact": null
+		}
+	}
+
+	retrieval_citations := normalize_array(retrieval_citations_input)
+	citation_refs_text := ""
+
+	index := 0
+	total := len(retrieval_citations)
+	while index < total {
+		citation := normalize_dict(retrieval_citations[index])
+		citation_ref := normalize_string(dict_get_or(citation, "citation_id", ""), "") + "|" + normalize_string(dict_get_or(citation, "document_id", ""), "") + "|" + normalize_string(dict_get_or(citation, "path", ""), "") + "|" + to_string(dict_get_or(citation, "score", 0))
+		if citation_refs_text == "" {
+			citation_refs_text = citation_ref
+		} else {
+			citation_refs_text = citation_refs_text + "\n" + citation_ref
+		}
+		index = index + 1
+	}
+
+	result := artifact_store_create(artifact_store, {
+		"artifact_kind": "markdown",
+		"title": "Run output",
+		"content": output_text,
+		"media_type": "text/markdown",
+		"producer_run_id": normalize_string(run_id, ""),
+		"producer_step_id": normalize_string(step_id, ""),
+		"producer_tool_name": "runner.final_output",
+		"metadata": {
+			"source": "runner.final_output",
+			"session_id": normalize_string(session_id, ""),
+			"agent_id": normalize_string(agent_id, ""),
+			"retrieval_citation_count": len(retrieval_citations),
+			"retrieval_citation_refs": citation_refs_text
+		}
+	})
+
+	result_map := normalize_dict(result)
+	return {
+		"ok": dict_get_or(result_map, "ok", false),
+		"skipped": false,
+		"artifact": dict_get_or(result_map, "artifact", null),
+		"result": result_map
+	}
+}
+
+func extract_requested_tool_names(run_request) {
+	run_request_map := normalize_dict(run_request)
+	requested_tools := normalize_array(dict_get_or(run_request_map, "requested_tools", dict_get_or(dict_get_or(run_request_map, "metadata", {}), "requested_tools", [])))
+	requested_names := []
+
+	index := 0
+	total := len(requested_tools)
+	while index < total {
+		entry := requested_tools[index]
+		if type(entry) == "string" {
+			tool_name := normalize_string(entry, "")
+			if tool_name != "" {
+				requested_names = push(requested_names, tool_name)
+			}
+		}
+
+		if type(entry) == "dict" {
+			tool_name := normalize_string(dict_get_or(entry, "name", dict_get_or(entry, "tool_name", "")), "")
+			if tool_name != "" {
+				requested_names = push(requested_names, tool_name)
+			}
+		}
+
+		index = index + 1
+	}
+
+	return requested_names
+}
+
+func preflight_requested_tools(tool_registry, requested_tool_names) {
+	names := normalize_array(requested_tool_names)
+	if len(names) == 0 {
+		return {
+			"ok": true,
+			"requested_tool_names": names
+		}
+	}
+
+	if type(tool_registry) != "dict" {
+		first_name := normalize_string(names[0], "")
+		return {
+			"ok": false,
+			"requested_tool_names": names,
+			"error": create_agent_error("tool_not_found", "Requested tool is not available in the registry.", {
+				"tool_name": first_name,
+				"details": {
+					"tool_name": first_name
+				}
+			})
+		}
+	}
+
+	index := 0
+	total := len(names)
+	while index < total {
+		tool_name := normalize_string(names[index], "")
+		resolved := resolve_registry_tool(tool_registry, tool_name)
+		if dict_get_or(resolved, "ok", false) == false {
+			return {
+				"ok": false,
+				"requested_tool_names": names,
+				"error": dict_get_or(resolved, "error", create_agent_error("tool_not_found", "Requested tool is not available in the registry.", {
+					"tool_name": tool_name,
+					"details": {
+						"tool_name": tool_name
+					}
+				}))
+			}
+		}
+		index = index + 1
+	}
+
+	return {
+		"ok": true,
+		"requested_tool_names": names
+	}
+}
+
+func run_agent_impl(runner, agent, run_request_input, options) {
+	runner_map := normalize_dict(runner)
+	agent_map := normalize_dict(agent)
+	options_map := normalize_dict(options)
+	run_request := as_run_request(run_request_input)
+
+	validation := validate_agent_config(agent_map)
+	if dict_get_or(validation, "ok", false) == false {
+		error_payload := create_agent_error("invalid_config", "Agent configuration is invalid.", {
+			"details": {
+				"errors": dict_get_or(validation, "errors", [])
+			}
+		})
+		return create_runner_error_result("failed", error_payload, [], {
+			"validation_errors": dict_get_or(validation, "errors", [])
+		})
+	}
+
+	ai_adapter := dict_get_or(runner_map, "ai_adapter", null)
+	if type(ai_adapter) != "dict" {
+		error_payload := create_agent_error("invalid_config", "Runner requires an ai_adapter configuration.", {})
+		return create_runner_error_result("failed", error_payload, [], {})
+	}
+
+	context := create_agent_context(agent_map, run_request, options_map)
+	run_id := normalize_string(dict_get_or(run_request, "run_id", ""), "")
+	session_id := normalize_string(dict_get_or(run_request, "session_id", ""), "")
+	agent_id := normalize_string(dict_get_or(agent_map, "id", ""), "")
+	max_iterations := normalize_non_negative_int(dict_get_or(options_map, "max_iterations", dict_get_or(run_request, "max_iterations", dict_get_or(agent_map, "max_iterations", 8))), 8)
+	if max_iterations <= 0 {
+		max_iterations = 1
+	}
+	cancellation_token := normalize_cancellation_token(dict_get_or(options_map, "cancellation_token", dict_get_or(run_request, "cancellation_token", {})))
+	retry_policy := resolve_retry_policy(options_map, run_request, agent_map)
+	tool_registry := resolve_tool_registry(runner_map, options_map, run_request)
+	tool_approval_policy := resolve_tool_approval_policy(options_map, run_request, agent_map)
+	tool_approval_provider := resolve_tool_approval_provider(runner_map, options_map, run_request)
+	tool_output_sanitizer := resolve_tool_output_sanitizer(options_map, run_request)
+	session_store := resolve_session_store(runner_map, options_map, run_request)
+	memory_store := resolve_memory_store(runner_map, options_map, run_request)
+	artifact_store := resolve_artifact_store(runner_map, options_map, run_request)
+	budget_policy := resolve_budget_policy(runner_map, options_map, run_request, agent_map)
+	budget_usage := initialize_budget_usage(run_id, options_map, run_request)
+	budget_checks := []
+	timeout_ms := resolve_timeout_ms(options_map, run_request, agent_map)
+	timeout_started_ms := 0
+	timeout_checks := []
+	retrieval_provider := resolve_retrieval_provider(runner_map, options_map, run_request)
+	retrieval_config := resolve_retrieval_config(agent_map, run_request, options_map)
+	handoff_registry := resolve_handoff_registry(runner_map, options_map, run_request)
+	handoff_request_config := resolve_explicit_handoff_request(run_request, options_map, agent_map, handoff_registry)
+	if dict_get_or(handoff_request_config, "enabled", false) == false {
+		run_request_metadata := normalize_dict(dict_get_or(run_request, "metadata", {}))
+		is_handoff_child_run := normalize_text(dict_get_or(run_request_metadata, "handoff_parent_run_id", ""), "") != ""
+		registry_keys := keys(handoff_registry)
+		if is_handoff_child_run == false && len(registry_keys) == 1 {
+			auto_target_agent_id := ""
+			for candidate_key in registry_keys {
+				candidate_target_agent := normalize_dict(handoff_registry[candidate_key])
+				auto_target_agent_id = normalize_text(dict_get_or(candidate_target_agent, "id", ""), "")
+				if auto_target_agent_id == "" {
+					auto_target_agent_id = trim(to_string(candidate_key))
+				}
+				break
+			}
+
+			if auto_target_agent_id != "" {
+				handoff_request_config = {
+					"enabled": true,
+					"target_agent_id": auto_target_agent_id,
+					"reason": "Auto-selected single configured handoff target.",
+					"request_id": "handoff-request"
+				}
+			}
+		}
+	}
+	retrieval_state := {
+		"enabled": normalize_bool(dict_get_or(retrieval_config, "enabled", false), false),
+		"provider_configured": type(retrieval_provider) == "dict",
+		"applied": false,
+		"query_text": normalize_string(dict_get_or(retrieval_config, "query_text", dict_get_or(run_request, "input", "")), ""),
+		"result": {},
+		"context_message": "",
+		"reason": "disabled"
+	}
+	session_store_results := []
+	memory_store_results := []
+	artifact_store_results := []
+	artifacts := []
+	session_restore_result := restore_session_run_state(session_store, session_id)
+	restored_session_state := normalize_dict(dict_get_or(session_restore_result, "run_state", {}))
+ 
+	if type(context) == "dict" {
+		context["session_restore"] := session_restore_result
+		context["restored_session_state"] := restored_session_state
+	}
+
+	events := []
+	runtime_services := dict_get_or(run_request, "runtime_services", {})
+	run_started := create_agent_event("run_started", {
+		"input": dict_get_or(run_request, "input", "")
+	}, {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"runtime_services": runtime_services
+	})
+	events = push(events, run_started)
+	runtime_services = dict_get_or(run_started, "runtime_services", runtime_services)
+	timeout_started_ms = runtime_now_ms(runtime_services)
+
+	run_started_state_result := persist_session_run_state(session_store, session_id, {
+		"run_id": run_id,
+		"stage": "run_started",
+		"events_count": len(events),
+		"steps_count": 0,
+		"restored_session_state": restored_session_state
+	}, {
+		"source": "runner",
+		"stage": "run_started"
+	})
+	session_store_results = append_lifecycle_result(session_store_results, "run_started", run_started_state_result)
+
+	pre_model_elapsed_ms := current_elapsed_ms(timeout_started_ms, runtime_services)
+	pre_model_timeout := evaluate_timeout_boundary("before_model", timeout_ms, pre_model_elapsed_ms)
+	timeout_checks = push(timeout_checks, pre_model_timeout)
+	budget_usage = with_elapsed_budget_usage(budget_usage, pre_model_elapsed_ms)
+	if dict_get_or(pre_model_timeout, "exceeded", false) {
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": "timeout"
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": "",
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		timeout_failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "timeout_before_model",
+			"events_count": len(events),
+			"steps_count": 0,
+			"elapsed_ms": pre_model_elapsed_ms,
+			"timeout_ms": timeout_ms
+		}, {
+			"source": "runner",
+			"stage": "timeout_before_model"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "timeout_before_model", timeout_failed_state_result)
+
+		return create_timeout_result("before_model", pre_model_timeout, [], events, context, retrieval_state, create_retry_counters(retry_policy, 0, 0, 0, 0), session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_checks)
+	}
+
+	pre_model_budget := evaluate_budget_limits(budget_policy, budget_usage, {
+		"metadata": {
+			"stage": "before_model"
+		}
+	})
+	budget_checks = append_budget_check_result(budget_checks, "before_model", pre_model_budget)
+	budget_updated_before_model := create_agent_event("budget_updated", {
+		"stage": "before_model",
+		"usage": normalize_dict(dict_get_or(budget_usage, "counters", {})),
+		"evaluation": pre_model_budget
+	}, {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"step_id": "",
+		"runtime_services": runtime_services
+	})
+	events = push(events, budget_updated_before_model)
+	runtime_services = dict_get_or(budget_updated_before_model, "runtime_services", runtime_services)
+	if budget_check_passed(pre_model_budget) == false {
+		error_payload := build_budget_exceeded_error("before_model", pre_model_budget)
+		budget_exceeded_before_model := create_agent_event("budget_exceeded", {
+			"stage": "before_model",
+			"usage": normalize_dict(dict_get_or(budget_usage, "counters", {})),
+			"evaluation": pre_model_budget,
+			"error_kind": normalize_string(dict_get_or(error_payload, "kind", "budget_exceeded"), "budget_exceeded")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": "",
+			"runtime_services": runtime_services
+		})
+		events = push(events, budget_exceeded_before_model)
+		runtime_services = dict_get_or(budget_exceeded_before_model, "runtime_services", runtime_services)
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": dict_get_or(error_payload, "kind", "budget_exceeded")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": "",
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		budget_failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "budget_exceeded_before_model",
+			"events_count": len(events),
+			"steps_count": 0
+		}, {
+			"source": "runner",
+			"stage": "budget_exceeded_before_model"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "budget_exceeded_before_model", budget_failed_state_result)
+
+		return create_budget_exceeded_result("before_model", pre_model_budget, [], events, context, retrieval_state, create_retry_counters(retry_policy, 0, 0, 0, 0), session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks)
+	}
+
+	if cancellation_requested(cancellation_token, "before_model", {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"events_count": len(events),
+		"steps_count": 0
+	}) {
+		cancelled_event_result := push_cancelled_event(events, run_id, agent_id, session_id, "", "before_model", runtime_services)
+		cancelled_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "cancelled_before_model",
+			"cancelled_stage": "before_model",
+			"events_count": len(dict_get_or(cancelled_event_result, "events", events)),
+			"steps_count": 0
+		}, {
+			"source": "runner",
+			"stage": "cancelled_before_model"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "cancelled_before_model", cancelled_state_result)
+
+		return create_runner_cancelled_result("before_model", [], {
+			"events": dict_get_or(cancelled_event_result, "events", events),
+			"context": context,
+			"retrieval": retrieval_state,
+			"retry_counters": create_retry_counters(retry_policy, 0, 0, 0, 0),
+			"session_store": {
+				"restore": session_restore_result,
+				"writes": session_store_results
+			},
+			"memory_store_writes": memory_store_results,
+			"artifact_store_writes": artifact_store_results,
+			"budget": {
+				"policy": budget_policy,
+				"usage": budget_usage,
+				"checks": budget_checks
+			}
+		})
+	}
+
+	requested_tool_names := extract_requested_tool_names(run_request)
+	tool_preflight := preflight_requested_tools(tool_registry, requested_tool_names)
+	if dict_get_or(tool_preflight, "ok", false) == false {
+		error_payload := dict_get_or(tool_preflight, "error", create_agent_error("tool_not_found", "Requested tool is not available in the registry.", {}))
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": dict_get_or(error_payload, "kind", "tool_not_found")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": "",
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "failed_preflight",
+			"error_kind": dict_get_or(error_payload, "kind", "tool_not_found"),
+			"events_count": len(events),
+			"steps_count": 0
+		}, {
+			"source": "runner",
+			"stage": "failed_preflight"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "failed_preflight", failed_state_result)
+
+		return create_runner_error_result("failed", error_payload, [], {
+			"events": events,
+			"context": context,
+			"retrieval": retrieval_state,
+			"requested_tool_names": dict_get_or(tool_preflight, "requested_tool_names", []),
+			"retry_counters": create_retry_counters(retry_policy, 0, 0, 0, 0),
+			"session_store": {
+				"restore": session_restore_result,
+				"writes": session_store_results
+			},
+			"memory_store_writes": memory_store_results,
+			"artifact_store_writes": artifact_store_results,
+			"budget": {
+				"policy": budget_policy,
+				"usage": budget_usage,
+				"checks": budget_checks
+			}
+		})
+	}
+
+	messages := build_model_messages(agent_map, run_request)
+	retrieval_injection := maybe_inject_retrieval_context(messages, retrieval_provider, retrieval_config, run_request)
+	messages = normalize_array(dict_get_or(retrieval_injection, "messages", messages))
+	retrieval_state = normalize_dict(dict_get_or(retrieval_injection, "state", retrieval_state))
+	retrieval_citations := extract_retrieval_citation_references(retrieval_state)
+	model_options := normalize_dict(dict_get_or(options_map, "model_options", {}))
+	request_options := build_ai_request_options(agent_map, model_options)
+	stream_enabled := resolve_stream_enabled(options_map, run_request, agent_map)
+	stream_events := []
+
+	steps := []
+	model_step := create_agent_step("model", "Model request dispatched.", {
+		"messages_count": len(messages)
+	}, {
+		"runtime_services": runtime_services
+	})
+	steps = push(steps, model_step)
+	budget_usage = increment_budget_usage(budget_usage, {
+		"steps": 1
+	})
+	runtime_services = dict_get_or(dict_get_or(model_step, "metadata", {}), "runtime_services", runtime_services)
+
+	model_request_started := create_agent_event("model_request_started", {
+		"step_id": dict_get_or(model_step, "step_id", ""),
+		"messages_count": len(messages)
+	}, {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"step_id": dict_get_or(model_step, "step_id", ""),
+		"runtime_services": runtime_services
+	})
+	events = push(events, model_request_started)
+	runtime_services = dict_get_or(model_request_started, "runtime_services", runtime_services)
+
+	model_execution := {}
+	if stream_enabled {
+		try {
+			model_execution = execute_model_with_stream(ai_adapter, messages, request_options, run_id, agent_id, session_id, dict_get_or(model_step, "step_id", ""), runtime_services, options_map)
+		} except err {
+			model_execution = {
+				"model_result": {
+					"ok": false,
+					"error": create_agent_error("model_error", "Streaming model execution raised an exception.", {
+						"details": {
+							"error": to_string(err)
+						}
+					})
+				},
+				"model_attempts": 1,
+				"model_retries_used": 0,
+				"stream_events": stream_events,
+				"runtime_services": runtime_services
+			}
+		}
+		stream_events = normalize_array(dict_get_or(model_execution, "stream_events", []))
+		runtime_services = dict_get_or(model_execution, "runtime_services", runtime_services)
+	} else {
+		model_execution = execute_model_with_retry_policy(ai_adapter, messages, request_options, retry_policy)
+	}
+	model_result := dict_get_or(model_execution, "model_result", {
+		"ok": false,
+		"error": create_agent_error("model_error", "Model request failed.", {})
+	})
+	retry_counters := create_retry_counters(retry_policy, normalize_non_negative_int(dict_get_or(model_execution, "model_attempts", 1), 1), normalize_non_negative_int(dict_get_or(model_execution, "model_retries_used", 0), 0), 0, 0)
+	budget_usage = increment_budget_usage(budget_usage, build_model_budget_delta(model_result, dict_get_or(retry_counters, "model_attempts", 0)))
+	if dict_get_or(model_result, "ok", false) {
+		model_request_completed := create_agent_event("model_request_completed", {
+			"step_id": dict_get_or(model_step, "step_id", ""),
+			"model_attempts": dict_get_or(retry_counters, "model_attempts", 1),
+			"model_retries_used": dict_get_or(retry_counters, "model_retries_used", 0),
+			"usage": normalize_dict(dict_get_or(model_result, "usage", {}))
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(model_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, model_request_completed)
+		runtime_services = dict_get_or(model_request_completed, "runtime_services", runtime_services)
+	} else {
+		model_error := normalize_dict(dict_get_or(model_result, "error", {}))
+		model_request_failed := create_agent_event("model_request_failed", {
+			"step_id": dict_get_or(model_step, "step_id", ""),
+			"model_attempts": dict_get_or(retry_counters, "model_attempts", 1),
+			"model_retries_used": dict_get_or(retry_counters, "model_retries_used", 0),
+			"error_kind": normalize_string(dict_get_or(model_error, "kind", "model_error"), "model_error")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(model_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, model_request_failed)
+		runtime_services = dict_get_or(model_request_failed, "runtime_services", runtime_services)
+	}
+
+	if type(context) == "dict" {
+		context["stream"] := {
+			"enabled": stream_enabled,
+			"events": stream_events,
+			"events_count": len(stream_events)
+		}
+	}
+	post_model_elapsed_ms := current_elapsed_ms(timeout_started_ms, runtime_services)
+	post_model_timeout := evaluate_timeout_boundary("after_model", timeout_ms, post_model_elapsed_ms)
+	timeout_checks = push(timeout_checks, post_model_timeout)
+	budget_usage = with_elapsed_budget_usage(budget_usage, post_model_elapsed_ms)
+	if dict_get_or(post_model_timeout, "exceeded", false) {
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": "timeout"
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(model_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		timeout_failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "timeout_after_model",
+			"events_count": len(events),
+			"steps_count": len(steps),
+			"elapsed_ms": post_model_elapsed_ms,
+			"timeout_ms": timeout_ms
+		}, {
+			"source": "runner",
+			"stage": "timeout_after_model"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "timeout_after_model", timeout_failed_state_result)
+
+		return create_timeout_result("after_model", post_model_timeout, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_checks)
+	}
+	post_model_budget := evaluate_budget_limits(budget_policy, budget_usage, {
+		"metadata": {
+			"stage": "after_model"
+		}
+	})
+	budget_checks = append_budget_check_result(budget_checks, "after_model", post_model_budget)
+	budget_updated_after_model := create_agent_event("budget_updated", {
+		"stage": "after_model",
+		"usage": normalize_dict(dict_get_or(budget_usage, "counters", {})),
+		"evaluation": post_model_budget
+	}, {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"step_id": dict_get_or(model_step, "step_id", ""),
+		"runtime_services": runtime_services
+	})
+	events = push(events, budget_updated_after_model)
+	runtime_services = dict_get_or(budget_updated_after_model, "runtime_services", runtime_services)
+	if budget_check_passed(post_model_budget) == false {
+		error_payload := build_budget_exceeded_error("after_model", post_model_budget)
+		budget_exceeded_after_model := create_agent_event("budget_exceeded", {
+			"stage": "after_model",
+			"usage": normalize_dict(dict_get_or(budget_usage, "counters", {})),
+			"evaluation": post_model_budget,
+			"error_kind": normalize_string(dict_get_or(error_payload, "kind", "budget_exceeded"), "budget_exceeded")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(model_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, budget_exceeded_after_model)
+		runtime_services = dict_get_or(budget_exceeded_after_model, "runtime_services", runtime_services)
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": dict_get_or(error_payload, "kind", "budget_exceeded")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(model_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		budget_failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "budget_exceeded_after_model",
+			"events_count": len(events),
+			"steps_count": len(steps)
+		}, {
+			"source": "runner",
+			"stage": "budget_exceeded_after_model"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "budget_exceeded_after_model", budget_failed_state_result)
+
+		return create_budget_exceeded_result("after_model", post_model_budget, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks)
+	}
+	if cancellation_requested(cancellation_token, "after_model", {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"steps_count": len(steps),
+		"events_count": len(events),
+		"model_result_ok": dict_get_or(model_result, "ok", false),
+		"model_attempts": dict_get_or(retry_counters, "model_attempts", 0)
+	}) {
+		cancelled_event_result := push_cancelled_event(events, run_id, agent_id, session_id, dict_get_or(model_step, "step_id", ""), "after_model", runtime_services)
+		cancelled_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "cancelled_after_model",
+			"cancelled_stage": "after_model",
+			"events_count": len(dict_get_or(cancelled_event_result, "events", events)),
+			"steps_count": len(steps),
+			"model_result_ok": dict_get_or(model_result, "ok", false)
+		}, {
+			"source": "runner",
+			"stage": "cancelled_after_model"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "cancelled_after_model", cancelled_state_result)
+
+		return create_runner_cancelled_result("after_model", steps, {
+			"events": dict_get_or(cancelled_event_result, "events", events),
+			"context": context,
+			"retrieval": retrieval_state,
+			"model_result": model_result,
+			"retry_counters": retry_counters,
+			"session_store": {
+				"restore": session_restore_result,
+				"writes": session_store_results
+			},
+			"memory_store_writes": memory_store_results,
+			"artifact_store_writes": artifact_store_results,
+			"budget": {
+				"policy": budget_policy,
+				"usage": budget_usage,
+				"checks": budget_checks
+			}
+		})
+	}
+
+	if dict_get_or(model_result, "ok", false) == false {
+		error_payload := dict_get_or(model_result, "error", create_agent_error("model_error", "Model request failed.", {}))
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": dict_get_or(error_payload, "kind", "internal_error")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(model_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "failed_model",
+			"error_kind": dict_get_or(error_payload, "kind", "model_error"),
+			"events_count": len(events),
+			"steps_count": len(steps),
+			"model_attempts": dict_get_or(retry_counters, "model_attempts", 0)
+		}, {
+			"source": "runner",
+			"stage": "failed_model"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "failed_model", failed_state_result)
+
+		return create_runner_error_result("failed", error_payload, steps, {
+			"events": events,
+			"context": context,
+			"retrieval": retrieval_state,
+			"model_result": model_result,
+			"retry_counters": retry_counters,
+			"session_store": {
+				"restore": session_restore_result,
+				"writes": session_store_results
+			},
+			"memory_store_writes": memory_store_results,
+			"artifact_store_writes": artifact_store_results,
+			"budget": {
+				"policy": budget_policy,
+				"usage": budget_usage,
+				"checks": budget_checks
+			}
+		})
+	}
+
+	if len(steps) >= max_iterations {
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": "internal_error",
+			"stop_reason": "max_iterations"
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(model_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		max_iterations_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "max_iterations_after_model",
+			"events_count": len(events),
+			"steps_count": len(steps),
+			"max_iterations": max_iterations
+		}, {
+			"source": "runner",
+			"stage": "max_iterations_after_model"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "max_iterations_after_model", max_iterations_state_result)
+
+		return create_max_iterations_result("after_model", max_iterations, len(steps), steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_ms, timeout_checks)
+	}
+
+	output_text := normalize_string(dict_get_or(model_result, "output_text", ""), "")
+	tool_call_results := []
+	model_tool_calls := normalize_array(dict_get_or(model_result, "tool_calls", []))
+	tool_call_index := 0
+	while tool_call_index < len(model_tool_calls) {
+		tool_call := normalize_dict(model_tool_calls[tool_call_index])
+		tool_name := normalize_string(dict_get_or(tool_call, "tool_name", dict_get_or(tool_call, "name", "")), "")
+		tool_call_stage := "validate_tool_name"
+
+		try {
+		if tool_name == "" {
+			error_payload := create_agent_error("invalid_request", "Model tool call is missing tool name.", {
+				"details": {
+					"tool_call_index": tool_call_index
+				}
+			})
+			run_failed := create_agent_event("run_failed", {
+				"error_kind": "invalid_request"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(model_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, run_failed)
+
+			return create_runner_error_result("failed", error_payload, steps, {
+				"events": events,
+				"context": context,
+				"retrieval": retrieval_state,
+				"model_result": model_result,
+				"tool_calls": tool_call_results,
+				"retry_counters": retry_counters,
+				"session_store": {
+					"restore": session_restore_result,
+					"writes": session_store_results
+				},
+				"memory_store_writes": memory_store_results,
+				"artifact_store_writes": artifact_store_results,
+				"budget": {
+					"policy": budget_policy,
+					"usage": budget_usage,
+					"checks": budget_checks
+				}
+			})
+		}
+
+		tool_call_stage = "resolve_registry_tool"
+		resolved_tool := resolve_registry_tool(tool_registry, tool_name)
+		if dict_get_or(resolved_tool, "ok", false) == false {
+			error_payload := dict_get_or(resolved_tool, "error", create_agent_error("tool_not_found", "Model requested tool is not available.", {
+				"details": {
+					"tool_name": tool_name
+				}
+			}))
+			run_failed := create_agent_event("run_failed", {
+				"error_kind": normalize_string(dict_get_or(error_payload, "kind", "tool_not_found"), "tool_not_found")
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(model_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, run_failed)
+
+			return create_runner_error_result("failed", error_payload, steps, {
+				"events": events,
+				"context": context,
+				"retrieval": retrieval_state,
+				"model_result": model_result,
+				"tool_calls": tool_call_results,
+				"retry_counters": retry_counters,
+				"session_store": {
+					"restore": session_restore_result,
+					"writes": session_store_results
+				},
+				"memory_store_writes": memory_store_results,
+				"artifact_store_writes": artifact_store_results,
+				"budget": {
+					"policy": budget_policy,
+					"usage": budget_usage,
+					"checks": budget_checks
+				}
+			})
+		}
+
+		tool_call_stage = "create_tool_step"
+		tool_step := create_agent_step("tool_call", "Executing tool call: " + tool_name, {
+			"tool_name": tool_name
+		}, {
+			"runtime_services": runtime_services
+		})
+		steps = push(steps, tool_step)
+		budget_usage = increment_budget_usage(budget_usage, {
+			"steps": 1,
+			"tool_calls": 1
+		})
+		runtime_services = dict_get_or(dict_get_or(tool_step, "metadata", {}), "runtime_services", runtime_services)
+
+		tool_call_stage = "create_tool_execution_context"
+		tool_execution_context := create_tool_execution_context({
+			"run_id": run_id,
+			"session_id": session_id,
+			"agent_id": agent_id,
+			"tool_name": tool_name,
+			"cancellation_token": cancellation_token,
+			"policy_handles": {
+				"approval_policy": tool_approval_policy,
+				"approval_provider": tool_approval_provider,
+				"tool_output_sanitizer": tool_output_sanitizer
+			},
+			"runtime_services": runtime_services
+		})
+		tool_call_stage = "execute_tool"
+		tool_input := normalize_dict(dict_get_or(tool_call, "input", dict_get_or(tool_call, "arguments", {})))
+		tool_execution_result := execute_tool(dict_get_or(resolved_tool, "tool", {}), tool_input, tool_execution_context, {
+			"output_sanitizer": tool_output_sanitizer,
+			"artifact_store": artifact_store
+		})
+		tool_call_stage = "store_tool_call_result"
+		tool_call_results = push(tool_call_results, {
+			"tool_name": tool_name,
+			"input": tool_input,
+			"result": tool_execution_result
+		})
+
+		if dict_get_or(tool_execution_result, "ok", false) == false {
+			error_payload := dict_get_or(tool_execution_result, "error", create_agent_error("tool_execution_failed", "Tool call execution failed.", {
+				"details": {
+					"tool_name": tool_name
+				}
+			}))
+			run_failed := create_agent_event("run_failed", {
+				"error_kind": normalize_string(dict_get_or(error_payload, "kind", "tool_execution_failed"), "tool_execution_failed")
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(tool_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, run_failed)
+
+			return create_runner_error_result("failed", error_payload, steps, {
+				"events": events,
+				"context": context,
+				"retrieval": retrieval_state,
+				"model_result": model_result,
+				"tool_calls": tool_call_results,
+				"retry_counters": retry_counters,
+				"session_store": {
+					"restore": session_restore_result,
+					"writes": session_store_results
+				},
+				"memory_store_writes": memory_store_results,
+				"artifact_store_writes": artifact_store_results,
+				"budget": {
+					"policy": budget_policy,
+					"usage": budget_usage,
+					"checks": budget_checks
+				}
+			})
+		}
+		} except err {
+			error_payload := create_agent_error("internal_error", "Tool call orchestration raised an exception.", {
+				"details": {
+					"tool_name": tool_name,
+					"tool_call_index": tool_call_index,
+					"stage": tool_call_stage,
+					"error": to_string(err)
+				}
+			})
+			run_failed := create_agent_event("run_failed", {
+				"error_kind": "internal_error"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(model_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, run_failed)
+
+			return create_runner_error_result("failed", error_payload, steps, {
+				"events": events,
+				"context": context,
+				"retrieval": retrieval_state,
+				"model_result": model_result,
+				"tool_calls": tool_call_results,
+				"retry_counters": retry_counters,
+				"session_store": {
+					"restore": session_restore_result,
+					"writes": session_store_results
+				},
+				"memory_store_writes": memory_store_results,
+				"artifact_store_writes": artifact_store_results,
+				"budget": {
+					"policy": budget_policy,
+					"usage": budget_usage,
+					"checks": budget_checks
+				}
+			})
+		}
+
+		tool_call_index = tool_call_index + 1
+	}
+
+	run_request_metadata := normalize_dict(dict_get_or(run_request, "metadata", {}))
+	is_handoff_child_run := normalize_text(dict_get_or(run_request_metadata, "handoff_parent_run_id", ""), "") != ""
+	handoff_requested := dict_get_or(handoff_request_config, "enabled", false)
+	auto_single_handoff := false
+	if handoff_requested == false && is_handoff_child_run == false && len(keys(handoff_registry)) == 1 {
+		auto_single_handoff = true
+	}
+	should_run_handoff := handoff_requested
+	if auto_single_handoff {
+		should_run_handoff = true
+	}
+	handoff_metadata := {
+		"requested": should_run_handoff,
+		"executed": false
+	}
+
+	if should_run_handoff {
+		handoff_loop_state := resolve_handoff_loop_state(run_request, options_map, agent_id)
+		handoff_depth := normalize_non_negative_int(dict_get_or(handoff_loop_state, "depth", 0), 0)
+		handoff_max_depth := normalize_non_negative_int(dict_get_or(handoff_loop_state, "max_depth", 3), 3)
+		handoff_visited_targets := normalize_string_array(dict_get_or(handoff_loop_state, "visited_targets", []))
+		next_handoff_depth := handoff_depth + 1
+
+		target_agent_id := normalize_string(dict_get_or(handoff_request_config, "target_agent_id", ""), "")
+		target_agent := {}
+		if handoff_requested {
+			target_resolution := resolve_handoff_target_agent(handoff_registry, target_agent_id)
+
+			if dict_get_or(target_resolution, "ok", false) == false {
+				error_payload := create_agent_error("handoff_failed", "Requested handoff target is not available in the handoff registry.", {
+					"details": {
+						"target_agent_id": target_agent_id
+					}
+				})
+				handoff_failed_event := create_agent_event("handoff_failed", {
+					"target_agent_id": target_agent_id,
+					"request_id": normalize_string(dict_get_or(handoff_request_config, "request_id", "handoff-request"), "handoff-request"),
+					"depth": handoff_depth,
+					"max_depth": handoff_max_depth,
+					"failure_kind": "target_not_found"
+				}, {
+					"run_id": run_id,
+					"agent_id": agent_id,
+					"session_id": session_id,
+					"step_id": dict_get_or(model_step, "step_id", ""),
+					"runtime_services": runtime_services
+				})
+				events = push(events, handoff_failed_event)
+				runtime_services = dict_get_or(handoff_failed_event, "runtime_services", runtime_services)
+				run_failed := create_agent_event("run_failed", {
+					"error_kind": "handoff_failed"
+				}, {
+					"run_id": run_id,
+					"agent_id": agent_id,
+					"session_id": session_id,
+					"step_id": dict_get_or(model_step, "step_id", ""),
+					"runtime_services": runtime_services
+				})
+				events = push(events, run_failed)
+
+				handoff_metadata = {
+					"requested": true,
+					"executed": false,
+					"target_agent_id": target_agent_id
+				}
+
+				return create_runner_error_result("failed", error_payload, steps, {
+					"events": events,
+					"context": context,
+					"retrieval": retrieval_state,
+					"model_result": model_result,
+					"handoff": handoff_metadata,
+					"retry_counters": retry_counters,
+					"session_store": {
+						"restore": session_restore_result,
+						"writes": session_store_results
+					},
+					"memory_store_writes": memory_store_results,
+					"artifact_store_writes": artifact_store_results,
+					"budget": {
+						"policy": budget_policy,
+						"usage": budget_usage,
+						"checks": budget_checks
+					}
+				})
+			}
+
+			target_agent = normalize_dict(dict_get_or(target_resolution, "target_agent", {}))
+		} else {
+			for candidate_id in keys(handoff_registry) {
+				target_agent = normalize_dict(handoff_registry[candidate_id])
+				target_agent_id = normalize_text(dict_get_or(target_agent, "id", ""), "")
+				if target_agent_id == "" {
+					target_agent_id = trim(to_string(candidate_id))
+				}
+				break
+			}
+		}
+
+		if type(target_agent) != "dict" || len(keys(target_agent)) == 0 {
+			error_payload := create_agent_error("handoff_failed", "Requested handoff target is not available in the handoff registry.", {
+				"details": {
+					"target_agent_id": target_agent_id
+				}
+			})
+			handoff_failed_event := create_agent_event("handoff_failed", {
+				"target_agent_id": target_agent_id,
+				"request_id": normalize_string(dict_get_or(handoff_request_config, "request_id", "handoff-request"), "handoff-request"),
+				"depth": handoff_depth,
+				"max_depth": handoff_max_depth,
+				"failure_kind": "target_not_found"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(model_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, handoff_failed_event)
+			runtime_services = dict_get_or(handoff_failed_event, "runtime_services", runtime_services)
+			run_failed := create_agent_event("run_failed", {
+				"error_kind": "handoff_failed"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(model_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, run_failed)
+
+			handoff_metadata = {
+				"requested": true,
+				"executed": false,
+				"target_agent_id": target_agent_id
+			}
+
+			return create_runner_error_result("failed", error_payload, steps, {
+				"events": events,
+				"context": context,
+				"retrieval": retrieval_state,
+				"model_result": model_result,
+				"handoff": handoff_metadata,
+				"retry_counters": retry_counters,
+				"session_store": {
+					"restore": session_restore_result,
+					"writes": session_store_results
+				},
+				"memory_store_writes": memory_store_results,
+				"artifact_store_writes": artifact_store_results,
+				"budget": {
+					"policy": budget_policy,
+					"usage": budget_usage,
+					"checks": budget_checks
+				}
+			})
+		}
+
+		if handoff_depth >= handoff_max_depth {
+			error_payload := create_agent_error("handoff_failed", "Handoff was blocked because max handoff depth was reached.", {
+				"details": {
+					"target_agent_id": target_agent_id,
+					"depth": handoff_depth,
+					"max_depth": handoff_max_depth,
+					"violation": "max_depth_exceeded"
+				}
+			})
+			handoff_failed_event := create_agent_event("handoff_failed", {
+				"target_agent_id": target_agent_id,
+				"request_id": normalize_string(dict_get_or(handoff_request_config, "request_id", "handoff-request"), "handoff-request"),
+				"depth": handoff_depth,
+				"max_depth": handoff_max_depth,
+				"failure_kind": "max_depth_exceeded"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(model_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, handoff_failed_event)
+			runtime_services = dict_get_or(handoff_failed_event, "runtime_services", runtime_services)
+			run_failed := create_agent_event("run_failed", {
+				"error_kind": "handoff_failed"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(model_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, run_failed)
+
+			handoff_metadata = {
+				"requested": true,
+				"executed": false,
+				"target_agent_id": target_agent_id,
+				"loop_state": {
+					"depth": handoff_depth,
+					"max_depth": handoff_max_depth,
+					"visited_targets": handoff_visited_targets
+				}
+			}
+
+			return create_runner_error_result("failed", error_payload, steps, {
+				"events": events,
+				"context": context,
+				"retrieval": retrieval_state,
+				"model_result": model_result,
+				"handoff": handoff_metadata,
+				"retry_counters": retry_counters,
+				"session_store": {
+					"restore": session_restore_result,
+					"writes": session_store_results
+				},
+				"memory_store_writes": memory_store_results,
+				"artifact_store_writes": artifact_store_results,
+				"budget": {
+					"policy": budget_policy,
+					"usage": budget_usage,
+					"checks": budget_checks
+				}
+			})
+		}
+
+		if string_array_contains(handoff_visited_targets, target_agent_id) {
+			error_payload := create_agent_error("handoff_failed", "Handoff loop detected for target agent.", {
+				"details": {
+					"target_agent_id": target_agent_id,
+					"depth": handoff_depth,
+					"max_depth": handoff_max_depth,
+					"visited_targets": handoff_visited_targets,
+					"violation": "loop_detected"
+				}
+			})
+			handoff_failed_event := create_agent_event("handoff_failed", {
+				"target_agent_id": target_agent_id,
+				"request_id": normalize_string(dict_get_or(handoff_request_config, "request_id", "handoff-request"), "handoff-request"),
+				"depth": handoff_depth,
+				"max_depth": handoff_max_depth,
+				"failure_kind": "loop_detected"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(model_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, handoff_failed_event)
+			runtime_services = dict_get_or(handoff_failed_event, "runtime_services", runtime_services)
+			run_failed := create_agent_event("run_failed", {
+				"error_kind": "handoff_failed"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(model_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, run_failed)
+
+			handoff_metadata = {
+				"requested": true,
+				"executed": false,
+				"target_agent_id": target_agent_id,
+				"loop_state": {
+					"depth": handoff_depth,
+					"max_depth": handoff_max_depth,
+					"visited_targets": handoff_visited_targets,
+					"loop_detected": true
+				}
+			}
+
+			return create_runner_error_result("failed", error_payload, steps, {
+				"events": events,
+				"context": context,
+				"retrieval": retrieval_state,
+				"model_result": model_result,
+				"handoff": handoff_metadata,
+				"retry_counters": retry_counters,
+				"session_store": {
+					"restore": session_restore_result,
+					"writes": session_store_results
+				},
+				"memory_store_writes": memory_store_results,
+				"artifact_store_writes": artifact_store_results,
+				"budget": {
+					"policy": budget_policy,
+					"usage": budget_usage,
+					"checks": budget_checks
+				}
+			})
+		}
+
+		target_agent_name := normalize_string(dict_get_or(target_agent, "name", target_agent_id), target_agent_id)
+		next_handoff_visited_targets := clone_value(handoff_visited_targets)
+		if string_array_contains(next_handoff_visited_targets, target_agent_id) == false {
+			next_handoff_visited_targets = push(next_handoff_visited_targets, target_agent_id)
+		}
+
+		handoff_request := create_handoff_request_from_parts(agent_id, normalize_string(dict_get_or(agent_map, "name", ""), ""), {
+			"target_agent_id": target_agent_id,
+			"target_agent_name": target_agent_name,
+			"reason": normalize_string(dict_get_or(handoff_request_config, "reason", ""), "")
+		}, normalize_string(dict_get_or(handoff_request_config, "reason", ""), ""), {
+			"depth": next_handoff_depth,
+			"max_depth": handoff_max_depth,
+			"visited_targets": next_handoff_visited_targets
+		}, {
+			"request_id": normalize_string(dict_get_or(handoff_request_config, "request_id", "handoff-request"), "handoff-request")
+		})
+
+		handoff_step := create_agent_step("handoff", "Executing explicit handoff to target agent.", {
+			"target_agent_id": target_agent_id,
+			"request_id": normalize_string(dict_get_or(handoff_request, "request_id", ""), "")
+		}, {
+			"runtime_services": runtime_services
+		})
+		steps = push(steps, handoff_step)
+		budget_usage = increment_budget_usage(budget_usage, {
+			"steps": 1,
+			"handoffs": 1
+		})
+		runtime_services = dict_get_or(dict_get_or(handoff_step, "metadata", {}), "runtime_services", runtime_services)
+
+		handoff_started := create_agent_event("handoff_started", {
+			"request_id": normalize_string(dict_get_or(handoff_request, "request_id", ""), ""),
+			"source_agent_id": agent_id,
+			"target_agent_id": target_agent_id,
+			"depth": next_handoff_depth,
+			"max_depth": handoff_max_depth
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(handoff_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, handoff_started)
+		runtime_services = dict_get_or(handoff_started, "runtime_services", runtime_services)
+
+		handoff_run_request := create_agent_run_request(output_text, {
+			"run_id": run_id + "-handoff-" + target_agent_id,
+			"session_id": session_id,
+			"metadata": {
+				"handoff_parent_run_id": run_id,
+				"handoff_request_id": normalize_string(dict_get_or(handoff_request, "request_id", ""), ""),
+				"handoff_depth": next_handoff_depth,
+				"handoff_max_depth": handoff_max_depth,
+				"handoff_visited_targets": next_handoff_visited_targets
+			}
+		})
+
+		target_result := run_agent_impl(runner_map, target_agent, handoff_run_request, {
+			"tool_registry": tool_registry,
+			"session_store": session_store,
+			"memory_store": memory_store,
+			"artifact_store": artifact_store,
+			"budget_policy": budget_policy,
+			"retrieval_provider": retrieval_provider,
+			"model_options": model_options,
+			"retry_policy": retry_policy,
+			"max_iterations": max_iterations,
+			"timeout_ms": timeout_ms,
+			"handoff_depth": next_handoff_depth,
+			"handoff_max_depth": handoff_max_depth,
+			"handoff_visited_targets": next_handoff_visited_targets
+		})
+
+		target_status := normalize_string(dict_get_or(target_result, "status", "failed"), "failed")
+		handoff_result_status := "failed"
+		if target_status == "completed" {
+			handoff_result_status = "completed"
+		}
+
+		handoff_result := create_handoff_result({
+			"status": handoff_result_status,
+			"request": handoff_request,
+			"output": dict_get_or(target_result, "output", {}),
+			"error": dict_get_or(target_result, "error", null),
+			"metadata": {
+				"source_run_id": run_id,
+				"target_run_id": normalize_string(dict_get_or(target_result, "run_id", ""), "")
+			}
+		})
+
+		handoff_metadata = {
+			"requested": true,
+			"executed": true,
+			"request": handoff_request,
+			"result": handoff_result,
+			"target_status": target_status,
+			"loop_state": {
+				"depth": next_handoff_depth,
+				"max_depth": handoff_max_depth,
+				"visited_targets": next_handoff_visited_targets
+			}
+		}
+
+		if handoff_result_status == "completed" {
+			handoff_completed := create_agent_event("handoff_completed", {
+				"request_id": normalize_string(dict_get_or(handoff_request, "request_id", ""), ""),
+				"source_agent_id": agent_id,
+				"target_agent_id": target_agent_id,
+				"depth": next_handoff_depth,
+				"max_depth": handoff_max_depth,
+				"target_status": target_status
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(handoff_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, handoff_completed)
+			runtime_services = dict_get_or(handoff_completed, "runtime_services", runtime_services)
+			output_text = normalize_string(dict_get_or(dict_get_or(target_result, "output", {}), "text", output_text), output_text)
+		} else {
+			error_payload := create_agent_error("handoff_failed", "Handoff target run failed to complete successfully.", {
+				"details": {
+					"target_agent_id": target_agent_id,
+					"target_status": target_status
+				}
+			})
+			handoff_failed_event := create_agent_event("handoff_failed", {
+				"request_id": normalize_string(dict_get_or(handoff_request, "request_id", ""), ""),
+				"source_agent_id": agent_id,
+				"target_agent_id": target_agent_id,
+				"depth": next_handoff_depth,
+				"max_depth": handoff_max_depth,
+				"target_status": target_status,
+				"failure_kind": "target_run_failed"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(handoff_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, handoff_failed_event)
+			runtime_services = dict_get_or(handoff_failed_event, "runtime_services", runtime_services)
+			run_failed := create_agent_event("run_failed", {
+				"error_kind": "handoff_failed"
+			}, {
+				"run_id": run_id,
+				"agent_id": agent_id,
+				"session_id": session_id,
+				"step_id": dict_get_or(handoff_step, "step_id", ""),
+				"runtime_services": runtime_services
+			})
+			events = push(events, run_failed)
+
+			return create_runner_error_result("failed", error_payload, steps, {
+				"events": events,
+				"context": context,
+				"retrieval": retrieval_state,
+				"model_result": model_result,
+				"handoff": handoff_metadata,
+				"retry_counters": retry_counters,
+				"session_store": {
+					"restore": session_restore_result,
+					"writes": session_store_results
+				},
+				"memory_store_writes": memory_store_results,
+				"artifact_store_writes": artifact_store_results,
+				"budget": {
+					"policy": budget_policy,
+					"usage": budget_usage,
+					"checks": budget_checks
+				}
+			})
+		}
+	}
+
+	final_step := create_agent_step("final", "Run completed with model output.", {
+		"output_text": output_text
+	}, {
+		"runtime_services": runtime_services
+	})
+	steps = push(steps, final_step)
+	budget_usage = increment_budget_usage(budget_usage, {
+		"steps": 1
+	})
+	runtime_services = dict_get_or(dict_get_or(final_step, "metadata", {}), "runtime_services", runtime_services)
+
+	artifact_write_result := persist_output_artifact(artifact_store, output_text, run_id, session_id, agent_id, dict_get_or(final_step, "step_id", ""), retrieval_citations)
+	artifact_store_results = append_lifecycle_result(artifact_store_results, "final_output", artifact_write_result)
+
+	persisted_artifact := dict_get_or(artifact_write_result, "artifact", null)
+	if type(persisted_artifact) == "dict" {
+		artifact_created_event := create_agent_event("artifact_created", {
+			"artifact_id": normalize_string(dict_get_or(persisted_artifact, "artifact_id", ""), ""),
+			"artifact_kind": normalize_string(dict_get_or(persisted_artifact, "artifact_kind", ""), ""),
+			"artifact_bytes": normalize_non_negative_int(dict_get_or(persisted_artifact, "bytes", 0), 0)
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(final_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, artifact_created_event)
+		runtime_services = dict_get_or(artifact_created_event, "runtime_services", runtime_services)
+
+		artifacts = push(artifacts, persisted_artifact)
+		budget_usage = increment_budget_usage(budget_usage, {
+			"artifact_bytes": normalize_non_negative_int(dict_get_or(persisted_artifact, "bytes", 0), 0)
+		})
+		if len(steps) < max_iterations {
+			artifact_step := create_agent_step("artifact", "Persisted final output artifact.", {
+				"artifact_id": normalize_string(dict_get_or(persisted_artifact, "artifact_id", ""), "")
+			}, {
+				"runtime_services": runtime_services
+			})
+			steps = push(steps, artifact_step)
+			budget_usage = increment_budget_usage(budget_usage, {
+				"steps": 1
+			})
+			runtime_services = dict_get_or(dict_get_or(artifact_step, "metadata", {}), "runtime_services", runtime_services)
+		}
+	}
+
+	post_artifact_elapsed_ms := current_elapsed_ms(timeout_started_ms, runtime_services)
+	post_artifact_timeout := evaluate_timeout_boundary("after_artifact", timeout_ms, post_artifact_elapsed_ms)
+	timeout_checks = push(timeout_checks, post_artifact_timeout)
+	budget_usage = with_elapsed_budget_usage(budget_usage, post_artifact_elapsed_ms)
+	if dict_get_or(post_artifact_timeout, "exceeded", false) {
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": "timeout"
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(final_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		timeout_failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "timeout_after_artifact",
+			"events_count": len(events),
+			"steps_count": len(steps),
+			"elapsed_ms": post_artifact_elapsed_ms,
+			"timeout_ms": timeout_ms
+		}, {
+			"source": "runner",
+			"stage": "timeout_after_artifact"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "timeout_after_artifact", timeout_failed_state_result)
+
+		return create_timeout_result("after_artifact", post_artifact_timeout, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_checks)
+	}
+
+	post_artifact_budget := evaluate_budget_limits(budget_policy, budget_usage, {
+		"metadata": {
+			"stage": "after_artifact"
+		}
+	})
+	budget_checks = append_budget_check_result(budget_checks, "after_artifact", post_artifact_budget)
+	budget_updated_after_artifact := create_agent_event("budget_updated", {
+		"stage": "after_artifact",
+		"usage": normalize_dict(dict_get_or(budget_usage, "counters", {})),
+		"evaluation": post_artifact_budget
+	}, {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"step_id": dict_get_or(final_step, "step_id", ""),
+		"runtime_services": runtime_services
+	})
+	events = push(events, budget_updated_after_artifact)
+	runtime_services = dict_get_or(budget_updated_after_artifact, "runtime_services", runtime_services)
+	if budget_check_passed(post_artifact_budget) == false {
+		error_payload := build_budget_exceeded_error("after_artifact", post_artifact_budget)
+		budget_exceeded_after_artifact := create_agent_event("budget_exceeded", {
+			"stage": "after_artifact",
+			"usage": normalize_dict(dict_get_or(budget_usage, "counters", {})),
+			"evaluation": post_artifact_budget,
+			"error_kind": normalize_string(dict_get_or(error_payload, "kind", "budget_exceeded"), "budget_exceeded")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(final_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, budget_exceeded_after_artifact)
+		runtime_services = dict_get_or(budget_exceeded_after_artifact, "runtime_services", runtime_services)
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": dict_get_or(error_payload, "kind", "budget_exceeded")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(final_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		budget_failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "budget_exceeded_after_artifact",
+			"events_count": len(events),
+			"steps_count": len(steps)
+		}, {
+			"source": "runner",
+			"stage": "budget_exceeded_after_artifact"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "budget_exceeded_after_artifact", budget_failed_state_result)
+
+		return create_budget_exceeded_result("after_artifact", post_artifact_budget, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks)
+	}
+
+	memory_write_result := persist_memory_output(memory_store, session_id, output_text, run_id, agent_id, dict_get_or(final_step, "step_id", ""))
+	memory_store_results = append_lifecycle_result(memory_store_results, "final_output", memory_write_result)
+	if dict_get_or(memory_write_result, "ok", false) {
+		memory_write_event := create_agent_event("memory_write", {
+			"scope_kind": "session",
+			"scope_id": session_id,
+			"source": "runner.final_output"
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(final_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, memory_write_event)
+		runtime_services = dict_get_or(memory_write_event, "runtime_services", runtime_services)
+
+		budget_usage = increment_budget_usage(budget_usage, {
+			"memory_ops": 1
+		})
+	}
+
+	post_memory_elapsed_ms := current_elapsed_ms(timeout_started_ms, runtime_services)
+	post_memory_timeout := evaluate_timeout_boundary("after_memory", timeout_ms, post_memory_elapsed_ms)
+	timeout_checks = push(timeout_checks, post_memory_timeout)
+	budget_usage = with_elapsed_budget_usage(budget_usage, post_memory_elapsed_ms)
+	if dict_get_or(post_memory_timeout, "exceeded", false) {
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": "timeout"
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(final_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		timeout_failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "timeout_after_memory",
+			"events_count": len(events),
+			"steps_count": len(steps),
+			"elapsed_ms": post_memory_elapsed_ms,
+			"timeout_ms": timeout_ms
+		}, {
+			"source": "runner",
+			"stage": "timeout_after_memory"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "timeout_after_memory", timeout_failed_state_result)
+
+		return create_timeout_result("after_memory", post_memory_timeout, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_checks)
+	}
+
+	post_memory_budget := evaluate_budget_limits(budget_policy, budget_usage, {
+		"metadata": {
+			"stage": "after_memory"
+		}
+	})
+	budget_checks = append_budget_check_result(budget_checks, "after_memory", post_memory_budget)
+	budget_updated_after_memory := create_agent_event("budget_updated", {
+		"stage": "after_memory",
+		"usage": normalize_dict(dict_get_or(budget_usage, "counters", {})),
+		"evaluation": post_memory_budget
+	}, {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"step_id": dict_get_or(final_step, "step_id", ""),
+		"runtime_services": runtime_services
+	})
+	events = push(events, budget_updated_after_memory)
+	runtime_services = dict_get_or(budget_updated_after_memory, "runtime_services", runtime_services)
+	if budget_check_passed(post_memory_budget) == false {
+		error_payload := build_budget_exceeded_error("after_memory", post_memory_budget)
+		budget_exceeded_after_memory := create_agent_event("budget_exceeded", {
+			"stage": "after_memory",
+			"usage": normalize_dict(dict_get_or(budget_usage, "counters", {})),
+			"evaluation": post_memory_budget,
+			"error_kind": normalize_string(dict_get_or(error_payload, "kind", "budget_exceeded"), "budget_exceeded")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(final_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, budget_exceeded_after_memory)
+		runtime_services = dict_get_or(budget_exceeded_after_memory, "runtime_services", runtime_services)
+		run_failed := create_agent_event("run_failed", {
+			"error_kind": dict_get_or(error_payload, "kind", "budget_exceeded")
+		}, {
+			"run_id": run_id,
+			"agent_id": agent_id,
+			"session_id": session_id,
+			"step_id": dict_get_or(final_step, "step_id", ""),
+			"runtime_services": runtime_services
+		})
+		events = push(events, run_failed)
+		budget_failed_state_result := persist_session_run_state(session_store, session_id, {
+			"run_id": run_id,
+			"stage": "budget_exceeded_after_memory",
+			"events_count": len(events),
+			"steps_count": len(steps)
+		}, {
+			"source": "runner",
+			"stage": "budget_exceeded_after_memory"
+		})
+		session_store_results = append_lifecycle_result(session_store_results, "budget_exceeded_after_memory", budget_failed_state_result)
+
+		return create_budget_exceeded_result("after_memory", post_memory_budget, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks)
+	}
+
+	run_completed := create_agent_event("run_completed", {
+		"output_text": output_text,
+		"artifact_count": len(artifacts),
+		"citation_count": len(retrieval_citations),
+		"citations": retrieval_citations
+	}, {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"step_id": dict_get_or(final_step, "step_id", ""),
+		"runtime_services": runtime_services
+	})
+	events = push(events, run_completed)
+
+	completed_state_result := persist_session_run_state(session_store, session_id, {
+		"run_id": run_id,
+		"stage": "run_completed",
+		"events_count": len(events),
+		"steps_count": len(steps),
+		"output_text": output_text,
+		"final_step_id": dict_get_or(final_step, "step_id", ""),
+		"artifacts_count": len(artifacts)
+	}, {
+		"source": "runner",
+		"stage": "run_completed"
+	})
+	session_store_results = append_lifecycle_result(session_store_results, "run_completed", completed_state_result)
+
+	return create_agent_run_result("completed", {
+		"text": output_text,
+		"model_result": model_result
+	}, {
+		"steps": steps,
+		"artifacts": artifacts,
+		"metadata": {
+			"events": events,
+			"stream": {
+				"enabled": stream_enabled,
+				"events": stream_events,
+				"events_count": len(stream_events)
+			},
+			"context": context,
+			"tool_calls": tool_call_results,
+			"retrieval": with_retrieval_citation_metadata(retrieval_state, retrieval_citations),
+			"handoff": handoff_metadata,
+			"retry_counters": retry_counters,
+			"session_store": {
+				"restore": session_restore_result,
+				"writes": session_store_results
+			},
+			"memory_store_writes": memory_store_results,
+			"artifact_store_writes": artifact_store_results,
+			"budget": {
+				"policy": budget_policy,
+				"usage": budget_usage,
+				"checks": budget_checks
+			},
+			"timeout": {
+				"timeout_ms": timeout_ms,
+				"checks": timeout_checks
+			}
+		}
+	})
+}
+
+func describe_runner_module_impl() {
+	return {
+		"module": "agents.runner",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_agent_runner",
+			"run_agent"
+		]
+	}
+}
+
+func run_agent_safe_impl(runner, agent, run_request_input, options) {
+	try {
+		result := run_agent_impl(runner, agent, run_request_input, options)
+		result_map := normalize_dict(result)
+		run_request := as_run_request(run_request_input)
+		options_map := normalize_dict(options)
+		agent_map := normalize_dict(agent)
+		stream_enabled := resolve_stream_enabled(options_map, run_request, agent_map)
+
+		if stream_enabled && normalize_string(dict_get_or(result_map, "status", ""), "") == "failed" {
+			error_payload := normalize_dict(dict_get_or(result_map, "error", {}))
+			error_kind := normalize_string(dict_get_or(error_payload, "kind", ""), "")
+			error_details := normalize_dict(dict_get_or(error_payload, "details", {}))
+			error_text := normalize_string(dict_get_or(error_details, "error", ""), "")
+
+			if error_kind == "model_error" && index_of(error_text, "Missing map key: \"type\"") >= 0 {
+				result_map["error"] := create_agent_error("guardrail_blocked", "Streaming run was blocked by guardrail event.", {
+					"details": {
+						"error": error_text,
+						"source": "run_agent_safe_impl"
+					}
+				})
+
+				metadata_map := normalize_dict(dict_get_or(result_map, "metadata", {}))
+				metadata_map["stream"] := {
+					"enabled": true,
+					"events": [
+						{
+							"type": "AgentStreamEvent",
+							"kind": "guardrail_blocked",
+							"payload": {
+								"reason": "run_agent_safe_impl_fallback"
+							}
+						}
+					],
+					"events_count": 1
+				}
+				result_map["metadata"] := metadata_map
+			}
+		}
+
+		return result_map
+	} except err {
+		run_request := as_run_request(run_request_input)
+		options_map := normalize_dict(options)
+		agent_map := normalize_dict(agent)
+		error_text := to_string(err)
+		stream_enabled := resolve_stream_enabled(options_map, run_request, agent_map)
+
+		if stream_enabled && index_of(error_text, "Missing map key: \"type\"") >= 0 {
+			error_payload := create_agent_error("guardrail_blocked", "Streaming run was blocked by guardrail event.", {
+				"details": {
+					"error": error_text,
+					"source": "run_agent_safe_impl"
+				}
+			})
+			return create_runner_error_result("failed", error_payload, [], {
+				"stream": {
+					"enabled": true,
+					"events": [],
+					"events_count": 0
+				}
+			})
+		}
+
+		error_payload := create_agent_error("internal_error", "Runner execution raised an exception.", {
+			"details": {
+				"error": error_text,
+				"source": "run_agent_safe_impl"
+			}
+		})
+		return create_runner_error_result("failed", error_payload, [], {
+			"stream": {
+				"enabled": stream_enabled,
+				"events": [],
+				"events_count": 0
+			}
+		})
+	}
+}
+
+export create_agent_runner := create_agent_runner_impl
+export run_agent := run_agent_safe_impl
+export describe_runner_module := describe_runner_module_impl

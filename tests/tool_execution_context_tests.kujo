@@ -1,0 +1,94 @@
+test_setup {
+	from src.agents.tools.registry import create_tool_execution_context, with_tool_execution_invocation
+}
+
+test "tool execution context includes run and agent fields" {
+	context := create_tool_execution_context({
+		"run_id": "run-ctx-1",
+		"session_id": "session-ctx-1",
+		"agent": {
+			"id": "agent-1",
+			"name": "Agent One",
+			"metadata": {
+				"team": "platform"
+			}
+		},
+		"tool_name": "echo",
+		"policy_handles": {
+			"approval_required": false
+		},
+		"artifact_handles": {
+			"artifact_store": {
+				"type": "ArtifactStore",
+				"name": "tool-artifacts"
+			}
+		},
+		"metadata": {
+			"origin": "tests"
+		}
+	})
+
+	assert_equal(context["type"], "ToolExecutionContext")
+	assert_equal(context["run_id"], "run-ctx-1")
+	assert_equal(context["session_id"], "session-ctx-1")
+	assert_equal(context["agent_id"], "agent-1")
+	assert_equal(context["agent_name"], "Agent One")
+	assert_equal(context["tool_name"], "echo")
+	assert_equal(context["policy_handles"]["approval_required"], false)
+	assert_equal(context["artifact_handles"]["artifact_store"]["name"], "tool-artifacts")
+	assert_equal(context["metadata"]["origin"], "tests")
+}
+
+test "tool execution context clones mutable metadata maps" {
+	agent := {
+		"id": "agent-2",
+		"name": "Agent Two",
+		"metadata": {
+			"labels": ["alpha", "beta"]
+		}
+	}
+	policy_handles := {
+		"risk": "medium"
+	}
+
+	context := create_tool_execution_context({
+		"run_id": "run-ctx-2",
+		"agent": agent,
+		"policy_handles": policy_handles,
+		"metadata": {
+			"scope": "tool-tests"
+		}
+	})
+
+	agent_meta := agent["metadata"]
+	agent_meta["labels"] := []
+	agent["metadata"] := agent_meta
+	policy_handles["risk"] := "high"
+
+	assert_equal(len(context["agent_metadata"]["labels"]), 2)
+	assert_equal(context["policy_handles"]["risk"], "medium")
+}
+
+test "tool execution invocation helper preserves identity and adds input" {
+	context := create_tool_execution_context({
+		"run_id": "run-ctx-3",
+		"session_id": "session-ctx-3",
+		"agent": {
+			"id": "agent-3",
+			"name": "Agent Three"
+		}
+	})
+
+	invocation := with_tool_execution_invocation(context, "calculator", {
+		"a": 2,
+		"b": 3
+	})
+
+	assert_equal(invocation["run_id"], "run-ctx-3")
+	assert_equal(invocation["session_id"], "session-ctx-3")
+	assert_equal(invocation["agent_id"], "agent-3")
+	assert_equal(invocation["tool_name"], "calculator")
+	assert_equal(invocation["input"]["a"], 2)
+	assert_equal(invocation["input"]["b"], 3)
+	assert_equal(type(invocation["artifact_handles"]), "dict")
+}

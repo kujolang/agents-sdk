@@ -1,0 +1,557 @@
+test_setup {
+	from src.agents.tools.registry import create_tool, validate_tool_contract, create_tool_registry
+	from src.agents.tools.registry import register_tool, resolve_registry_tool, list_registered_tools, get_registered_tool_metadata
+	from src.agents.tools.registry import validate_tool_input, validate_registered_tool_input
+	from src.agents.tools.registry import create_tool_execution_context, execute_registered_tool
+	from src.agents.security.approval import create_approval_policy, create_deny_all_approval_provider
+	from src.agents.security.approval import create_auto_approval_provider
+	from src.agents.runtime.clock_ids import create_fixed_runtime_services
+	from src.agents.artifacts.store import create_in_memory_artifact_store, reset_in_memory_artifact_store, artifact_store_list
+}
+
+test "tool registry registers, resolves, and lists tool metadata deterministically" {
+	tool_handler := func(input, context) {
+		return {
+			"ok": true,
+			"output": {
+				"echo": input
+			}
+		}
+	}
+
+	registry := create_tool_registry({
+		"metadata": {
+			"scope": "unit"
+		}
+	})
+
+	register_result := register_tool(registry, {
+		"id": "tool-echo",
+		"name": "echo",
+		"description": "Echoes input values.",
+		"input_schema": {
+			"type": "object",
+			"required": ["text"]
+		},
+		"output_schema": {
+			"type": "object"
+		},
+		"permissions": ["read"],
+		"risk": "low",
+		"timeout_ms": 5000,
+		"handler": tool_handler,
+		"metadata": {
+			"owner": "tests"
+		}
+	})
+
+	assert_equal(register_result["ok"], true)
+	registry_after := register_result["registry"]
+
+	resolved := resolve_registry_tool(registry_after, "echo")
+	assert_equal(resolved["ok"], true)
+	assert_equal(resolved["tool"]["id"], "tool-echo")
+	assert_equal(resolved["tool"]["name"], "echo")
+	assert_equal(type(resolved["tool"]["handler"]), "function")
+
+	listed := list_registered_tools(registry_after)
+	assert_equal(len(listed), 1)
+	assert_equal(listed[0]["name"], "echo")
+	assert_equal(listed[0]["risk"], "low")
+}
+
+test "tool registry rejects duplicate tool names" {
+	registry := create_tool_registry({})
+
+	first := register_tool(registry, {
+		"id": "tool-1",
+		"name": "dup_tool"
+	})
+	assert_equal(first["ok"], true)
+
+	second := register_tool(first["registry"], {
+		"id": "tool-2",
+		"name": "dup_tool"
+	})
+	assert_equal(second["ok"], false)
+	assert_equal(second["error"]["kind"], "tool_input_invalid")
+	assert_equal(second["error"]["details"]["tool_name"], "dup_tool")
+
+	listed := list_registered_tools(first["registry"])
+	assert_equal(len(listed), 1)
+}
+
+test "tool metadata retrieval returns immutable copies" {
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-safe",
+		"name": "safe_tool",
+		"permissions": ["read", "write"],
+		"metadata": {
+			"labels": ["prod", "critical"]
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	metadata_result_one := get_registered_tool_metadata(register_result["registry"], "safe_tool")
+	assert_equal(metadata_result_one["ok"], true)
+	metadata_one := metadata_result_one["metadata"]
+	metadata_one["permissions"] := []
+	metadata_one_nested := metadata_one["metadata"]
+	metadata_one_nested["labels"] := []
+	metadata_one["metadata"] := metadata_one_nested
+
+	metadata_result_two := get_registered_tool_metadata(register_result["registry"], "safe_tool")
+	assert_equal(metadata_result_two["ok"], true)
+	assert_equal(len(metadata_result_two["metadata"]["permissions"]), 2)
+	assert_equal(len(metadata_result_two["metadata"]["metadata"]["labels"]), 2)
+}
+
+test "tool contract validation and missing tool lookup are deterministic" {
+	validation := validate_tool_contract({
+		"description": "missing required fields"
+	})
+	assert_equal(validation["ok"], false)
+	assert_equal(len(validation["errors"]), 2)
+
+	created := create_tool({
+		"description": "still invalid"
+	})
+	assert_equal(created["ok"], false)
+	assert_equal(created["error"]["kind"], "tool_input_invalid")
+
+	registry := create_tool_registry({})
+	missing := resolve_registry_tool(registry, "does_not_exist")
+	assert_equal(missing["ok"], false)
+	assert_equal(missing["error"]["kind"], "tool_not_found")
+}
+
+test "tool input validation succeeds for valid schema-compliant payload" {
+	created := create_tool({
+		"id": "tool-validate-ok",
+		"name": "validate_ok",
+		"input_schema": {
+			"required": ["text"],
+			"properties": {
+				"text": {
+					"type": "string"
+				}
+			}
+		}
+	})
+	assert_equal(created["ok"], true)
+
+	validated := validate_tool_input(created["tool"], {
+		"text": "hello"
+	})
+	assert_equal(validated["ok"], true)
+	assert_equal(len(validated["violations"]), 0)
+	assert_equal(validated["normalized_input"]["text"], "hello")
+}
+
+test "tool input validation rejects missing required field" {
+	created := create_tool({
+		"id": "tool-validate-required",
+		"name": "validate_required",
+		"input_schema": {
+			"required": ["text"],
+			"properties": {
+				"text": {
+					"type": "string"
+				}
+			}
+		}
+	})
+	assert_equal(created["ok"], true)
+
+	validated := validate_tool_input(created["tool"], {})
+	assert_equal(validated["ok"], false)
+	assert_equal(validated["error"]["kind"], "tool_input_invalid")
+	assert_equal(len(validated["violations"]), 1)
+	assert_equal(validated["violations"][0]["field"], "text")
+	assert_equal(validated["violations"][0]["code"], "missing_required")
+}
+
+test "registered tool input validation rejects unknown fields" {
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-validate-unknown",
+		"name": "validate_unknown",
+		"input_schema": {
+			"required": ["text"],
+			"properties": {
+				"text": {
+					"type": "string"
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	validated := validate_registered_tool_input(register_result["registry"], "validate_unknown", {
+		"text": "hello",
+		"extra": "unexpected"
+	})
+	assert_equal(validated["ok"], false)
+	assert_equal(validated["error"]["kind"], "tool_input_invalid")
+	assert_equal(len(validated["violations"]), 1)
+	assert_equal(validated["violations"][0]["field"], "extra")
+	assert_equal(validated["violations"][0]["code"], "unknown_field")
+}
+
+test "registered tool execution returns output on successful handler run" {
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-exec-success",
+		"name": "exec_success",
+		"timeout_ms": 1000,
+		"input_schema": {
+			"required": ["text"],
+			"properties": {
+				"text": {
+					"type": "string"
+				}
+			}
+		},
+		"handler": func(input, context) {
+			return {
+				"ok": true,
+				"output": {
+					"value": input["text"],
+					"tool": context["tool_name"]
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-tool-success",
+		"session_id": "session-tool-success",
+		"agent": {
+			"id": "agent-tools",
+			"name": "Tool Agent"
+		}
+	})
+
+	result := execute_registered_tool(register_result["registry"], "exec_success", {
+		"text": "hello"
+	}, context, {})
+
+	assert_equal(result["ok"], true)
+	assert_equal(result["output"]["value"], "hello")
+	assert_equal(result["output"]["tool"], "exec_success")
+	assert_equal(result["metadata"]["timed_out"], false)
+}
+
+test "registered tool execution persists handler emitted artifacts when artifact store is provided" {
+	store_id := "tool-artifact-001"
+	reset_result := reset_in_memory_artifact_store({
+		"store_id": store_id
+	})
+	assert_equal(reset_result["ok"], true)
+
+	artifact_store := create_in_memory_artifact_store({
+		"store_id": store_id
+	})
+
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-exec-artifact",
+		"name": "exec_artifact",
+		"handler": func(input, context) {
+			return {
+				"ok": true,
+				"output": {
+					"status": "done"
+				},
+				"artifacts": [
+					{
+						"artifact_kind": "report",
+						"title": "Tool report",
+						"content": "tool generated report"
+					}
+				]
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-tool-artifact",
+		"artifact_store": artifact_store
+	})
+
+	result := execute_registered_tool(register_result["registry"], "exec_artifact", {}, context, {})
+
+	assert_equal(result["ok"], true)
+	assert_equal(len(result["artifacts"]), 1)
+	assert_equal(result["artifacts"][0]["producer_run_id"], "run-tool-artifact")
+	assert_equal(result["artifacts"][0]["producer_tool_name"], "exec_artifact")
+	assert_equal(len(result["metadata"]["artifact_writes"]), 1)
+
+	stored := artifact_store_list(artifact_store, {})
+	assert_equal(stored["ok"], true)
+	assert_equal(stored["count"], 1)
+	assert_equal(stored["artifacts"][0]["title"], "Tool report")
+}
+
+test "registered tool execution maps handler failure to tool_execution_failed" {
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-exec-fail",
+		"name": "exec_fail",
+		"handler": func(input, context) {
+			return {
+				"ok": false,
+				"error": {
+					"message": "handler says no",
+					"code": "denied"
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-tool-fail"
+	})
+
+	result := execute_registered_tool(register_result["registry"], "exec_fail", {}, context, {})
+
+	assert_equal(result["ok"], false)
+	assert_equal(result["error"]["kind"], "tool_execution_failed")
+	assert_equal(result["error"]["details"]["reason"], "handler_failed")
+	assert_equal(result["error"]["details"]["handler_error"]["code"], "denied")
+}
+
+test "registered tool execution enforces timeout with deterministic error" {
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-exec-timeout",
+		"name": "exec_timeout",
+		"timeout_ms": 10,
+		"handler": func(input, context) {
+			return {
+				"ok": true,
+				"output": {
+					"done": true
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-tool-timeout"
+	})
+
+	result := execute_registered_tool(register_result["registry"], "exec_timeout", {}, context, {
+		"elapsed_ms_override": 99
+	})
+
+	assert_equal(result["ok"], false)
+	assert_equal(result["error"]["kind"], "tool_execution_failed")
+	assert_equal(result["error"]["details"]["reason"], "timeout")
+	assert_equal(result["metadata"]["timed_out"], true)
+	assert_equal(result["metadata"]["timeout_ms"], 10)
+	assert_equal(result["metadata"]["elapsed_ms"], 99)
+}
+
+test "registered tool execution returns approval_required when policy requires manual approval" {
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-approval-required",
+		"name": "approval_required_tool",
+		"permissions": ["write"],
+		"handler": func(input, context) {
+			return {
+				"ok": true,
+				"output": {
+					"executed": true
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-approval-required",
+		"policy_handles": {
+			"approval_policy": create_approval_policy({
+				"mode": "write_tool"
+			})
+		}
+	})
+
+	result := execute_registered_tool(register_result["registry"], "approval_required_tool", {}, context, {})
+
+	assert_equal(result["ok"], false)
+	assert_equal(result["status"], "approval_required")
+	assert_equal(result["error"]["kind"], "approval_required")
+	assert_equal(result["metadata"]["approval_decision"]["outcome"], "require_approval")
+}
+
+test "registered tool execution returns approval_denied when provider denies request" {
+	runtime_services := create_fixed_runtime_services(0, "2026-05-22 00:00:00", 1)
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-approval-denied",
+		"name": "approval_denied_tool",
+		"permissions": ["write"],
+		"handler": func(input, context) {
+			return {
+				"ok": true,
+				"output": {
+					"executed": true
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-approval-denied",
+		"policy_handles": {
+			"approval_policy": create_approval_policy({
+				"mode": "write_tool"
+			}),
+			"approval_provider": create_deny_all_approval_provider({
+				"runtime_services": runtime_services
+			})
+		}
+	})
+
+	result := execute_registered_tool(register_result["registry"], "approval_denied_tool", {}, context, {})
+
+	assert_equal(result["ok"], false)
+	assert_equal(result["status"], "approval_denied")
+	assert_equal(result["error"]["kind"], "approval_denied")
+	assert_equal(result["metadata"]["approval_provider_decision"]["status"], "denied")
+	assert_equal(result["metadata"]["approval_provider_decision"]["decision_id"], "apd-1")
+}
+
+test "registered tool execution proceeds when provider approves request" {
+	runtime_services := create_fixed_runtime_services(0, "2026-05-22 00:00:00", 1)
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-approval-approved",
+		"name": "approval_approved_tool",
+		"permissions": ["write"],
+		"handler": func(input, context) {
+			return {
+				"ok": true,
+				"output": {
+					"executed": true,
+					"tool": context["tool_name"]
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-approval-approved",
+		"policy_handles": {
+			"approval_policy": create_approval_policy({
+				"mode": "write_tool"
+			}),
+			"approval_provider": create_auto_approval_provider({
+				"runtime_services": runtime_services
+			})
+		}
+	})
+
+	result := execute_registered_tool(register_result["registry"], "approval_approved_tool", {}, context, {})
+
+	assert_equal(result["ok"], true)
+	assert_equal(result["output"]["executed"], true)
+	assert_equal(result["metadata"]["approval_provider_decision"]["status"], "approved")
+	assert_equal(result["metadata"]["approval_provider_decision"]["decision_id"], "apd-1")
+}
+
+test "registered tool execution applies optional output sanitizer callback" {
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-sanitize-success",
+		"name": "sanitize_success",
+		"handler": func(input, context) {
+			return {
+				"ok": true,
+				"output": {
+					"safe": input["value"],
+					"secret": "sensitive-token"
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-sanitize-success"
+	})
+
+	result := execute_registered_tool(register_result["registry"], "sanitize_success", {
+		"value": "visible"
+	}, context, {
+		"output_sanitizer": func(output) {
+			return {
+				"ok": true,
+				"output": {
+					"safe": output["safe"],
+					"secret": "[redacted]"
+				}
+			}
+		}
+	})
+
+	assert_equal(result["ok"], true)
+	assert_equal(result["output"]["safe"], "visible")
+	assert_equal(result["output"]["secret"], "[redacted]")
+	assert_equal(result["metadata"]["sanitizer"]["sanitizer_applied"], true)
+	assert_equal(result["metadata"]["sanitizer"]["sanitizer_failed"], false)
+}
+
+test "registered tool execution falls back when sanitizer rejects output" {
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-sanitize-fallback",
+		"name": "sanitize_fallback",
+		"handler": func(input, context) {
+			return {
+				"ok": true,
+				"output": {
+					"safe": input["value"],
+					"secret": "sensitive-token"
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	context := create_tool_execution_context({
+		"run_id": "run-sanitize-fallback"
+	})
+
+	result := execute_registered_tool(register_result["registry"], "sanitize_fallback", {
+		"value": "visible"
+	}, context, {
+		"output_sanitizer": func(output) {
+			return {
+				"ok": false,
+				"error": {
+					"message": "sanitizer unavailable",
+					"code": "sanitizer_offline"
+				}
+			}
+		}
+	})
+
+	assert_equal(result["ok"], true)
+	assert_equal(result["output"]["safe"], "visible")
+	assert_equal(result["output"]["secret"], "sensitive-token")
+	assert_equal(result["metadata"]["sanitizer"]["sanitizer_applied"], true)
+	assert_equal(result["metadata"]["sanitizer"]["sanitizer_failed"], true)
+	assert_equal(result["metadata"]["sanitizer"]["failure_reason"], "sanitizer_rejected")
+	assert_equal(result["metadata"]["sanitizer"]["error"]["code"], "sanitizer_offline")
+}

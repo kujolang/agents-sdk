@@ -1,0 +1,216 @@
+from src.agents.runtime.clock_ids import create_runtime_services, next_runtime_id, runtime_now_iso
+
+func dict_get_or(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_dict(value) {
+	if type(value) == "dict" {
+		return value
+	}
+	return {}
+}
+
+func normalize_array(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func array_contains(values, expected) {
+	for value in values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func resolve_runtime_services(options_map) {
+	runtime_services := dict_get_or(options_map, "runtime_services", null)
+	if type(runtime_services) == "dict" {
+		return runtime_services
+	}
+	return create_runtime_services({})
+}
+
+func event_kind_values_impl() {
+	return [
+		"run_started",
+		"run_completed",
+		"run_failed",
+		"run_cancelled",
+		"model_request_started",
+		"model_request_completed",
+		"model_request_failed",
+		"tool_call_requested",
+		"tool_call_approved",
+		"tool_call_denied",
+		"tool_call_started",
+		"tool_call_completed",
+		"tool_call_failed",
+		"memory_read",
+		"memory_write",
+		"handoff_started",
+		"handoff_completed",
+		"handoff_failed",
+		"guardrail_passed",
+		"guardrail_warned",
+		"guardrail_blocked",
+		"artifact_created",
+		"budget_updated",
+		"budget_exceeded"
+	]
+}
+
+func required_event_fields_impl() {
+	return [
+		"type",
+		"kind",
+		"run_id",
+		"agent_id",
+		"session_id",
+		"step_id",
+		"event_id",
+		"timestamp",
+		"parent_event_id",
+		"payload",
+		"metadata"
+	]
+}
+
+func create_event_id_impl(options) {
+	options_map := normalize_dict(options)
+	prefix := normalize_string(dict_get_or(options_map, "prefix", "evt"), "evt")
+	seed := normalize_string(dict_get_or(options_map, "seed", ""), "")
+	if seed == "" {
+		seed = to_string(current_timestamp())
+	}
+	return prefix + "-" + seed
+}
+
+func resolve_event_kind(kind_input, payload) {
+	resolved_kind := normalize_string(kind_input, "run_failed")
+	if array_contains(event_kind_values_impl(), resolved_kind) {
+		return {
+			"kind": resolved_kind,
+			"payload": payload
+		}
+	}
+
+	next_payload := normalize_dict(payload)
+	next_payload["requested_kind"] := resolved_kind
+	return {
+		"kind": "run_failed",
+		"payload": next_payload
+	}
+}
+
+func create_agent_event_impl(kind_input, payload, options) {
+	options_map := normalize_dict(options)
+	payload_map := normalize_dict(payload)
+	runtime_services := resolve_runtime_services(options_map)
+	kind_resolution := resolve_event_kind(kind_input, payload_map)
+	resolved_kind := dict_get_or(kind_resolution, "kind", "run_failed")
+	resolved_payload := normalize_dict(dict_get_or(kind_resolution, "payload", {}))
+
+	event_id := normalize_string(dict_get_or(options_map, "event_id", ""), "")
+	if event_id == "" {
+		id_result := next_runtime_id(runtime_services, "evt")
+		event_id = dict_get_or(id_result, "id", "")
+		runtime_services = dict_get_or(id_result, "runtime_services", runtime_services)
+	}
+
+	return {
+		"type": "AgentEvent",
+		"kind": resolved_kind,
+		"run_id": normalize_string(dict_get_or(options_map, "run_id", ""), ""),
+		"agent_id": normalize_string(dict_get_or(options_map, "agent_id", ""), ""),
+		"session_id": normalize_string(dict_get_or(options_map, "session_id", ""), ""),
+		"step_id": normalize_string(dict_get_or(options_map, "step_id", ""), ""),
+		"event_id": event_id,
+		"timestamp": normalize_string(dict_get_or(options_map, "timestamp", ""), runtime_now_iso(runtime_services)),
+		"parent_event_id": normalize_string(dict_get_or(options_map, "parent_event_id", ""), ""),
+		"payload": resolved_payload,
+		"metadata": normalize_dict(dict_get_or(options_map, "metadata", {})),
+		"runtime_services": runtime_services
+	}
+}
+
+func create_lifecycle_event_impl(kind, run_id, agent_id, session_id, step_id, payload) {
+	return create_agent_event_impl(kind, payload, {
+		"run_id": run_id,
+		"agent_id": agent_id,
+		"session_id": session_id,
+		"step_id": step_id
+	})
+}
+
+func validate_event_shape_impl(event_payload) {
+	event_map := normalize_dict(event_payload)
+	errors := []
+	for field_name in required_event_fields_impl() {
+		if has_key(event_map, field_name) == 0 {
+			errors := push(errors, {
+				"field": field_name,
+				"message": "Missing required event field."
+			})
+		}
+	}
+
+	kind_value := normalize_string(dict_get_or(event_map, "kind", ""), "")
+	if kind_value == "" || !array_contains(event_kind_values_impl(), kind_value) {
+		errors := push(errors, {
+			"field": "kind",
+			"message": "Event kind must be one of the supported values."
+		})
+	}
+
+	return {
+		"ok": len(errors) == 0,
+		"errors": errors
+	}
+}
+
+func describe_events_module_impl() {
+	return {
+		"module": "agents.events",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"event_kind_count": len(event_kind_values_impl()),
+		"required_field_count": len(required_event_fields_impl()),
+		"exports": [
+			"event_kind_values",
+			"required_event_fields",
+			"create_event_id",
+			"create_agent_event",
+			"create_lifecycle_event",
+			"validate_event_shape"
+		]
+	}
+}
+
+export event_kind_values := event_kind_values_impl
+export required_event_fields := required_event_fields_impl
+export create_event_id := create_event_id_impl
+export create_agent_event := create_agent_event_impl
+export create_lifecycle_event := create_lifecycle_event_impl
+export validate_event_shape := validate_event_shape_impl
+export describe_events_module := describe_events_module_impl

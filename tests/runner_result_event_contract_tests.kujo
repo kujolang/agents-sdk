@@ -1,0 +1,121 @@
+test_setup {
+	from src.agents.core_types import create_agent, create_agent_run_request
+	from src.agents.ai.adapter import create_ai_sdk_adapter
+	from src.agents.runner import create_agent_runner, run_agent
+	from src.agents.events import validate_event_shape
+	from src.agents.runtime.clock_ids import create_fixed_runtime_services
+}
+
+test "runner contract shape remains stable for successful run results and lifecycle events" {
+	runtime_services := create_fixed_runtime_services(1700000000000, "2026-05-27 13:00:00", 500)
+
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "contract-success",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "contract-agent-success",
+		"name": "Contract Agent Success"
+	})
+	run_request := create_agent_run_request("validate successful shape", {
+		"run_id": "run-contract-success",
+		"session_id": "session-contract-success",
+		"runtime_services": runtime_services
+	})
+
+	result := run_agent(runner, agent, run_request, {})
+
+	assert_equal(result["status"], "completed")
+	required_fields := ["type", "status", "output", "error", "steps", "artifacts", "metadata"]
+	for field_name in required_fields {
+		assert_equal(has_key(result, field_name) == 1, true)
+	}
+	assert_equal(result["type"], "AgentRunResult")
+	assert_equal(type(result["steps"]), "array")
+	assert_equal(type(result["artifacts"]), "array")
+	assert_equal(type(result["metadata"]), "dict")
+	assert_equal(result["output"]["text"], "contract-success")
+
+	events := result["metadata"]["events"]
+	assert_equal(type(events), "array")
+	assert_equal(len(events) >= 2, true)
+	for event in events {
+		validation := validate_event_shape(event)
+		assert_equal(validation["ok"], true)
+		assert_equal(trim(event["event_id"]) != "", true)
+		assert_equal(event["timestamp"], "2026-05-27 13:00:00")
+	}
+	assert_equal(events[0]["kind"], "run_started")
+	assert_equal(events[len(events) - 1]["kind"], "run_completed")
+}
+
+test "runner contract shape remains stable for failed run results and lifecycle events" {
+	runtime_services := create_fixed_runtime_services(1700000001000, "2026-05-27 13:05:00", 700)
+
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": false,
+			"provider": "openai",
+			"status_code": 500,
+			"error": {
+				"code": "provider_error",
+				"message": "contract-failure",
+				"retryable": false
+			}
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "contract-agent-failure",
+		"name": "Contract Agent Failure"
+	})
+	run_request := create_agent_run_request("validate failed shape", {
+		"run_id": "run-contract-failure",
+		"session_id": "session-contract-failure",
+		"runtime_services": runtime_services
+	})
+
+	result := run_agent(runner, agent, run_request, {})
+
+	assert_equal(result["status"], "failed")
+	required_fields := ["type", "status", "output", "error", "steps", "artifacts", "metadata"]
+	for field_name in required_fields {
+		assert_equal(has_key(result, field_name) == 1, true)
+	}
+	assert_equal(result["type"], "AgentRunResult")
+	assert_equal(type(result["steps"]), "array")
+	assert_equal(type(result["artifacts"]), "array")
+	assert_equal(type(result["metadata"]), "dict")
+	assert_equal(type(result["error"]), "dict")
+	assert_equal(result["error"]["kind"], "provider_error")
+
+	events := result["metadata"]["events"]
+	assert_equal(type(events), "array")
+	assert_equal(len(events) >= 2, true)
+	for event in events {
+		validation := validate_event_shape(event)
+		assert_equal(validation["ok"], true)
+		assert_equal(trim(event["event_id"]) != "", true)
+		assert_equal(event["timestamp"], "2026-05-27 13:05:00")
+	}
+	assert_equal(events[0]["kind"], "run_started")
+	assert_equal(events[len(events) - 1]["kind"], "run_failed")
+}

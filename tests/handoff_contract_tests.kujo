@@ -1,0 +1,103 @@
+test_setup {
+	from src.agents.handoffs.handoff import create_handoff_target, create_handoff_policy
+	from src.agents.handoffs.handoff import create_handoff_loop_state, create_handoff_request_from_parts, create_handoff_result
+	from src.agents.handoffs.handoff import handoff_result_status_values
+}
+
+test "handoff contract constructors normalize target policy request and loop state" {
+	target := create_handoff_target({
+		"target_agent_id": "writer-agent",
+		"target_agent_name": "Writer Agent",
+		"reason": "Summarize findings",
+		"capabilities": ["summarize", "format"]
+	})
+	assert_equal(target["type"], "HandoffTarget")
+	assert_equal(target["target_agent_id"], "writer-agent")
+	assert_equal(target["target_agent_name"], "Writer Agent")
+	assert_equal(len(target["capabilities"]), 2)
+
+	policy := create_handoff_policy({
+		"enabled": true,
+		"max_depth": 4,
+		"prevent_loops": true,
+		"allowed_targets": ["writer-agent", "reviewer-agent"]
+	})
+	assert_equal(policy["type"], "HandoffPolicy")
+	assert_equal(policy["enabled"], true)
+	assert_equal(policy["max_depth"], 4)
+	assert_equal(policy["prevent_loops"], true)
+	assert_equal(len(policy["allowed_targets"]), 2)
+
+	loop_state := create_handoff_loop_state({
+		"depth": 1,
+		"max_depth": 4,
+		"visited_targets": ["planner-agent"],
+		"loop_detected": false
+	})
+	assert_equal(loop_state["type"], "HandoffLoopState")
+	assert_equal(loop_state["depth"], 1)
+	assert_equal(loop_state["max_depth"], 4)
+	assert_equal(loop_state["visited_targets"][0], "planner-agent")
+
+	request := create_handoff_request_from_parts(
+		"planner-agent",
+		"Planner",
+		target,
+		"Need long-form output",
+		loop_state,
+		"handoff-req-1"
+	)
+	assert_equal(request["type"], "HandoffRequest")
+	assert_equal(request["request_id"], "handoff-req-1")
+	assert_equal(request["source_agent_id"], "planner-agent")
+	assert_equal(request["target"]["target_agent_id"], "writer-agent")
+	assert_equal(request["loop_state"]["depth"], 1)
+}
+
+test "handoff result contract preserves depth metadata and status normalization" {
+	request := create_handoff_request_from_parts(
+		"planner-agent",
+		"",
+		{
+			"target_agent_id": "writer-agent"
+		},
+		"",
+		{
+			"depth": 2,
+			"max_depth": 3,
+			"visited_targets": ["planner-agent", "writer-agent"],
+			"loop_detected": false
+		},
+		"handoff-req-2"
+	)
+
+	result := create_handoff_result({
+		"status": "completed",
+		"request": request,
+		"output": {
+			"text": "Draft complete"
+		}
+	})
+
+	assert_equal(result["type"], "HandoffResult")
+	assert_equal(result["status"], "completed")
+	assert_equal(result["ok"], true)
+	assert_equal(result["request"]["request_id"], "handoff-req-2")
+	assert_equal(result["loop_state"]["depth"], 2)
+	assert_equal(result["loop_state"]["max_depth"], 3)
+
+	invalid_status_result := create_handoff_result({
+		"status": "unexpected_status"
+	})
+	assert_equal(invalid_status_result["status"], "failed")
+	assert_equal(invalid_status_result["ok"], false)
+}
+
+test "handoff status registry includes required statuses" {
+	statuses := handoff_result_status_values()
+	assert_equal(contains(statuses, "pending"), true)
+	assert_equal(contains(statuses, "completed"), true)
+	assert_equal(contains(statuses, "failed"), true)
+	assert_equal(contains(statuses, "blocked"), true)
+	assert_equal(contains(statuses, "skipped"), true)
+}

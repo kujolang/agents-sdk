@@ -1,0 +1,151 @@
+func dict_get_or(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_string(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_non_negative_int(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func clone_dict(value) {
+	source := dict_get_or(value, "_self", value)
+	if type(source) != "dict" {
+		return {}
+	}
+
+	cloned := {}
+	for key in keys(source) {
+		cloned[key] := source[key]
+	}
+	return cloned
+}
+
+func default_now_ms_impl() {
+	return current_timestamp()
+}
+
+func default_now_iso_impl() {
+	return format_date(now(), "YYYY-MM-DD HH:mm:ss")
+}
+
+func create_runtime_services_impl(options) {
+	options_map := dict_get_or(options, "_self", options)
+	if type(options_map) != "dict" {
+		options_map = {}
+	}
+
+	now_ms_fn := dict_get_or(options_map, "now_ms_fn", default_now_ms_impl)
+	now_iso_fn := dict_get_or(options_map, "now_iso_fn", default_now_iso_impl)
+	id_prefix := normalize_string(dict_get_or(options_map, "id_prefix", "id"), "id")
+	id_counter_start := normalize_non_negative_int(dict_get_or(options_map, "id_counter_start", 1), 1)
+
+	return {
+		"type": "RuntimeServices",
+		"now_ms_fn": now_ms_fn,
+		"now_iso_fn": now_iso_fn,
+		"id_prefix": id_prefix,
+		"id_counter": id_counter_start
+	}
+}
+
+func runtime_now_ms_impl(runtime_services) {
+	services := dict_get_or(runtime_services, "_self", runtime_services)
+	if type(services) != "dict" {
+		return default_now_ms_impl()
+	}
+
+	now_ms_fn := dict_get_or(services, "now_ms_fn", default_now_ms_impl)
+	if type(now_ms_fn) == "function" {
+		return now_ms_fn()
+	}
+
+	return default_now_ms_impl()
+}
+
+func runtime_now_iso_impl(runtime_services) {
+	services := dict_get_or(runtime_services, "_self", runtime_services)
+	if type(services) != "dict" {
+		return default_now_iso_impl()
+	}
+
+	now_iso_fn := dict_get_or(services, "now_iso_fn", default_now_iso_impl)
+	if type(now_iso_fn) == "function" {
+		return now_iso_fn()
+	}
+
+	return default_now_iso_impl()
+}
+
+func next_runtime_id_impl(runtime_services, prefix_override) {
+	services := dict_get_or(runtime_services, "_self", runtime_services)
+	if type(services) != "dict" {
+		services = create_runtime_services_impl({})
+	}
+
+	prefix := normalize_string(prefix_override, normalize_string(dict_get_or(services, "id_prefix", "id"), "id"))
+	counter := normalize_non_negative_int(dict_get_or(services, "id_counter", 1), 1)
+	next_services := clone_dict(services)
+	next_services["id_counter"] := counter + 1
+
+	return {
+		"id": prefix + "-" + to_string(counter),
+		"runtime_services": next_services
+	}
+}
+
+func create_fixed_runtime_services_impl(base_ms, base_iso, id_counter_start) {
+	fixed_ms := normalize_non_negative_int(base_ms, 0)
+	fixed_iso := normalize_string(base_iso, "1970-01-01 00:00:00")
+
+	return create_runtime_services_impl({
+		"now_ms_fn": func() {
+			return fixed_ms
+		},
+		"now_iso_fn": func() {
+			return fixed_iso
+		},
+		"id_counter_start": normalize_non_negative_int(id_counter_start, 1)
+	})
+}
+
+func describe_clock_id_module_impl() {
+	return {
+		"module": "agents.runtime.clock_ids",
+		"status": "active",
+		"contract_version": "0.1.0",
+		"exports": [
+			"create_runtime_services",
+			"runtime_now_ms",
+			"runtime_now_iso",
+			"next_runtime_id",
+			"create_fixed_runtime_services"
+		]
+	}
+}
+
+export create_runtime_services := create_runtime_services_impl
+export runtime_now_ms := runtime_now_ms_impl
+export runtime_now_iso := runtime_now_iso_impl
+export next_runtime_id := next_runtime_id_impl
+export create_fixed_runtime_services := create_fixed_runtime_services_impl
+export describe_clock_id_module := describe_clock_id_module_impl

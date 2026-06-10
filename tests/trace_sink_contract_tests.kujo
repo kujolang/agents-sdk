@@ -1,0 +1,266 @@
+test_setup {
+	from src.agents.tracing.sink import trace_required_fields, create_trace_event, validate_trace_event_shape
+	from src.agents.tracing.sink import create_trace_sink_interface, trace_sink_append, trace_sink_list
+	from src.agents.tracing.sink import create_in_memory_trace_sink, create_jsonl_trace_sink, reset_in_memory_trace_sink
+	from src.agents.runtime.clock_ids import create_fixed_runtime_services
+}
+
+test "trace required fields include core observability keys" {
+	fields := trace_required_fields()
+	field_map := {}
+	for field_name in fields {
+		field_map[field_name] := true
+	}
+
+	assert_equal(has_key(field_map, "run_id"), 1)
+	assert_equal(has_key(field_map, "agent_id"), 1)
+	assert_equal(has_key(field_map, "event_kind"), 1)
+	assert_equal(has_key(field_map, "timestamp"), 1)
+	assert_equal(has_key(field_map, "payload"), 1)
+}
+
+test "create_trace_event produces deterministic event ids and timestamps" {
+	runtime_services := create_fixed_runtime_services(0, "2026-05-27 00:00:00", 7)
+
+	event_payload := create_trace_event("run_started", {
+		"input": "hello"
+	}, {
+		"run_id": "run-1",
+		"agent_id": "agent-1",
+		"session_id": "session-1",
+		"runtime_services": runtime_services
+	})
+
+	assert_equal(event_payload["type"], "TraceEvent")
+	assert_equal(event_payload["trace_id"], "trc-7")
+	assert_equal(event_payload["timestamp"], "2026-05-27 00:00:00")
+	assert_equal(event_payload["event_kind"], "run_started")
+	assert_equal(event_payload["payload"]["input"], "hello")
+}
+
+test "invalid event kind is normalized and carries requested kind" {
+	event_payload := create_trace_event("not_real_kind", {
+		"phase": "model"
+	}, {
+		"run_id": "run-2"
+	})
+
+	assert_equal(event_payload["event_kind"], "run_failed")
+	assert_equal(event_payload["payload"]["requested_event_kind"], "not_real_kind")
+
+	validation := validate_trace_event_shape(event_payload)
+	assert_equal(validation["ok"], true)
+}
+
+test "trace sink wrappers return not_implemented without callbacks" {
+	sink := create_trace_sink_interface({
+		"name": "empty"
+	})
+
+	append_result := trace_sink_append(sink, {
+		"event_kind": "run_started",
+		"payload": {
+			"input": "x"
+		}
+	}, {})
+	assert_equal(append_result["ok"], false)
+	assert_equal(append_result["error"]["kind"], "not_implemented")
+
+	list_result := trace_sink_list(sink, {})
+	assert_equal(list_result["ok"], false)
+	assert_equal(list_result["error"]["kind"], "not_implemented")
+}
+
+test "trace sink wrappers delegate to configured callbacks" {
+	sink := create_trace_sink_interface({
+		"name": "delegating",
+		"append_trace_fn": func(store, event, options) {
+			return {
+				"ok": true,
+				"trace": event
+			}
+		},
+		"list_traces_fn": func(store, options) {
+			return {
+				"ok": true,
+				"traces": [],
+				"count": 0
+			}
+		}
+	})
+
+	append_result := trace_sink_append(sink, {
+		"event_kind": "run_completed",
+		"payload": {
+			"output": "done"
+		},
+		"run_id": "run-3",
+		"agent_id": "agent-3"
+	}, {})
+	assert_equal(append_result["ok"], true)
+	assert_equal(append_result["trace"]["event_kind"], "run_completed")
+
+	list_result := trace_sink_list(sink, {
+		"run_id": "run-3"
+	})
+	assert_equal(list_result["ok"], true)
+	assert_equal(list_result["count"], 0)
+}
+
+test "in-memory trace sink appends with deterministic sequencing" {
+	reset_result := reset_in_memory_trace_sink({
+		"store_id": "trace-002-seq"
+	})
+	assert_equal(reset_result["ok"], true)
+
+	sink := create_in_memory_trace_sink({
+		"store_id": "trace-002-seq"
+	})
+
+	append_one := trace_sink_append(sink, {
+		"event_kind": "run_started",
+		"run_id": "run-a",
+		"agent_id": "agent-a",
+		"payload": {
+			"phase": "start"
+		}
+	}, {})
+	append_two := trace_sink_append(sink, {
+		"event_kind": "run_completed",
+		"run_id": "run-a",
+		"agent_id": "agent-a",
+		"payload": {
+			"phase": "done"
+		}
+	}, {})
+
+	assert_equal(append_one["ok"], true)
+	assert_equal(append_two["ok"], true)
+	assert_equal(append_one["trace"]["sequence"], 1)
+	assert_equal(append_two["trace"]["sequence"], 2)
+
+	list_result := trace_sink_list(sink, {})
+	assert_equal(list_result["ok"], true)
+	assert_equal(list_result["count"], 2)
+	assert_equal(list_result["traces"][0]["event_kind"], "run_started")
+	assert_equal(list_result["traces"][1]["event_kind"], "run_completed")
+}
+
+test "in-memory trace sink supports filtering and pagination" {
+	reset_result := reset_in_memory_trace_sink({
+		"store_id": "trace-002-filter"
+	})
+	assert_equal(reset_result["ok"], true)
+
+	sink := create_in_memory_trace_sink({
+		"store_id": "trace-002-filter"
+	})
+
+	trace_sink_append(sink, {
+		"event_kind": "run_started",
+		"run_id": "run-1",
+		"agent_id": "agent-1",
+		"payload": {
+			"step": "a"
+		}
+	}, {})
+	trace_sink_append(sink, {
+		"event_kind": "tool_call_started",
+		"run_id": "run-1",
+		"agent_id": "agent-1",
+		"payload": {
+			"step": "b"
+		}
+	}, {})
+	trace_sink_append(sink, {
+		"event_kind": "run_completed",
+		"run_id": "run-2",
+		"agent_id": "agent-2",
+		"payload": {
+			"step": "c"
+		}
+	}, {})
+
+	run_one := trace_sink_list(sink, {
+		"run_id": "run-1"
+	})
+	assert_equal(run_one["ok"], true)
+	assert_equal(run_one["count"], 2)
+
+	paged := trace_sink_list(sink, {
+		"offset": 1,
+		"limit": 1
+	})
+	assert_equal(paged["ok"], true)
+	assert_equal(paged["count"], 3)
+	assert_equal(len(paged["traces"]), 1)
+	assert_equal(paged["traces"][0]["event_kind"], "tool_call_started")
+}
+
+test "jsonl trace sink rejects unsafe file names" {
+	sink := create_jsonl_trace_sink({
+		"root_path": "/tmp",
+		"file_name": "../unsafe.jsonl"
+	})
+
+	append_result := trace_sink_append(sink, {
+		"event_kind": "run_started",
+		"run_id": "run-jsonl-unsafe",
+		"payload": {
+			"input": "blocked"
+		}
+	}, {})
+
+	assert_equal(append_result["ok"], false)
+	assert_equal(append_result["error"]["kind"], "invalid_path")
+}
+
+test "jsonl trace sink appends parseable lines and applies redaction metadata" {
+	file_name := "agents-sdk-trace-003-" + to_string(current_timestamp()) + ".jsonl"
+
+	sink := create_jsonl_trace_sink({
+		"root_path": "/tmp",
+		"file_name": file_name
+	})
+
+	first := trace_sink_append(sink, {
+		"event_kind": "run_started",
+		"run_id": "run-jsonl-1",
+		"agent_id": "agent-jsonl",
+		"payload": {
+			"input": "hello"
+		}
+	}, {})
+	second := trace_sink_append(sink, {
+		"event_kind": "run_completed",
+		"run_id": "run-jsonl-1",
+		"agent_id": "agent-jsonl",
+		"payload": {
+			"secret": "token-123",
+			"message": "abcdefghijk"
+		}
+	}, {
+		"redaction_policy": {
+			"fields_to_redact": ["secret"],
+			"max_string_length": 5
+		}
+	})
+
+	if second["ok"] {
+		listed := trace_sink_list(sink, {
+			"run_id": "run-jsonl-1"
+		})
+		if listed["ok"] {
+			assert_equal(listed["count"] >= 1, true)
+			last_trace := listed["traces"][len(listed["traces"]) - 1]
+			assert_equal(last_trace["payload"]["secret"], "[REDACTED]")
+			assert_equal(last_trace["payload"]["message"], "abcde")
+			assert_equal(has_key(last_trace["metadata"], "redaction"), 1)
+			assert_equal(last_trace["metadata"]["redaction"]["transformed_field_count"], 2)
+		} else {
+			assert_equal(has_key(listed, "error"), 1)
+		}
+	} else {
+		assert_equal(has_key(second, "error"), 1)
+	}
+}

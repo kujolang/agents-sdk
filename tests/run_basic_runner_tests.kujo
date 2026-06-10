@@ -1,0 +1,1376 @@
+test_setup {
+	from src.agents.core_types import create_agent, create_agent_run_request
+	from src.agents.ai.adapter import create_ai_sdk_adapter
+	from src.agents.runner import create_agent_runner, run_agent
+	from src.agents.tools.registry import create_tool_registry, register_tool
+	from src.agents.retrieval.provider import create_mock_retrieval_provider
+	from src.agents.artifacts.store import create_in_memory_artifact_store, reset_in_memory_artifact_store, artifact_store_list
+	from src.agents.runtime.clock_ids import create_runtime_services
+	from src.agents.streaming.events import map_ai_sdk_stream_event
+}
+
+test "runner completes basic non-stream agent run with mock model adapter" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "Summary complete",
+			"status_code": 200,
+			"usage": {
+				"input_tokens": 8,
+				"output_tokens": 4,
+				"total_tokens": 12
+			}
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "writer",
+		"name": "Writer",
+		"instructions": "Be concise.",
+		"model_policy": {
+			"model": "gpt-4.1-mini",
+			"max_tokens": 64
+		}
+	})
+	run_request := create_agent_run_request("Summarize this", {
+		"run_id": "run-1",
+		"session_id": "session-1"
+	})
+
+	result := run_agent(runner, agent, run_request, {})
+
+	assert_equal(result["status"], "completed")
+	assert_equal(result["output"]["text"], "Summary complete")
+	assert_equal(len(result["steps"]), 2)
+	assert_equal(result["steps"][0]["step_kind"], "model")
+	assert_equal(result["steps"][1]["step_kind"], "final")
+	assert_equal(result["metadata"]["events"][0]["kind"], "run_started")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_completed")
+}
+
+test "runner returns invalid_config when ai adapter is missing" {
+	runner := create_agent_runner({})
+	agent := create_agent({
+		"id": "writer",
+		"name": "Writer"
+	})
+	run_request := create_agent_run_request("hello", {
+		"run_id": "run-2"
+	})
+
+	result := run_agent(runner, agent, run_request, {})
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "invalid_config")
+}
+
+test "runner returns failed status when model adapter returns error" {
+	fake_chat_error := func(client, messages, request_options) {
+		return {
+			"ok": false,
+			"provider": "openai",
+			"status_code": 504,
+			"error": {
+				"code": "timeout",
+				"message": "Model timeout",
+				"retryable": true
+			}
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat_error
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "planner",
+		"name": "Planner"
+	})
+	run_request := create_agent_run_request("plan this", {
+		"run_id": "run-3"
+	})
+
+	result := run_agent(runner, agent, run_request, {})
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "timeout")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_failed")
+}
+
+test "runner exits with cancelled status before model call when token is cancelled" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "This should not be used",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "cancel-before",
+		"name": "Cancel Before"
+	})
+	run_request := create_agent_run_request("stop now", {
+		"run_id": "run-cancel-before"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"cancellation_token": {
+			"cancel_at_stage": "before_model"
+		}
+	})
+
+	assert_equal(result["status"], "cancelled")
+	assert_equal(result["error"]["kind"], "cancelled")
+	assert_equal(result["error"]["details"]["cancelled_stage"], "before_model")
+	assert_equal(len(result["steps"]), 0)
+	assert_equal(result["metadata"]["events"][0]["kind"], "run_started")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_cancelled")
+}
+
+test "runner exits with cancelled status after model call when token stage matches" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "Interim response",
+			"status_code": 200,
+			"usage": {
+				"input_tokens": 10,
+				"output_tokens": 2,
+				"total_tokens": 12
+			}
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "cancel-after",
+		"name": "Cancel After"
+	})
+	run_request := create_agent_run_request("continue", {
+		"run_id": "run-cancel-after"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"cancellation_token": {
+			"cancel_at_stage": "after_model"
+		}
+	})
+
+	assert_equal(result["status"], "cancelled")
+	assert_equal(result["error"]["kind"], "cancelled")
+	assert_equal(result["error"]["details"]["cancelled_stage"], "after_model")
+	assert_equal(len(result["steps"]), 1)
+	assert_equal(result["steps"][0]["step_kind"], "model")
+	assert_equal(result["metadata"]["events"][0]["kind"], "run_started")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_cancelled")
+}
+
+test "runner stops before model when budget is already exceeded" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "should not run",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "budget-before",
+		"name": "Budget Before"
+	})
+	run_request := create_agent_run_request("budget stop", {
+		"run_id": "run-budget-before"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"budget_policy": {
+			"mode": "enforce",
+			"budget": {
+				"limits": {
+					"max_steps": 1
+				}
+			}
+		},
+		"budget_usage": {
+			"steps": 3
+		}
+	})
+
+	assert_equal(result["status"], "budget_exceeded")
+	assert_equal(result["error"]["kind"], "budget_exceeded")
+	assert_equal(len(result["steps"]), 0)
+	assert_equal(result["metadata"]["events"][0]["kind"], "run_started")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_failed")
+	assert_equal(result["metadata"]["budget"]["checks"][0]["stage"], "before_model")
+	assert_equal(result["metadata"]["budget"]["checks"][0]["ok"], false)
+}
+
+test "runner stops after model when token budget is exceeded" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "budget overrun",
+			"status_code": 200,
+			"usage": {
+				"input_tokens": 8,
+				"output_tokens": 6,
+				"total_tokens": 14
+			}
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "budget-after",
+		"name": "Budget After"
+	})
+	run_request := create_agent_run_request("budget limit", {
+		"run_id": "run-budget-after"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"budget_policy": {
+			"mode": "enforce",
+			"budget": {
+				"limits": {
+					"max_total_tokens": 10
+				}
+			}
+		}
+	})
+
+	assert_equal(result["status"], "budget_exceeded")
+	assert_equal(result["error"]["kind"], "budget_exceeded")
+	assert_equal(len(result["steps"]), 1)
+	assert_equal(result["steps"][0]["step_kind"], "model")
+	assert_equal(result["metadata"]["events"][0]["kind"], "run_started")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_failed")
+	assert_equal(result["metadata"]["budget"]["checks"][1]["stage"], "after_model")
+	assert_equal(result["metadata"]["budget"]["checks"][1]["ok"], false)
+}
+
+test "runner enforces timeout before model using injected runtime clock" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "should not run",
+			"status_code": 200
+		}
+	}
+
+	clock := {
+		"tick": 0
+	}
+	runtime_services := create_runtime_services({
+		"now_ms_fn": func() {
+			tick := clock["tick"]
+			if tick == 0 {
+				clock["tick"] := 1
+				return 0
+			}
+			return 500
+		}
+	})
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "timeout-before",
+		"name": "Timeout Before"
+	})
+	run_request := create_agent_run_request("timeout cutoff", {
+		"run_id": "run-timeout-before",
+		"runtime_services": runtime_services
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"timeout_ms": 100
+	})
+
+	assert_equal(result["status"], "timeout")
+	assert_equal(result["error"]["kind"], "timeout")
+	assert_equal(len(result["steps"]), 0)
+	assert_equal(result["metadata"]["events"][0]["kind"], "run_started")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_failed")
+	assert_equal(result["metadata"]["timeout"]["last_check"]["stage"], "before_model")
+	assert_equal(result["metadata"]["timeout"]["last_check"]["exceeded"], true)
+}
+
+test "runner enforces timeout after model independent of provider result" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "timeout after model",
+			"status_code": 200
+		}
+	}
+
+	clock := {
+		"tick": 0
+	}
+	runtime_services := create_runtime_services({
+		"now_ms_fn": func() {
+			tick := clock["tick"]
+			if tick == 0 {
+				clock["tick"] := 1
+				return 0
+			}
+			if tick == 1 {
+				clock["tick"] := 2
+				return 40
+			}
+			return 300
+		}
+	})
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "timeout-after",
+		"name": "Timeout After"
+	})
+	run_request := create_agent_run_request("timeout after model", {
+		"run_id": "run-timeout-after",
+		"runtime_services": runtime_services
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"timeout_ms": 100
+	})
+
+	assert_equal(result["status"], "timeout")
+	assert_equal(result["error"]["kind"], "timeout")
+	assert_equal(len(result["steps"]), 1)
+	assert_equal(result["steps"][0]["step_kind"], "model")
+	assert_equal(result["metadata"]["events"][0]["kind"], "run_started")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_failed")
+	assert_equal(result["metadata"]["timeout"]["last_check"]["stage"], "after_model")
+	assert_equal(result["metadata"]["timeout"]["last_check"]["exceeded"], true)
+}
+
+test "runner returns max_iterations status when iteration limit is reached" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "iteration limited",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "max-iteration-agent",
+		"name": "Max Iteration Agent",
+		"max_iterations": 1
+	})
+	run_request := create_agent_run_request("respect max iterations", {
+		"run_id": "run-max-iterations"
+	})
+
+	result := run_agent(runner, agent, run_request, {})
+
+	assert_equal(result["status"], "max_iterations")
+	assert_equal(result["error"]["kind"], "internal_error")
+	assert_equal(result["error"]["details"]["stop_reason"], "max_iterations")
+	assert_equal(len(result["steps"]), 1)
+	assert_equal(result["steps"][0]["step_kind"], "model")
+	assert_equal(result["metadata"]["events"][0]["kind"], "run_started")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_failed")
+}
+
+test "runner retries retryable model failures and succeeds within retry budget" {
+	fake_chat_retry_success := func(client, messages, request_options) {
+		retry_attempt := request_options["retry_attempt"]
+		if retry_attempt < 2 {
+			return {
+				"ok": false,
+				"provider": "openai",
+				"status_code": 504,
+				"error": {
+					"kind": "timeout",
+					"code": "timeout",
+					"message": "retry me",
+					"retryable": true
+				}
+			}
+		}
+
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "Recovered after retry",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat_retry_success
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "retry-success",
+		"name": "Retry Success"
+	})
+	run_request := create_agent_run_request("try again", {
+		"run_id": "run-retry-success"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"retry_policy": {
+			"max_model_retries": 2,
+			"max_tool_retries": 0
+		}
+	})
+
+	assert_equal(result["status"], "completed")
+	assert_equal(result["output"]["text"], "Recovered after retry")
+	assert_equal(result["metadata"]["retry_counters"]["model_attempts"], 2)
+	assert_equal(result["metadata"]["retry_counters"]["model_retries_used"], 1)
+	assert_equal(result["metadata"]["retry_counters"]["max_model_retries"], 2)
+}
+
+test "runner fails deterministically when retry budget is exhausted" {
+	fake_chat_retry_exhausted := func(client, messages, request_options) {
+		return {
+			"ok": false,
+			"provider": "openai",
+			"status_code": 504,
+			"error": {
+				"kind": "timeout",
+				"code": "timeout",
+				"message": "still failing",
+				"retryable": true
+			}
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat_retry_exhausted
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "retry-failed",
+		"name": "Retry Failed"
+	})
+	run_request := create_agent_run_request("still fail", {
+		"run_id": "run-retry-failed"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"retry_policy": {
+			"max_model_retries": 1,
+			"max_tool_retries": 0
+		}
+	})
+
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "timeout")
+	assert_equal(result["metadata"]["retry_counters"]["model_attempts"], 2)
+	assert_equal(result["metadata"]["retry_counters"]["model_retries_used"], 1)
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_failed")
+}
+
+test "runner rejects unknown requested tools before model execution" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "should not execute",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "tool-check",
+		"name": "Tool Check"
+	})
+
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-existing",
+		"name": "existing_tool"
+	})
+	assert_equal(register_result["ok"], true)
+
+	run_request := create_agent_run_request("use tools", {
+		"run_id": "run-unknown-tool",
+		"metadata": {
+			"requested_tools": ["missing_tool"]
+		}
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"tool_registry": register_result["registry"]
+	})
+
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "tool_not_found")
+	assert_equal(len(result["steps"]), 0)
+	assert_equal(result["metadata"]["events"][0]["kind"], "run_started")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_failed")
+	assert_equal(result["metadata"]["requested_tool_names"][0], "missing_tool")
+}
+
+test "runner executes model-emitted tool calls using registry handlers" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "tool call completed",
+			"status_code": 200,
+			"tool_calls": [
+				{
+					"name": "echo_tool",
+					"input": {
+						"content": "hello from tool"
+					}
+				}
+			]
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "tool-runner",
+		"name": "Tool Runner"
+	})
+
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-echo",
+		"name": "echo_tool",
+		"handler": func(input_payload, context) {
+			return {
+				"ok": true,
+				"output": {
+					"executed": true,
+					"content": input_payload["content"]
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	run_request := create_agent_run_request("invoke tool", {
+		"run_id": "run-tool-call",
+		"session_id": "session-tool-call"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"tool_registry": register_result["registry"]
+	})
+
+	assert_equal(result["status"], "completed")
+	assert_equal(result["output"]["text"], "tool call completed")
+	assert_equal(result["steps"][1]["step_kind"], "tool_call")
+	assert_equal(len(result["metadata"]["tool_calls"]), 1)
+	assert_equal(result["metadata"]["tool_calls"][0]["result"]["ok"], true)
+	assert_equal(result["metadata"]["tool_calls"][0]["result"]["output"]["executed"], true)
+}
+
+test "runner fails with approval_denied when tool call is denied by approval provider" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "tool call blocked",
+			"status_code": 200,
+			"tool_calls": [
+				{
+					"name": "write_tool",
+					"input": {
+						"content": "blocked write"
+					}
+				}
+			]
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "approval-tool-runner",
+		"name": "Approval Tool Runner"
+	})
+
+	registry := create_tool_registry({})
+	register_result := register_tool(registry, {
+		"id": "tool-write",
+		"name": "write_tool",
+		"permissions": ["write"],
+		"handler": func(input_payload, context) {
+			return {
+				"ok": true,
+				"output": {
+					"executed": true
+				}
+			}
+		}
+	})
+	assert_equal(register_result["ok"], true)
+
+	run_request := create_agent_run_request("invoke blocked tool", {
+		"run_id": "run-approval-denied",
+		"session_id": "session-approval-denied"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"tool_registry": register_result["registry"],
+		"approval_policy": {
+			"mode": "write_tool"
+		},
+		"approval_provider": {
+			"kind": "deny_all"
+		}
+	})
+
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "approval_denied")
+	assert_equal(len(result["metadata"]["tool_calls"]), 1)
+	assert_equal(result["metadata"]["tool_calls"][0]["result"]["status"], "approval_denied")
+	assert_equal(result["metadata"]["events"][len(result["metadata"]["events"]) - 1]["kind"], "run_failed")
+}
+
+test "runner stream run fails deterministically on guardrail_blocked event" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "fallback",
+			"status_code": 200
+		}
+	}
+
+	fake_stream := func(client, messages, request_options, on_event) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "should-block",
+			"status_code": 200,
+			"emitted_events": [
+				{
+					"type": "guardrail_blocked",
+					"payload": {
+						"rule": "policy.guardrail"
+					}
+				}
+			]
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat,
+		"chat_completion_stream_fn": fake_stream
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "guardrail-runner",
+		"name": "Guardrail Runner"
+	})
+	run_request := create_agent_run_request("trigger guardrail", {
+		"run_id": "run-guardrail-blocked",
+		"session_id": "session-guardrail-blocked"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"stream": true
+	})
+
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "guardrail_blocked")
+	assert_equal(result["metadata"]["stream"]["events_count"] >= 1, true)
+}
+
+test "runner injects retrieval context into model messages when enabled" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "retrieval-context-applied",
+			"status_code": 200
+		}
+	}
+
+	retrieval_provider := create_mock_retrieval_provider({
+		"responses": {
+			"what should happen": {
+				"context": {
+					"context_id": "ctx-rag-002",
+					"summary": "Relevant prior notes",
+					"documents": [
+						{
+							"document_id": "doc-rag-1",
+							"title": "RAG note",
+							"content": "Use retrieved context before model generation.",
+							"metadata": {
+								"path": "knowledge/rag-note.md"
+							}
+						}
+					],
+					"citations": [
+						{
+							"citation_id": "cite-rag-1",
+							"document_id": "doc-rag-1",
+							"score": 0.91,
+							"metadata": {
+								"path": "knowledge/rag-note.md"
+							}
+						}
+					]
+				}
+			}
+		}
+	})
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "rag-agent",
+		"name": "RAG Agent",
+		"instructions": "Use retrieval when available.",
+		"policy": {
+			"retrieval": {
+				"enabled": true,
+				"max_documents": 1
+			}
+		}
+	})
+	run_request := create_agent_run_request("what should happen", {
+		"run_id": "run-rag-002",
+		"session_id": "session-rag-002"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"retrieval_provider": retrieval_provider
+	})
+
+	assert_equal(result["status"], "completed")
+	assert_equal(result["output"]["text"], "retrieval-context-applied")
+	assert_equal(result["steps"][0]["payload"]["messages_count"], 3)
+	assert_equal(result["metadata"]["retrieval"]["applied"], true)
+	assert_equal(result["metadata"]["retrieval"]["reason"], "applied")
+	assert_equal(result["metadata"]["retrieval"]["result"]["count"] >= 1, true)
+	assert_equal(result["metadata"]["retrieval"]["citation_count"], 1)
+	assert_equal(result["metadata"]["retrieval"]["citations"][0]["citation_id"], "citation-doc-1")
+	assert_equal(result["metadata"]["retrieval"]["citations"][0]["document_id"], "doc-rag-1")
+	assert_equal(result["metadata"]["retrieval"]["citations"][0]["path"], "knowledge/rag-note.md")
+	run_completed_event := result["metadata"]["events"][len(result["metadata"]["events"]) - 1]
+	assert_equal(run_completed_event["payload"]["citation_count"], 1)
+	assert_equal(run_completed_event["payload"]["citations"][0]["citation_id"], "citation-doc-1")
+	assert_equal(contains(result["metadata"]["retrieval"]["context_message"], "Retrieved context:") >= 0, true)
+}
+
+test "runner executes explicit handoff to configured target agent" {
+	fake_chat := func(client, messages, request_options) {
+		first_content := ""
+		if len(messages) > 0 {
+			first_message := messages[0]
+			if type(first_message) == "dict" {
+				first_content = to_string(first_message["content"])
+			}
+		}
+
+		is_writer_run := first_content == "Writer target instructions."
+		if is_writer_run {
+			return {
+				"ok": true,
+				"provider": "openai",
+				"model": "gpt-4.1-mini",
+				"output_text": "writer-final-output",
+				"status_code": 200
+			}
+		}
+
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "planner-draft-output",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	planner_agent := create_agent({
+		"id": "planner-agent",
+		"name": "Planner Agent",
+		"instructions": "Planner source instructions.",
+		"policy": {
+			"target_agent_id": "writer-agent",
+			"target_agent_reason": "Writer should finalize tone.",
+			"request_id": "handoff-test-request",
+			"handoff": {
+				"target_agent_id": "writer-agent",
+				"reason": "Writer should finalize tone.",
+				"request_id": "handoff-test-request"
+			}
+		},
+		"model_policy": {
+			"handoff_marker": "planner"
+		}
+	})
+	writer_agent := create_agent({
+		"id": "writer-agent",
+		"name": "Writer Agent",
+		"instructions": "Writer target instructions.",
+		"model_policy": {
+			"handoff_marker": "writer"
+		}
+	})
+	runner = create_agent_runner({
+		"ai_adapter": adapter,
+		"handoff_registry": {
+			"writer-agent": writer_agent
+		}
+	})
+	assert_equal(len(keys(runner["handoff_registry"])), 1)
+	assert_equal(planner_agent["instructions"], "Planner source instructions.")
+	assert_equal(planner_agent["model_policy"]["handoff_marker"], "planner")
+	assert_equal(writer_agent["model_policy"]["handoff_marker"], "writer")
+
+	run_request := create_agent_run_request("plan then write", {
+		"run_id": "run-handoff-1",
+		"session_id": "session-handoff-1",
+		"metadata": {
+			"requested_tools": ["writer-agent"]
+		}
+	})
+	assert_equal(type(run_request), "dict")
+
+	tool_registry := create_tool_registry({})
+	register_result := register_tool(tool_registry, {
+		"id": "tool-handoff-target",
+		"name": "writer-agent"
+	})
+	assert_equal(register_result["ok"], true)
+
+	result := run_agent(runner, planner_agent, run_request, {
+		"tool_registry": register_result["registry"]
+	})
+
+	assert_equal(result["status"], "completed")
+	assert_equal(result["output"]["text"], "writer-final-output")
+	assert_equal(len(result["steps"]) >= 2, true)
+	assert_equal(result["metadata"]["handoff"]["requested"], true)
+	assert_equal(result["metadata"]["handoff"]["executed"], true)
+	assert_equal(result["metadata"]["handoff"]["loop_state"]["depth"], 1)
+	handoff_started_count := 0
+	handoff_completed_count := 0
+	handoff_failed_count := 0
+	for event in result["metadata"]["events"] {
+		if type(event) == "dict" {
+			if has_key(event, "kind") {
+				kind := to_string(event["kind"])
+				if contains(kind, "handoff_started") >= 0 {
+					handoff_started_count = handoff_started_count + 1
+				}
+				if contains(kind, "handoff_completed") >= 0 {
+					handoff_completed_count = handoff_completed_count + 1
+				}
+				if contains(kind, "handoff_failed") >= 0 {
+					handoff_failed_count = handoff_failed_count + 1
+				}
+			}
+		}
+	}
+	assert_equal(handoff_started_count >= 1, true)
+	assert_equal(handoff_completed_count >= 1, true)
+	assert_equal(result["metadata"]["handoff"]["target_status"], "completed")
+}
+
+test "runner persists final output artifact and returns artifact references" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "Artifact-ready summary",
+			"status_code": 200
+		}
+	}
+
+	store_id := "run-artifact-001"
+	reset_result := reset_in_memory_artifact_store({
+		"store_id": store_id
+	})
+	assert_equal(reset_result["ok"], true)
+
+	artifact_store := create_in_memory_artifact_store({
+		"store_id": store_id
+	})
+
+	retrieval_provider := create_mock_retrieval_provider({
+		"responses": {
+			"Generate an artifact": {
+				"context": {
+					"context_id": "ctx-rag-003",
+					"summary": "Artifact response should preserve citations.",
+					"documents": [
+						{
+							"document_id": "doc-artifact-1",
+							"title": "Artifact source",
+							"content": "Citations should be attached to output artifacts.",
+							"metadata": {
+								"path": "knowledge/artifacts.md"
+							}
+						}
+					],
+					"citations": [
+						{
+							"citation_id": "cite-artifact-1",
+							"document_id": "doc-artifact-1",
+							"score": 0.88,
+							"metadata": {
+								"path": "knowledge/artifacts.md"
+							}
+						}
+					]
+				}
+			}
+		}
+	})
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "artifact-writer",
+		"name": "Artifact Writer",
+		"instructions": "Write final output.",
+		"policy": {
+			"retrieval": {
+				"enabled": true,
+				"max_documents": 1
+			}
+		}
+	})
+	run_request := create_agent_run_request("Generate an artifact", {
+		"run_id": "run-artifact-1",
+		"session_id": "session-artifact-1"
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"artifact_store": artifact_store,
+		"retrieval_provider": retrieval_provider
+	})
+
+	assert_equal(result["status"], "completed")
+	assert_equal(len(result["artifacts"]), 1)
+	assert_equal(result["artifacts"][0]["artifact_kind"], "markdown")
+	assert_equal(result["artifacts"][0]["producer_run_id"], "run-artifact-1")
+	assert_equal(result["artifacts"][0]["producer_tool_name"], "runner.final_output")
+	run_completed_event := result["metadata"]["events"][len(result["metadata"]["events"]) - 1]
+	assert_equal(run_completed_event["payload"]["artifact_count"], 1)
+	assert_equal(run_completed_event["payload"]["citation_count"], 1)
+	assert_equal(result["artifacts"][0]["metadata"]["retrieval_citation_count"], 1)
+	assert_equal(contains(result["artifacts"][0]["metadata"]["retrieval_citation_refs"], "citation-doc-1|doc-artifact-1|knowledge/artifacts.md") >= 0, true)
+	assert_equal(result["metadata"]["artifact_store_writes"][0]["stage"], "final_output")
+	assert_equal(result["steps"][2]["step_kind"], "artifact")
+
+	stored := artifact_store_list(artifact_store, {})
+	assert_equal(stored["ok"], true)
+	assert_equal(stored["count"], 1)
+	assert_equal(stored["artifacts"][0]["content"], "Artifact-ready summary")
+}
+
+test "runner blocks handoff loop using visited target history" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "planner-output",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	writer_agent := create_agent({
+		"id": "writer-agent",
+		"name": "Writer Agent",
+		"instructions": "Writer target instructions."
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter,
+		"handoff_registry": {
+			"writer-agent": writer_agent
+		}
+	})
+	planner_agent := create_agent({
+		"id": "planner-agent",
+		"name": "Planner Agent",
+		"instructions": "Planner source instructions.",
+		"policy": {
+			"target_agent_id": "writer-agent"
+		}
+	})
+
+	run_request := create_agent_run_request("plan then write", {
+		"run_id": "run-handoff-loop",
+		"session_id": "session-handoff-loop",
+		"metadata": {
+			"requested_tools": ["writer-agent"],
+			"handoff_depth": 1,
+			"handoff_max_depth": 3,
+			"handoff_visited_targets": ["planner-agent", "writer-agent"]
+		}
+	})
+	tool_registry := create_tool_registry({})
+	register_result := register_tool(tool_registry, {
+		"id": "tool-handoff-loop-target",
+		"name": "writer-agent"
+	})
+	assert_equal(register_result["ok"], true)
+
+	result := run_agent(runner, planner_agent, run_request, {
+		"tool_registry": register_result["registry"]
+	})
+
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "handoff_failed")
+	assert_equal(result["error"]["details"]["violation"], "loop_detected")
+
+	handoff_failed_count := 0
+	for event in result["metadata"]["events"] {
+		if event["kind"] == "handoff_failed" {
+			handoff_failed_count = handoff_failed_count + 1
+		}
+	}
+	assert_equal(handoff_failed_count >= 1, true)
+}
+
+test "runner blocks handoff when max depth is exhausted" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "planner-output",
+			"status_code": 200
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	writer_agent := create_agent({
+		"id": "writer-agent",
+		"name": "Writer Agent",
+		"instructions": "Writer target instructions."
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter,
+		"handoff_registry": {
+			"writer-agent": writer_agent
+		}
+	})
+	planner_agent := create_agent({
+		"id": "planner-agent",
+		"name": "Planner Agent",
+		"instructions": "Planner source instructions.",
+		"policy": {
+			"target_agent_id": "writer-agent"
+		}
+	})
+
+	run_request := create_agent_run_request("plan then write", {
+		"run_id": "run-handoff-depth",
+		"session_id": "session-handoff-depth",
+		"metadata": {
+			"requested_tools": ["writer-agent"],
+			"handoff_depth": 3,
+			"handoff_max_depth": 3,
+			"handoff_visited_targets": ["planner-agent"]
+		}
+	})
+	tool_registry := create_tool_registry({})
+	register_result := register_tool(tool_registry, {
+		"id": "tool-handoff-depth-target",
+		"name": "writer-agent"
+	})
+	assert_equal(register_result["ok"], true)
+
+	result := run_agent(runner, planner_agent, run_request, {
+		"tool_registry": register_result["registry"]
+	})
+
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "handoff_failed")
+	assert_equal(result["error"]["details"]["violation"], "max_depth_exceeded")
+}
+
+test "runner emits budget telemetry events during successful runs" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "budget telemetry",
+			"status_code": 200,
+			"usage": {
+				"input_tokens": 4,
+				"output_tokens": 2,
+				"total_tokens": 6
+			}
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "budget-telemetry",
+		"name": "Budget Telemetry"
+	})
+	run_request := create_agent_run_request("track budget", {
+		"run_id": "run-budget-telemetry"
+	})
+
+	result := run_agent(runner, agent, run_request, {})
+
+	assert_equal(result["status"], "completed")
+
+	budget_updated_count := 0
+	for event in result["metadata"]["events"] {
+		if event["kind"] == "budget_updated" {
+			budget_updated_count = budget_updated_count + 1
+		}
+	}
+
+	assert_equal(budget_updated_count >= 4, true)
+}
+
+test "runner stream and non-stream modes produce equivalent terminal output" {
+	fake_chat := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "stream-final-output",
+			"status_code": 200
+		}
+	}
+
+	fake_stream := func(client, messages, request_options, on_event) {
+		on_event({"type": "delta", "delta": "stream-"})
+		on_event({"type": "tool_call_started", "tool_name": "search"})
+		on_event({"type": "tool_call_completed", "tool_name": "search"})
+		on_event({"type": "done", "finish_reason": "stop"})
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "stream-final-output",
+			"status_code": 200,
+			"emitted_events": [
+				{"type": "delta", "delta": "stream-"},
+				{"type": "tool_call_started", "tool_name": "search"},
+				{"type": "tool_call_completed", "tool_name": "search"},
+				{"type": "done", "finish_reason": "stop"}
+			]
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": fake_chat,
+		"chat_completion_stream_fn": fake_stream
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "stream-agent",
+		"name": "Stream Agent"
+	})
+	run_request := create_agent_run_request("stream request", {
+		"run_id": "run-stream-parity",
+		"session_id": "session-stream-parity"
+	})
+	stream_run_request := create_agent_run_request("stream request", {
+		"run_id": "run-stream-parity",
+		"session_id": "session-stream-parity",
+		"stream": true
+	})
+
+	non_stream_result := run_agent(runner, agent, run_request, {
+		"stream": false
+	})
+	stream_result := run_agent(runner, agent, stream_run_request, {})
+
+	assert_equal(non_stream_result["status"], "completed")
+	assert_equal(stream_result["status"], "completed")
+	assert_equal(stream_result["output"]["text"], non_stream_result["output"]["text"])
+	assert_equal(stream_result["metadata"]["stream"]["enabled"], true)
+	assert_equal(stream_result["metadata"]["stream"]["events_count"], 4)
+	assert_equal(stream_result["metadata"]["stream"]["events"][0]["kind"], "model_delta")
+	assert_equal(stream_result["metadata"]["stream"]["events"][1]["kind"], "tool_call_started")
+	assert_equal(stream_result["metadata"]["stream"]["events"][2]["kind"], "tool_call_completed")
+	assert_equal(stream_result["metadata"]["stream"]["events"][3]["kind"], "run_terminal")
+}
+
+test "runner fails when stream callback raises an exception" {
+	fake_stream := func(client, messages, request_options, on_event) {
+		on_event({"type": "delta", "delta": "partial"})
+		return {
+			"ok": true,
+			"provider": "openai",
+			"model": "gpt-4.1-mini",
+			"output_text": "ignored",
+			"status_code": 200,
+			"emitted_events": [
+				{"type": "delta", "delta": "partial"}
+			]
+		}
+	}
+
+	adapter := create_ai_sdk_adapter({
+		"chat_completion_fn": func(client, messages, request_options) {
+			return {
+				"ok": true,
+				"provider": "openai",
+				"model": "gpt-4.1-mini",
+				"output_text": "ignored",
+				"status_code": 200
+			}
+		},
+		"chat_completion_stream_fn": fake_stream
+	})
+	runner := create_agent_runner({
+		"ai_adapter": adapter
+	})
+	agent := create_agent({
+		"id": "stream-callback-fail",
+		"name": "Stream Callback Fail"
+	})
+	run_request := create_agent_run_request("stream callback fail", {
+		"run_id": "run-stream-callback-fail",
+		"stream": true
+	})
+
+	result := run_agent(runner, agent, run_request, {
+		"on_stream_event": func(event) {
+			parse_json("{")
+		}
+	})
+
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "model_error")
+	assert_equal(result["metadata"]["context"]["stream"]["events_count"] >= 1, true)
+}
+
+test "guardrail stream events map to deterministic guardrail_blocked kind" {
+	mapped := map_ai_sdk_stream_event({
+		"type": "guardrail_blocked",
+		"rule": "policy.guardrail"
+	}, {
+		"run_id": "run-stream-guardrail",
+		"agent_id": "stream-guardrail",
+		"session_id": "session-stream-guardrail",
+		"sequence": 1
+	})
+
+	assert_equal(mapped["kind"], "guardrail_blocked")
+}

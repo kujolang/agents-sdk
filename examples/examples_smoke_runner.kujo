@@ -1,0 +1,70 @@
+from examples.hello_agent import run_hello_agent_example
+from examples.tool_agent import run_tool_agent_example
+from examples.approval_agent import run_approval_agent_example
+from examples.retrieval_agent import run_retrieval_agent_example
+from examples.handoff_agent import run_handoff_agent_example
+from examples.traced_agent import run_traced_agent_example
+from examples.artifact_agent import run_artifact_agent_example
+
+func summarize_example_result(raw_result) {
+	result := raw_result
+	if type(raw_result) != "dict" {
+		return {
+			"ok": false,
+			"status": "invalid",
+			"requires_network": false
+		}
+	}
+
+	run_result := {}
+	if has_key(result, "result") {
+		candidate := result["result"]
+		if type(candidate) == "dict" {
+			run_result = candidate
+		}
+	}
+
+	status := "unknown"
+	if has_key(run_result, "status") {
+		status = to_string(run_result["status"])
+	}
+
+	requires_network := false
+	if has_key(result, "requires_network") {
+		requires_network = result["requires_network"]
+	}
+
+	return {
+		"ok": result["ok"],
+		"status": status,
+		"requires_network": requires_network
+	}
+}
+
+func run_all_examples_impl() {
+	hello_result := run_hello_agent_example()
+	tool_result := run_tool_agent_example()
+	approval_result := run_approval_agent_example()
+	retrieval_result := run_retrieval_agent_example()
+	handoff_result := run_handoff_agent_example()
+	traced_result := run_traced_agent_example()
+	artifact_result := run_artifact_agent_example()
+
+	return {
+		"hello_agent": summarize_example_result(hello_result),
+		"tool_agent": summarize_example_result(tool_result),
+		"approval_agent": summarize_example_result(approval_result),
+		"retrieval_agent": summarize_example_result(retrieval_result),
+		"handoff_agent": summarize_example_result(handoff_result),
+		"traced_agent": summarize_example_result(traced_result),
+		"artifact_agent": summarize_example_result(artifact_result)
+	}
+}
+
+func main() {
+	results := run_all_examples_impl()
+	print(to_json(results))
+}
+
+export run_all_examples := run_all_examples_impl
+main()

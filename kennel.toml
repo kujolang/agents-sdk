@@ -1,0 +1,59 @@
+[package]
+name = "agents-sdk"
+version = "0.1.0"
+description = "Production-oriented agent runtime primitives for Agents SDK, built on top of the Agents SDK AI SDK."
+license = "MIT"
+authors = ["Robert DeVore <me@robertdevore.com>"]
+homepage = ""
+repository = "https://github.com/kujolang/agents-sdk"
+documentation = ""
+keywords = ["agents-sdk", "agents", "sdk", "ai", "runtime"]
+categories = ["ai", "developer-tools"]
+readme = "README.md"
+
+[package.status]
+stage = "experimental"
+stability = "early"
+public_api = true
+notes = "Core runtime contracts and offline-first integration coverage are active; hosted/commercial layers remain adapter-only."
+
+[agents-sdk]
+minimum_version = "0.1.0"
+entry = "examples/module_exports_smoke.kujo"
+sources = ["src", "."]
+includes = ["README.md", "tests"]
+excludes = [".git", "kennel_packages", "dist", "build", "node_modules"]
+
+[build]
+command = ""
+output = "dist"
+artifacts = []
+
+[dependencies]
+
+[dev-dependencies]
+
+[scripts]
+test = ""$KUJO_BIN" test"
+test-contracts = ""$KUJO_BIN" test-run tests/runner_result_event_contract_tests.kujo -v"
+test-examples = ""$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v"
+smoke = ""$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter"
+smoke-examples = ""$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter"
+verify-offline = "bash scripts/ci_no_network_enforcement.sh"
+
+[package.exports]
+agents = "src/agents/index.kujo"
+core_types = "src/agents/core_types.kujo"
+errors = "src/agents/errors.kujo"
+events = "src/agents/events.kujo"
+runner = "src/agents/runner.kujo"
+ai_adapter = "src/agents/ai/adapter.kujo"
+
+[registry]
+index = ""
+publish = ""
+
+[trust]
+checksum = ""
+signature = ""
+signing_key = ""
