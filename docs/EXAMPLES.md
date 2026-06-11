@@ -15,7 +15,7 @@ All examples are offline-first and rely on deterministic fixture adapters.
 
 ## Validate Example Smoke Coverage
 
-- export KUJO_BIN=/Users/robertdevore/Documents/Kujolang/kujo-repos/kujo/target/debug/kujo
+- export KUJO_BIN=/path/to/kujo/target/debug/kujo
 - "$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
 - "$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
 

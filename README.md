@@ -9,7 +9,7 @@ Current status: foundational agent runtime primitives, offline fixtures, and con
 1. Use a pinned Agents SDK runtime binary for deterministic behavior:
 
 ```bash
-export KUJO_BIN=/Users/robertdevore/Documents/Kujolang/kujo-repos/kujo/target/debug/kujo
+export KUJO_BIN=/path/to/kujo/target/debug/kujo
 ```
 
 2. Run the module export smoke test:

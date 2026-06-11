@@ -8,7 +8,7 @@
 
 Commands:
 
-- export KUJO_BIN=/Users/robertdevore/Documents/Kujolang/kujo-repos/kujo/target/debug/kujo
+- export KUJO_BIN=/path/to/kujo/target/debug/kujo
 - "$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter
 - "$KUJO_BIN" test
 
