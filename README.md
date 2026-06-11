@@ -26,7 +26,7 @@ export KUJO_BIN=/path/to/kujo/target/debug/kujo
 
 ## Relationship to AI SDK
 
-- AI SDK owns provider calls, transport normalization, and provider-gated model behavior.
+- [AI SDK](https://github.com/kujolang/ai-sdk/) owns provider calls, transport normalization, and provider-gated model behavior.
 - Agents SDK builds higher-level agent workflows on top of those controlled boundaries.
 - The bundled examples and tests default to offline fixtures so local validation does not require real provider keys.
 - There is no separate user-facing CLI; use the library modules or bundled examples/tests.
@@ -51,7 +51,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Core Type Contracts
 
-`src/agents/core_types.kujo` now provides baseline constructors and validators for:
+`src/agents/core_types.kujo` provides baseline constructors and validators for:
 
 - agent config and validation
 - agent/message/step contracts
@@ -68,7 +68,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Runtime Event Contracts
 
-`src/agents/events.kujo` now provides:
+`src/agents/events.kujo` provides:
 
 - stable `AgentEventKind` values for runner lifecycle observability
 - required event-field registry for schema checks
@@ -103,7 +103,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Non-Streaming Runner
 
-`src/agents/runner.kujo` now provides a baseline non-stream runner that:
+`src/agents/runner.kujo` provides a baseline non-stream runner that:
 
 - validates agent config and builds run context
 - composes model messages from instructions and user input
@@ -119,7 +119,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Tool Registry Contracts
 
-`src/agents/tools/registry.kujo` now provides first-class tool and registry contracts for:
+`src/agents/tools/registry.kujo` provides first-class tool and registry contracts for:
 
 - deterministic tool contract validation and normalization (`id`, `name`, schemas, permissions, risk, timeout)
 - schema-level input validation with deterministic `tool_input_invalid` violations for missing required and unknown fields
@@ -134,7 +134,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Approval Policy Contracts
 
-`src/agents/security/approval.kujo` now provides deterministic approval policy primitives for:
+`src/agents/security/approval.kujo` provides deterministic approval policy primitives for:
 
 - policy modes for always-allow, always-deny, write-tool, high-risk, and permission-based enforcement
 - structured approval request and decision contracts for runner/tool integration boundaries
@@ -149,7 +149,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Session Store Contracts
 
-`src/agents/sessions/store.kujo` now provides foundational session contracts for:
+`src/agents/sessions/store.kujo` provides foundational session contracts for:
 
 - `SessionId`, `SessionMessage`, `SessionState`, and `Session` constructors with normalized fields
 - `SessionStore` interface shape covering create/get/update/list/delete operations
@@ -159,7 +159,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Memory Store Contracts
 
-`src/agents/memory/store.kujo` now provides foundational memory abstractions for:
+`src/agents/memory/store.kujo` provides foundational memory abstractions for:
 
 - `MemoryScope`, `MemoryProvenance`, `MemoryEntry`, and `MemoryQuery` contract constructors
 - `MemoryQueryResult` contracts with provenance summaries and total-count metadata
@@ -169,7 +169,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Runner Session/Memory Lifecycle
 
-`src/agents/runner.kujo` now includes lifecycle save points that can:
+`src/agents/runner.kujo` includes lifecycle save points that can:
 
 - restore prior session run-state at run start when a `session_store` is configured
 - persist deterministic run-state snapshots on run start, cancellation, failure, and completion
@@ -178,7 +178,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Retrieval Contracts
 
-`src/agents/retrieval/provider.kujo` now provides baseline retrieval contracts for:
+`src/agents/retrieval/provider.kujo` provides baseline retrieval contracts for:
 
 - `RetrievalQuery`, `RetrievedDocument`, `RetrievalCitation`, `RetrievedContext`, and `RetrievalResult` payloads
 - `RetrievalPolicy` options for enablement, document limits, and citation inclusion
@@ -187,7 +187,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 
 ## Retrieval Lifecycle Injection
 
-`src/agents/runner.kujo` now supports optional pre-model retrieval context injection when retrieval is enabled via agent policy or run options and a retrieval provider is configured:
+`src/agents/runner.kujo` supports optional pre-model retrieval context injection when retrieval is enabled via agent policy or run options and a retrieval provider is configured:
 
 - resolves retrieval config from options, run request, or `agent.policy.retrieval`
 - queries the retrieval provider before model invocation and builds a deterministic retrieval context message
@@ -199,7 +199,7 @@ Testing guidance: Use `create_mock_retrieval_provider` for integration tests so 
 
 ## Handoff Contracts
 
-`src/agents/handoffs/handoff.kujo` now provides foundational handoff contracts for:
+`src/agents/handoffs/handoff.kujo` provides foundational handoff contracts for:
 
 - `HandoffTarget` and `HandoffPolicy` constructors
 - `HandoffLoopState` depth/visited-target metadata for loop and recursion safety checks
@@ -208,7 +208,7 @@ Testing guidance: Use `create_mock_retrieval_provider` for integration tests so 
 
 ## Handoff Execution
 
-`src/agents/runner.kujo` now supports explicit handoff execution to configured target agents:
+`src/agents/runner.kujo` supports explicit handoff execution to configured target agents:
 
 - resolves handoff intent from run options, run request fields, request metadata, and agent policy hints
 - resolves target agents through configured handoff registries
@@ -218,7 +218,7 @@ Testing guidance: Use `create_mock_retrieval_provider` for integration tests so 
 
 ## Trace Sink Contracts
 
-`src/agents/tracing/sink.kujo` now provides baseline trace contracts for:
+`src/agents/tracing/sink.kujo` provides baseline trace contracts for:
 
 - `TraceEvent` constructors with deterministic `trc-*` identifiers and injected clock timestamps
 - required-field validation helpers for stable trace schema checks
@@ -227,7 +227,7 @@ Testing guidance: Use `create_mock_retrieval_provider` for integration tests so 
 
 ## Artifact Store Contracts
 
-`src/agents/artifacts/store.kujo` now provides baseline artifact contracts for:
+`src/agents/artifacts/store.kujo` provides baseline artifact contracts for:
 
 - stable `ArtifactKind` values and `ArtifactId` constructors
 - normalized `Artifact` payloads with producer IDs, timestamps, metadata, and byte estimates
@@ -236,7 +236,7 @@ Testing guidance: Use `create_mock_retrieval_provider` for integration tests so 
 
 ## Budget Contracts
 
-`src/agents/budgets/limits.kujo` now provides baseline budget and usage contracts for:
+`src/agents/budgets/limits.kujo` provides baseline budget and usage contracts for:
 
 - stable budget counter and limit key registries covering model/tool calls, steps, handoffs, memory operations, artifact bytes, tokens, cost, and elapsed time
 - normalized `AgentBudget`, `BudgetUsage`, and `BudgetLimitPolicy` constructors
@@ -245,7 +245,7 @@ Testing guidance: Use `create_mock_retrieval_provider` for integration tests so 
 
 ## Integration Adapter Contracts
 
-`src/agents/integrations/adapters.kujo` now provides integration boundaries for:
+`src/agents/integrations/adapters.kujo` provides integration boundaries for:
 
 - external tool-provider adapters (`create_external_tool_provider_adapter`) for MCP/MCT-style catalog and invocation mapping
 - Dispatch hooks (`create_dispatch_integration_hooks`) for step execution and workflow-as-tool invocation
