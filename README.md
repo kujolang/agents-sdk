@@ -12,10 +12,16 @@ Current status: foundational agent runtime primitives, offline fixtures, and con
 export KUJO_BIN=/path/to/kujo/target/debug/kujo
 ```
 
-2. Run the module export smoke test:
+2. Run the offline example smoke runner:
 
 ```bash
-"$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter
+"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+```
+
+Expected output:
+
+```json
+{"approval_agent":{"ok":true,"requires_network":false,"status":"failed"},"artifact_agent":{"ok":true,"requires_network":false,"status":"completed"},"handoff_agent":{"ok":true,"requires_network":false,"status":"completed"},"hello_agent":{"ok":true,"requires_network":false,"status":"completed"},"retrieval_agent":{"ok":true,"requires_network":false,"status":"completed"},"tool_agent":{"ok":true,"requires_network":false,"status":"completed"},"traced_agent":{"ok":true,"requires_network":false,"status":"completed"}}
 ```
 
 3. Run the full offline test suite:
@@ -23,6 +29,8 @@ export KUJO_BIN=/path/to/kujo/target/debug/kujo
 ```bash
 "$KUJO_BIN" test
 ```
+
+Agent/contributor notes: see `AGENTS.md` for canonical example labels, fixture boundaries, and search hygiene.
 
 ## Relationship to AI SDK
 
