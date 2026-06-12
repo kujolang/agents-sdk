@@ -2,6 +2,7 @@ from src.agents.ai.adapter import create_ai_sdk_adapter
 from src.agents.runner import create_agent_runner, run_agent
 from src.agents.core_types import create_agent, create_agent_run_request
 from src.agents.tools.registry import create_tool_registry, register_tool
+from examples.support import offline_example_error
 
 func run_approval_agent_example_impl() {
 	fake_chat := func(client, messages, request_options) {
@@ -37,11 +38,7 @@ func run_approval_agent_example_impl() {
 		}
 	})
 	if register_result["ok"] == false {
-		return {
-			"ok": false,
-			"requires_network": false,
-			"error": register_result["error"]
-		}
+		return offline_example_error(register_result["error"])
 	}
 
 	adapter := create_ai_sdk_adapter({

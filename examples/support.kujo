@@ -1,0 +1,9 @@
+func offline_example_error_impl(error_payload) {
+	return {
+		"ok": false,
+		"requires_network": false,
+		"error": error_payload
+	}
+}
+
+export offline_example_error := offline_example_error_impl

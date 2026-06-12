@@ -1,6 +1,7 @@
 from src.agents.testing.no_network import create_no_network_harness
 from src.agents.runner import create_agent_runner, run_agent
 from src.agents.core_types import create_agent, create_agent_run_request
+from examples.support import offline_example_error
 
 func run_hello_agent_example_impl() {
 	harness_result := create_no_network_harness({
@@ -9,11 +10,7 @@ func run_hello_agent_example_impl() {
 		}
 	})
 	if harness_result["ok"] == false {
-		return {
-			"ok": false,
-			"requires_network": false,
-			"error": harness_result["error"]
-		}
+		return offline_example_error(harness_result["error"])
 	}
 
 	harness := harness_result
