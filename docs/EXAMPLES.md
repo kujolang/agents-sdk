@@ -18,6 +18,7 @@ Prioritize copyable examples over tests: examples should model the most token-ef
 ## Support Files
 
 - examples/support.kujo provides shared offline example helpers and is not a standalone demo.
+- Use support helpers for repeated no-network result envelopes and mock model response boilerplate, while keeping each example's SDK feature setup visible.
 - tests/*.out files are expected-output fixtures, not copyable example style.
 
 ## Expected Smoke Output
