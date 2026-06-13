@@ -2,7 +2,7 @@ from src.agents.testing.no_network import create_no_network_harness
 from src.agents.ai.adapter import create_ai_sdk_adapter
 from src.agents.runner import create_agent_runner, run_agent
 from src.agents.core_types import create_agent, create_agent_run_request
-from examples.support import offline_example_error
+from examples.support import offline_example_error, offline_example_success, offline_model_response
 
 func run_tool_agent_example_impl() {
 	harness_result := create_no_network_harness({
@@ -16,12 +16,7 @@ func run_tool_agent_example_impl() {
 
 	harness := harness_result
 	fake_chat := func(client, messages, request_options) {
-		return {
-			"ok": true,
-			"provider": "mock-provider",
-			"model": "mock-model",
-			"output_text": "tool-agent-offline",
-			"status_code": 200,
+		return offline_model_response("tool-agent-offline", {
 			"tool_calls": [
 				{
 					"name": "echo_tool",
@@ -30,7 +25,7 @@ func run_tool_agent_example_impl() {
 					}
 				}
 			]
-		}
+		})
 	}
 
 	adapter := create_ai_sdk_adapter({
@@ -52,12 +47,7 @@ func run_tool_agent_example_impl() {
 		"tool_registry": harness["tool_registry"]
 	})
 
-	return {
-		"ok": true,
-		"requires_network": false,
-		"scenario": "tool_agent",
-		"result": result
-	}
+	return offline_example_success("tool_agent", result, {})
 }
 
 export run_tool_agent_example := run_tool_agent_example_impl

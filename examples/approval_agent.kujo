@@ -2,16 +2,11 @@ from src.agents.ai.adapter import create_ai_sdk_adapter
 from src.agents.runner import create_agent_runner, run_agent
 from src.agents.core_types import create_agent, create_agent_run_request
 from src.agents.tools.registry import create_tool_registry, register_tool
-from examples.support import offline_example_error
+from examples.support import offline_example_error, offline_example_success, offline_model_response
 
 func run_approval_agent_example_impl() {
 	fake_chat := func(client, messages, request_options) {
-		return {
-			"ok": true,
-			"provider": "mock-provider",
-			"model": "mock-model",
-			"output_text": "approval-agent-offline",
-			"status_code": 200,
+		return offline_model_response("approval-agent-offline", {
 			"tool_calls": [
 				{
 					"name": "write_tool",
@@ -20,7 +15,7 @@ func run_approval_agent_example_impl() {
 					}
 				}
 			]
-		}
+		})
 	}
 
 	registry := create_tool_registry({})
@@ -66,12 +61,7 @@ func run_approval_agent_example_impl() {
 		}
 	})
 
-	return {
-		"ok": true,
-		"requires_network": false,
-		"scenario": "approval_agent",
-		"result": result
-	}
+	return offline_example_success("approval_agent", result, {})
 }
 
 export run_approval_agent_example := run_approval_agent_example_impl

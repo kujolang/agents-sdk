@@ -42,23 +42,22 @@ func summarize_example_result(raw_result) {
 }
 
 func run_all_examples_impl() {
-	hello_result := run_hello_agent_example()
-	tool_result := run_tool_agent_example()
-	approval_result := run_approval_agent_example()
-	retrieval_result := run_retrieval_agent_example()
-	handoff_result := run_handoff_agent_example()
-	traced_result := run_traced_agent_example()
-	artifact_result := run_artifact_agent_example()
+	examples := [
+		{"name": "hello_agent", "result": run_hello_agent_example()},
+		{"name": "tool_agent", "result": run_tool_agent_example()},
+		{"name": "approval_agent", "result": run_approval_agent_example()},
+		{"name": "retrieval_agent", "result": run_retrieval_agent_example()},
+		{"name": "handoff_agent", "result": run_handoff_agent_example()},
+		{"name": "traced_agent", "result": run_traced_agent_example()},
+		{"name": "artifact_agent", "result": run_artifact_agent_example()}
+	]
 
-	return {
-		"hello_agent": summarize_example_result(hello_result),
-		"tool_agent": summarize_example_result(tool_result),
-		"approval_agent": summarize_example_result(approval_result),
-		"retrieval_agent": summarize_example_result(retrieval_result),
-		"handoff_agent": summarize_example_result(handoff_result),
-		"traced_agent": summarize_example_result(traced_result),
-		"artifact_agent": summarize_example_result(artifact_result)
+	results := {}
+	for example in examples {
+		results[example["name"]] := summarize_example_result(example["result"])
 	}
+
+	return results
 }
 
 func main() {

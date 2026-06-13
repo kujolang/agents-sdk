@@ -6,4 +6,45 @@ func offline_example_error_impl(error_payload) {
 	}
 }
 
+func offline_example_success_impl(scenario, result, extras_input) {
+	extras := {}
+	if type(extras_input) == "dict" {
+		extras = extras_input
+	}
+
+	payload := {
+		"ok": true,
+		"requires_network": false,
+		"scenario": scenario,
+		"result": result
+	}
+	for key in keys(extras) {
+		payload[key] := extras[key]
+	}
+
+	return payload
+}
+
+func offline_model_response_impl(output_text, extras_input) {
+	extras := {}
+	if type(extras_input) == "dict" {
+		extras = extras_input
+	}
+
+	response := {
+		"ok": true,
+		"provider": "mock-provider",
+		"model": "mock-model",
+		"output_text": output_text,
+		"status_code": 200
+	}
+	for key in keys(extras) {
+		response[key] := extras[key]
+	}
+
+	return response
+}
+
 export offline_example_error := offline_example_error_impl
+export offline_example_success := offline_example_success_impl
+export offline_model_response := offline_model_response_impl
