@@ -3,14 +3,22 @@
 ## Quick Setup
 
 1. Export a pinned Agents SDK runtime binary.
-2. Run the module smoke check.
+2. Run the offline example smoke check.
 3. Run offline tests.
 
 Commands:
 
-- export KUJO_BIN=/path/to/kujo/target/debug/kujo
-- "$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter
-- "$KUJO_BIN" test
+```bash
+export KUJO_BIN=/path/to/kujo/target/debug/kujo
+"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+"$KUJO_BIN" test
+```
+
+Expected example-smoke output:
+
+```json
+{"approval_agent":{"ok":true,"requires_network":false,"status":"failed"},"artifact_agent":{"ok":true,"requires_network":false,"status":"completed"},"handoff_agent":{"ok":true,"requires_network":false,"status":"completed"},"hello_agent":{"ok":true,"requires_network":false,"status":"completed"},"retrieval_agent":{"ok":true,"requires_network":false,"status":"completed"},"tool_agent":{"ok":true,"requires_network":false,"status":"completed"},"traced_agent":{"ok":true,"requires_network":false,"status":"completed"}}
+```
 
 ## Define an Agent
 
@@ -99,6 +107,12 @@ runner := create_agent_runner({"ai_adapter": harness["model_adapter"]})
 
 ## Validate Locally
 
-- "$KUJO_BIN" test-run tests/run_basic_runner_tests.kujo -v
-- "$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
-- "$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+```bash
+"$KUJO_BIN" test-run tests/run_basic_runner_tests.kujo -v
+"$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
+"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+```
+
+## Agent Search Hygiene
+
+Use `AGENTS.md` as the source of truth for canonical examples and fixture boundaries. Default readability sweeps should exclude `tests/*.out` expected-output fixtures and the historical `docs/AGENTS_SDK_BUILD_CHECKLIST.md` work log unless the task explicitly targets them.

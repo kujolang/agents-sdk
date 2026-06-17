@@ -1,6 +1,7 @@
 from src.agents.ai.adapter import create_ai_sdk_adapter
 from src.agents.runner import create_agent_runner, run_agent
 from src.agents.core_types import create_agent, create_agent_run_request
+from examples.support import offline_example_success, offline_model_response
 
 func run_handoff_agent_example_impl() {
 	fake_chat := func(client, messages, request_options) {
@@ -13,22 +14,10 @@ func run_handoff_agent_example_impl() {
 		}
 
 		if first_content == "Writer target instructions." {
-			return {
-				"ok": true,
-				"provider": "mock-provider",
-				"model": "mock-model",
-				"output_text": "handoff-writer-output",
-				"status_code": 200
-			}
+			return offline_model_response("handoff-writer-output", {})
 		}
 
-		return {
-			"ok": true,
-			"provider": "mock-provider",
-			"model": "mock-model",
-			"output_text": "handoff-planner-output",
-			"status_code": 200
-		}
+		return offline_model_response("handoff-planner-output", {})
 	}
 
 	adapter := create_ai_sdk_adapter({
@@ -66,12 +55,7 @@ func run_handoff_agent_example_impl() {
 
 	result := run_agent(runner, planner_agent, run_request, {})
 
-	return {
-		"ok": true,
-		"requires_network": false,
-		"scenario": "handoff_agent",
-		"result": result
-	}
+	return offline_example_success("handoff_agent", result, {})
 }
 
 export run_handoff_agent_example := run_handoff_agent_example_impl

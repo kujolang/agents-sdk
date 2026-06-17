@@ -3,6 +3,7 @@ from src.agents.runner import create_agent_runner, run_agent
 from src.agents.core_types import create_agent, create_agent_run_request
 from src.agents.artifacts.store import create_in_memory_artifact_store, reset_in_memory_artifact_store
 from src.agents.artifacts.store import artifact_store_list
+from examples.support import offline_example_error, offline_example_success
 
 func run_artifact_agent_example_impl() {
 	store_id := "example-artifact-store"
@@ -19,11 +20,7 @@ func run_artifact_agent_example_impl() {
 		}
 	})
 	if harness_result["ok"] == false {
-		return {
-			"ok": false,
-			"requires_network": false,
-			"error": harness_result["error"]
-		}
+		return offline_example_error(harness_result["error"])
 	}
 
 	harness := harness_result
@@ -51,13 +48,9 @@ func run_artifact_agent_example_impl() {
 	})
 	listed := artifact_store_list(artifact_store, {})
 
-	return {
-		"ok": true,
-		"requires_network": false,
-		"scenario": "artifact_agent",
-		"result": result,
+	return offline_example_success("artifact_agent", result, {
 		"listed_artifacts": listed
-	}
+	})
 }
 
 export run_artifact_agent_example := run_artifact_agent_example_impl

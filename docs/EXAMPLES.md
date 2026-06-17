@@ -2,7 +2,9 @@
 
 All examples are offline-first and rely on deterministic fixture adapters.
 
-## Example Index
+Prioritize copyable examples over tests: examples should model the most token-efficient idioms we want agents to imitate.
+
+## Canonical Runnable Examples
 
 - examples/hello_agent.kujo
 - examples/tool_agent.kujo
@@ -13,11 +15,27 @@ All examples are offline-first and rely on deterministic fixture adapters.
 - examples/artifact_agent.kujo
 - examples/examples_smoke_runner.kujo
 
+## Support Files
+
+- examples/support.kujo provides shared offline example helpers and is not a standalone demo.
+- Use support helpers for repeated no-network result envelopes and mock model response boilerplate, while keeping each example's SDK feature setup visible.
+- tests/*.out files are expected-output fixtures, not copyable example style.
+
+## Expected Smoke Output
+
+`examples/examples_smoke_runner.kujo` prints:
+
+```json
+{"approval_agent":{"ok":true,"requires_network":false,"status":"failed"},"artifact_agent":{"ok":true,"requires_network":false,"status":"completed"},"handoff_agent":{"ok":true,"requires_network":false,"status":"completed"},"hello_agent":{"ok":true,"requires_network":false,"status":"completed"},"retrieval_agent":{"ok":true,"requires_network":false,"status":"completed"},"tool_agent":{"ok":true,"requires_network":false,"status":"completed"},"traced_agent":{"ok":true,"requires_network":false,"status":"completed"}}
+```
+
 ## Validate Example Smoke Coverage
 
-- export KUJO_BIN=/path/to/kujo/target/debug/kujo
-- "$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
-- "$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+```bash
+export KUJO_BIN=/path/to/kujo/target/debug/kujo
+"$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
+"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+```
 
 ## Notes
 
