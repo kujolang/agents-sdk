@@ -37,7 +37,9 @@ func describe_module_tree_impl() {
 		"module": "agents.index",
 		"module_count": len(keys(modules)),
 		"modules": modules,
-		"status": "stub",
+		"status": "active",
+		"maturity": "experimental",
+		"readiness": "production_oriented",
 		"contract_version": "0.1.0"
 	}
 }

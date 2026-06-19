@@ -10,6 +10,9 @@ test_setup {
 test "module tree includes expected module descriptors" {
 	summary := describe_module_tree()
 	assert_equal(summary["module_count"], 15)
+	assert_equal(summary["status"], "active")
+	assert_equal(summary["maturity"], "experimental")
+	assert_equal(summary["readiness"], "production_oriented")
 	assert_equal(has_key(summary["modules"], "core_types"), 1)
 	assert_equal(has_key(summary["modules"], "errors"), 1)
 	assert_equal(has_key(summary["modules"], "events"), 1)
