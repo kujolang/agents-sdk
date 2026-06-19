@@ -1,8 +1,14 @@
 # Agents SDK
 
-Library-first agent workflow primitives for Agents SDK, built on top of the AI SDK.
+Library-first agent workflow primitives for Kujo, built on top of the Kujo AI SDK.
 
-Current status: foundational agent runtime primitives, offline fixtures, and contract coverage scaffolded.
+Current status: production-oriented runtime primitives with deterministic offline fixtures and contract coverage. The package is intentionally still marked experimental while integration payload metadata continues to evolve additively.
+
+## Production Readiness
+
+Agents SDK is ready to use as a local-first, provider-gated foundation for agent workflows that need deterministic tests, copyable examples, and explicit runtime contracts. It is not yet a blanket claim of universal enterprise readiness: hosted operations, organization-specific compliance controls, persistence backends, and provider-specific production adapters should be integrated through the documented boundaries and validated in the target environment.
+
+Root files are intentionally limited to package metadata, contributor guidance, license/changelog, and this README. Canonical implementation modules live under `src/`, runnable demos live under `examples/`, and contract coverage lives under `tests/`.
 
 ## Quickstart
 
@@ -308,6 +314,7 @@ Extended docs:
 - docs/PUBLIC_API_STABILITY.md
 - docs/RELEASE_NOTES.md
 - docs/FINAL_ACCEPTANCE_REPORT.md
+- docs/AGENTS_SDK_REVIEW_BACKLOG_2026_06_19.md
 
 ```bash
 "$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter
