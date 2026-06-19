@@ -1,7 +1,7 @@
 [package]
 name = "agents-sdk"
 version = "1.0.0"
-description = "Production-oriented agent runtime primitives for Agents SDK, built on top of the Agents SDK AI SDK."
+description = "Production-oriented agent runtime primitives for Kujo, built on top of the Kujo AI SDK."
 license = "MIT"
 authors = ["Robert DeVore <me@robertdevore.com>"]
 homepage = ""
@@ -34,11 +34,11 @@ artifacts = []
 [dev-dependencies]
 
 [scripts]
-test = ""$KUJO_BIN" test"
-test-contracts = ""$KUJO_BIN" test-run tests/runner_result_event_contract_tests.kujo -v"
-test-examples = ""$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v"
-smoke = ""$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter"
-smoke-examples = ""$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter"
+test = '"$KUJO_BIN" test'
+test-contracts = '"$KUJO_BIN" test-run tests/runner_result_event_contract_tests.kujo -v'
+test-examples = '"$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v'
+smoke = '"$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter'
+smoke-examples = '"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter'
 verify-offline = "bash scripts/ci_no_network_enforcement.sh"
 
 [package.exports]

@@ -1,5 +1,6 @@
 [package]
 name = "agents-sdk"
 version = "1.0.0"
+description = "Production-oriented agent runtime primitives for Kujo, built on top of the Kujo AI SDK."
 
 [dependencies]
