@@ -1,5 +1,9 @@
 # Agents SDK
 
+[![Version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/kujolang/agents-sdk)
+[![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
+[![built with Kujo](https://img.shields.io/badge/built%20with-Kujo-white.svg)](https://github.com/kujolang/kujo)
+
 Library-first agent workflow primitives for Kujo, built on top of the Kujo AI SDK.
 
 Current status: production-oriented runtime primitives with deterministic offline fixtures and contract coverage. The package is intentionally still marked experimental while integration payload metadata continues to evolve additively.
