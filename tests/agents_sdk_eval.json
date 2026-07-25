@@ -1,0 +1,34 @@
+{
+  "name": "agents-sdk-launch-readiness",
+  "version": "0.1.0",
+  "tests": [
+    {
+      "name": "Agents SDK module exports smoke succeeds",
+      "check": "command_succeeds",
+      "params": {
+        "command": "cd /Users/robertdevore/2026/Kujolang/kujo-repos/agents-sdk && KUJO_BIN=kujo kujo run examples/module_exports_smoke.kujo --interpreter"
+      }
+    },
+    {
+      "name": "Agents SDK examples smoke runner succeeds",
+      "check": "command_succeeds",
+      "params": {
+        "command": "cd /Users/robertdevore/2026/Kujolang/kujo-repos/agents-sdk && KUJO_BIN=kujo kujo run examples/examples_smoke_runner.kujo --interpreter"
+      }
+    },
+    {
+      "name": "Agents SDK no-network enforcement succeeds",
+      "check": "command_succeeds",
+      "params": {
+        "command": "cd /Users/robertdevore/2026/Kujolang/kujo-repos/agents-sdk && KUJO_BIN=kujo bash scripts/ci_no_network_enforcement.sh"
+      }
+    },
+    {
+      "name": "Agents SDK package metadata exists",
+      "check": "file_exists",
+      "params": {
+        "path": "kennel.toml"
+      }
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+# Spec - Agents SDK launch readiness review
+
+name: "Agents SDK launch readiness review"
+goal: "Keep Agents SDK locally release-ready as experimental, provider-gated Kujo agent workflow primitives with deterministic offline fixtures and stable contract tests."
+version: "0.1.0"
+background: "Agents SDK is part of the Kujo prelaunch ecosystem review. The verified scope is local/offline SDK primitives; hosted operations, persistence backends, live provider adapters, and enterprise controls require target-environment proof."
+scope: "Repository-local modules, deterministic examples, no-network fixtures, runner/tool/security/session/memory/retrieval/handoff/trace/artifact/budget contracts, readiness wording, and launch evidence capture."
+non_goals:
+  - "Publishing packages or public releases"
+  - "Using live provider credentials without explicit approval"
+  - "Claiming production or enterprise readiness without target-environment validation"
+relevant_systems:
+  - "Kujo runtime"
+  - "Agents SDK modules"
+  - "AI SDK adapter boundary"
+  - "offline no-network fixtures"
+  - "prelaunch launch evidence packet"
+likely_files:
+  - "README.md"
+  - "src/agents/index.kujo"
+  - "src/agents/runner.kujo"
+  - "examples/examples_smoke_runner.kujo"
+  - "scripts/ci_no_network_enforcement.sh"
+  - "tests/run_basic_runner_tests.kujo"
+acceptance_criteria:
+  - "README readiness wording stays scoped to experimental/provider-gated local-first primitives."
+  - "Module export and example smoke commands pass locally without provider credentials."
+  - "Runner, tool, security, session, memory, retrieval, handoff, trace, artifact, budget, event, adapter, and no-network contract tests pass locally."
+  - "No-network enforcement script passes with provider API keys unset."
+  - "ShipCheck and Concord pass locally."
+  - "Live provider adapter, hosted operations, external persistence, and enterprise proof are recorded as external unless approved target-environment evidence exists."
+eval_requirements:
+  - description: "Run module export smoke."
+    check_type: "command"
+    params:
+      command: "KUJO_BIN=kujo kujo run examples/module_exports_smoke.kujo --interpreter"
+  - description: "Run deterministic example smoke runner."
+    check_type: "command"
+    params:
+      command: "KUJO_BIN=kujo kujo run examples/examples_smoke_runner.kujo --interpreter"
+  - description: "Run core runner contract tests."
+    check_type: "command"
+    params:
+      command: "KUJO_BIN=kujo kujo test-run tests/run_basic_runner_tests.kujo -v"
+  - description: "Run no-network enforcement gate."
+    check_type: "command"
+    params:
+      command: "KUJO_BIN=kujo bash scripts/ci_no_network_enforcement.sh"
+risks:
+  - risk: "Live provider adapter behavior is unproven without configured provider credentials and target-environment policy."
+    mitigation: "Use deterministic offline fixture proof locally and record live-provider proof as external."
+    severity: "high"
+  - risk: "Production or enterprise claims can be overstated if SDK primitives are confused with hosted operational controls."
+    mitigation: "Keep README and spec wording explicit that package status is experimental and target-environment proof is required for hosted, compliance, persistence, and live adapter claims."
+    severity: "medium"
+dependencies:
+  - "kujo on PATH"
+  - "AI SDK only through adapter contracts for local proof"
+  - "Provider credentials only for external live-provider proof"
+review_expectations:
+  - "Review README status, public API stability notes, and integration boundaries before launch sign-off."
+  - "Review live provider adapter and external persistence proof in the target environment before production or enterprise claims."
+human_approval_points:
+  - "Before publishing packages or public releases"
+  - "Before using live provider credentials"
+  - "Before production or enterprise readiness claims"
+priority: "high"
+tags:
+  - "kujo"
+  - "agents-sdk"
+  - "launch-readiness"
