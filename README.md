@@ -16,10 +16,10 @@ Root files are intentionally limited to package metadata, contributor guidance, 
 
 ## Quickstart
 
-1. Use a pinned Agents SDK runtime binary for deterministic behavior:
+1. Use the installed Kujo runtime:
 
 ```bash
-export KUJO_BIN=/path/to/kujo/target/debug/kujo
+export KUJO_BIN=kujo
 ```
 
 2. Run the offline example smoke runner:

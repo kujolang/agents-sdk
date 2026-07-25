@@ -32,7 +32,7 @@ Prioritize copyable examples over tests: examples should model the most token-ef
 ## Validate Example Smoke Coverage
 
 ```bash
-export KUJO_BIN=/path/to/kujo/target/debug/kujo
+export KUJO_BIN=kujo
 "$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
 "$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
 ```

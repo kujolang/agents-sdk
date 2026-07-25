@@ -9,7 +9,7 @@
 Commands:
 
 ```bash
-export KUJO_BIN=/path/to/kujo/target/debug/kujo
+export KUJO_BIN=kujo
 "$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
 "$KUJO_BIN" test
 ```
