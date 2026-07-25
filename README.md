@@ -16,16 +16,10 @@ Root files are intentionally limited to package metadata, contributor guidance, 
 
 ## Quickstart
 
-1. Use the installed Kujo runtime:
+1. Run the offline example smoke runner:
 
 ```bash
-export KUJO_BIN=kujo
-```
-
-2. Run the offline example smoke runner:
-
-```bash
-"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+kujo run examples/examples_smoke_runner.kujo --interpreter
 ```
 
 Expected output:
@@ -34,10 +28,10 @@ Expected output:
 {"approval_agent":{"ok":true,"requires_network":false,"status":"failed"},"artifact_agent":{"ok":true,"requires_network":false,"status":"completed"},"handoff_agent":{"ok":true,"requires_network":false,"status":"completed"},"hello_agent":{"ok":true,"requires_network":false,"status":"completed"},"retrieval_agent":{"ok":true,"requires_network":false,"status":"completed"},"tool_agent":{"ok":true,"requires_network":false,"status":"completed"},"traced_agent":{"ok":true,"requires_network":false,"status":"completed"}}
 ```
 
-3. Run the full offline test suite:
+2. Run the full offline test suite:
 
 ```bash
-"$KUJO_BIN" test
+kujo test
 ```
 
 Agent/contributor notes: see `AGENTS.md` for canonical example labels, fixture boundaries, and search hygiene.
@@ -321,28 +315,28 @@ Extended docs:
 - docs/AGENTS_SDK_REVIEW_BACKLOG_2026_06_19.md
 
 ```bash
-"$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter
-"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
-"$KUJO_BIN" test-run tests/arch_module_layout_tests.kujo -v
-"$KUJO_BIN" test-run tests/arch_core_types_tests.kujo -v
-"$KUJO_BIN" test-run tests/arch_error_model_tests.kujo -v
-"$KUJO_BIN" test-run tests/arch_event_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/arch_runtime_clock_ids_tests.kujo -v
-"$KUJO_BIN" test-run tests/ai_adapter_boundary_tests.kujo -v
-"$KUJO_BIN" test-run tests/run_basic_runner_tests.kujo -v
-"$KUJO_BIN" test-run tests/tool_registry_tests.kujo -v
-"$KUJO_BIN" test-run tests/tool_execution_context_tests.kujo -v
-"$KUJO_BIN" test-run tests/runner_session_memory_integration_tests.kujo -v
-"$KUJO_BIN" test-run tests/retrieval_provider_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/handoff_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/trace_sink_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/artifact_store_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/budget_limits_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/security_approval_policy_tests.kujo -v
-"$KUJO_BIN" test-run tests/session_store_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/memory_store_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/no_network_harness_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/runner_result_event_contract_tests.kujo -v
-"$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
+kujo run examples/module_exports_smoke.kujo --interpreter
+kujo run examples/examples_smoke_runner.kujo --interpreter
+kujo test-run tests/arch_module_layout_tests.kujo -v
+kujo test-run tests/arch_core_types_tests.kujo -v
+kujo test-run tests/arch_error_model_tests.kujo -v
+kujo test-run tests/arch_event_contract_tests.kujo -v
+kujo test-run tests/arch_runtime_clock_ids_tests.kujo -v
+kujo test-run tests/ai_adapter_boundary_tests.kujo -v
+kujo test-run tests/run_basic_runner_tests.kujo -v
+kujo test-run tests/tool_registry_tests.kujo -v
+kujo test-run tests/tool_execution_context_tests.kujo -v
+kujo test-run tests/runner_session_memory_integration_tests.kujo -v
+kujo test-run tests/retrieval_provider_contract_tests.kujo -v
+kujo test-run tests/handoff_contract_tests.kujo -v
+kujo test-run tests/trace_sink_contract_tests.kujo -v
+kujo test-run tests/artifact_store_contract_tests.kujo -v
+kujo test-run tests/budget_limits_contract_tests.kujo -v
+kujo test-run tests/security_approval_policy_tests.kujo -v
+kujo test-run tests/session_store_contract_tests.kujo -v
+kujo test-run tests/memory_store_contract_tests.kujo -v
+kujo test-run tests/no_network_harness_contract_tests.kujo -v
+kujo test-run tests/runner_result_event_contract_tests.kujo -v
+kujo test-run tests/example_smoke_tests.kujo -v
 bash scripts/ci_no_network_enforcement.sh
 ```
