@@ -39,7 +39,7 @@ This document defines what belongs inside the open, local-first Agents SDK and w
 ### MCP/MCT Tool Providers
 
 - Core boundary: `src/agents/integrations/adapters.kujo` via external tool provider adapter contracts.
-- In-SDK role: normalize catalog/invocation contracts and preserve deterministic error mapping.
+- In-SDK role: normalize catalog/invocation contracts and preserve deterministic error mapping. MCP `2026-07-28` support is limited to stateless JSON-RPC request envelopes, required per-request metadata, Streamable HTTP routing headers, tool-list cache metadata, input-required tool-call normalization, unsupported-version error envelopes, and lossless tool schema/display metadata mapping into registry contracts.
 - Out-of-SDK role: connector auth, hosted tool routing, tenant-level catalog management.
 
 ### Dispatch

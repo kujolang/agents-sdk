@@ -2,10 +2,24 @@ func dict_get_or(obj, key, default_value) {
 	if type(obj) != "dict" {
 		return default_value
 	}
-	if has_key(obj, key) {
-		return obj[key]
+	for existing_key in keys(obj) {
+		if existing_key == key {
+			return obj[key]
+		}
 	}
 	return default_value
+}
+
+func dict_has_key(obj, expected_key) {
+	if type(obj) != "dict" {
+		return false
+	}
+	for existing_key in keys(obj) {
+		if existing_key == expected_key {
+			return true
+		}
+	}
+	return false
 }
 
 func normalize_dict(value) {
@@ -34,12 +48,7 @@ func normalize_string(value, fallback) {
 
 func clone_value(value) {
 	if type(value) == "dict" {
-		source := normalize_dict(value)
-		cloned := {}
-		for key in keys(source) {
-			cloned[key] := clone_value(source[key])
-		}
-		return cloned
+		return value
 	}
 
 	if type(value) == "array" {
@@ -53,12 +62,223 @@ func clone_value(value) {
 	return value
 }
 
+func mcp_2026_protocol_version_impl() {
+	return "2026-07-28"
+}
+
+func normalize_mcp_cache_scope(value) {
+	scope := normalize_string(value, "private")
+	if scope == "public" || scope == "private" {
+		return scope
+	}
+	return "private"
+}
+
+func normalize_mcp_result_type(value) {
+	result_type := normalize_string(value, "complete")
+	if result_type == "complete" || result_type == "input_required" {
+		return result_type
+	}
+	return "complete"
+}
+
+func normalize_mcp_client_info(options_map) {
+	client_info := normalize_dict(dict_get_or(options_map, "client_info", dict_get_or(options_map, "clientInfo", {})))
+	return {
+		"name": normalize_string(dict_get_or(client_info, "name", dict_get_or(options_map, "client_name", "kujo-agents-sdk")), "kujo-agents-sdk"),
+		"version": normalize_string(dict_get_or(client_info, "version", dict_get_or(options_map, "client_version", "0.1.0")), "0.1.0")
+	}
+}
+
+func create_mcp_2026_request_meta_impl(options) {
+	options_map := normalize_dict(options)
+	capabilities := normalize_dict(dict_get_or(options_map, "client_capabilities", dict_get_or(options_map, "clientCapabilities", {})))
+	extensions := normalize_dict(dict_get_or(options_map, "extensions", {}))
+	if len(keys(extensions)) > 0 {
+		capabilities["extensions"] := clone_value(extensions)
+	}
+
+	meta := clone_value(dict_get_or(options_map, "meta", dict_get_or(options_map, "_meta", {})))
+	meta["io.modelcontextprotocol/protocolVersion"] := normalize_string(dict_get_or(options_map, "protocol_version", dict_get_or(options_map, "protocolVersion", mcp_2026_protocol_version_impl())), mcp_2026_protocol_version_impl())
+	meta["io.modelcontextprotocol/clientInfo"] := normalize_mcp_client_info(options_map)
+	meta["io.modelcontextprotocol/clientCapabilities"] := capabilities
+
+	trace_context := normalize_dict(dict_get_or(options_map, "trace_context", {}))
+	for trace_key in ["traceparent", "tracestate", "baggage"] {
+		trace_value := normalize_string(dict_get_or(trace_context, trace_key, dict_get_or(options_map, trace_key, "")), "")
+		if trace_value != "" {
+			meta["io.modelcontextprotocol/" + trace_key] := trace_value
+		}
+	}
+
+	return meta
+}
+
+func create_mcp_2026_jsonrpc_request_impl(method_input, params_input, options) {
+	options_map := normalize_dict(options)
+	method := normalize_string(method_input, "")
+	params := normalize_dict(params_input)
+	params["_meta"] := create_mcp_2026_request_meta_impl(options_map)
+
+	request_id := dict_get_or(options_map, "id", dict_get_or(options_map, "request_id", 1))
+	request := {
+		"jsonrpc": "2.0",
+		"id": request_id,
+		"method": method,
+		"params": params
+	}
+
+	headers := clone_value(dict_get_or(options_map, "headers", {}))
+	headers["MCP-Protocol-Version"] := normalize_string(dict_get_or(params["_meta"], "io.modelcontextprotocol/protocolVersion", mcp_2026_protocol_version_impl()), mcp_2026_protocol_version_impl())
+	headers["Mcp-Method"] := method
+	if method == "tools/call" {
+		tool_name := normalize_string(dict_get_or(params, "name", ""), "")
+		if tool_name != "" {
+			headers["Mcp-Name"] := tool_name
+		}
+	}
+
+	return {
+		"ok": method != "",
+		"request": request,
+		"headers": headers,
+		"metadata": {
+			"integration_provider": "mcp",
+			"protocol_version": headers["MCP-Protocol-Version"],
+			"stateless": true,
+			"adapter_version": "0.2.0"
+		}
+	}
+}
+
+func create_mcp_2026_discover_request_impl(options) {
+	return create_mcp_2026_jsonrpc_request_impl("server/discover", {}, options)
+}
+
+func create_mcp_2026_list_tools_request_impl(options) {
+	options_map := normalize_dict(options)
+	params := {}
+	cursor := normalize_string(dict_get_or(options_map, "cursor", ""), "")
+	if cursor != "" {
+		params["cursor"] := cursor
+	}
+	return create_mcp_2026_jsonrpc_request_impl("tools/list", params, options_map)
+}
+
+func create_mcp_2026_call_tool_request_impl(tool_name_input, arguments_input, options) {
+	options_map := normalize_dict(options)
+	tool_name := normalize_string(tool_name_input, "")
+	input_responses := {}
+	if dict_has_key(options_map, "input_responses") {
+		input_responses = normalize_dict(options_map["input_responses"])
+	}
+
+	request_state := ""
+	if dict_has_key(options_map, "request_state") {
+		request_state = normalize_string(options_map["request_state"], "")
+	}
+
+	params := {
+		"name": tool_name,
+		"arguments": normalize_dict(arguments_input),
+		"inputResponses": input_responses,
+		"requestState": request_state
+	}
+
+	return create_mcp_2026_jsonrpc_request_impl("tools/call", params, options_map)
+}
+
+func unwrap_jsonrpc_result(response_input) {
+	response := normalize_dict(response_input)
+	if has_key(response, "result") {
+		return normalize_dict(response["result"])
+	}
+	return response
+}
+
+func normalize_mcp_2026_list_tools_result_impl(response_input) {
+	result := unwrap_jsonrpc_result(response_input)
+	tools := normalize_array(dict_get_or(result, "tools", []))
+	return {
+		"ok": true,
+		"result_type": normalize_mcp_result_type(dict_get_or(result, "resultType", "complete")),
+		"tools": clone_value(tools),
+		"next_cursor": normalize_string(dict_get_or(result, "nextCursor", ""), ""),
+		"ttl_ms": dict_get_or(result, "ttlMs", 0),
+		"cache_scope": normalize_mcp_cache_scope(dict_get_or(result, "cacheScope", "private")),
+		"metadata": {
+			"integration_provider": "mcp",
+			"protocol_version": mcp_2026_protocol_version_impl(),
+			"tool_count": len(tools),
+			"cacheable": dict_get_or(result, "ttlMs", 0) > 0
+		}
+	}
+}
+
+func normalize_mcp_content_array(result) {
+	content := normalize_array(dict_get_or(result, "content", []))
+	if len(content) == 0 && has_key(result, "structuredContent") {
+		content = push(content, {
+			"type": "text",
+			"text": to_json(dict_get_or(result, "structuredContent", {}))
+		})
+	}
+	return content
+}
+
+func normalize_mcp_2026_call_tool_result_impl(response_input) {
+	result := unwrap_jsonrpc_result(response_input)
+	result_type := normalize_mcp_result_type(dict_get_or(result, "resultType", "complete"))
+	if result_type == "input_required" {
+		return {
+			"ok": true,
+			"status": "input_required",
+			"result_type": "input_required",
+			"input_requests": clone_value(dict_get_or(result, "inputRequests", {})),
+			"request_state": normalize_string(dict_get_or(result, "requestState", ""), ""),
+			"metadata": {
+				"integration_provider": "mcp",
+				"protocol_version": mcp_2026_protocol_version_impl()
+			}
+		}
+	}
+
+	return {
+		"ok": dict_get_or(result, "isError", false) == false,
+		"status": "complete",
+		"result_type": "complete",
+		"content": normalize_mcp_content_array(result),
+		"structured_content": clone_value(dict_get_or(result, "structuredContent", {})),
+		"is_error": dict_get_or(result, "isError", false),
+		"metadata": {
+			"integration_provider": "mcp",
+			"protocol_version": mcp_2026_protocol_version_impl()
+		}
+	}
+}
+
+func create_mcp_2026_unsupported_protocol_error_impl(requested_input, supported_input) {
+	return {
+		"jsonrpc": "2.0",
+		"id": null,
+		"error": {
+			"code": -32022,
+			"message": "Unsupported protocol version",
+			"data": {
+				"supported": clone_value(supported_input),
+				"requested": normalize_string(requested_input, "")
+			}
+		}
+	}
+}
+
 func create_external_tool_provider_adapter_impl(options) {
 	options_map := normalize_dict(options)
 
 	return {
 		"type": "ExternalToolProviderAdapter",
 		"provider_name": normalize_string(dict_get_or(options_map, "provider_name", "external"), "external"),
+		"protocol_version": normalize_string(dict_get_or(options_map, "protocol_version", dict_get_or(options_map, "protocolVersion", "")), ""),
 		"list_tools_fn": dict_get_or(options_map, "list_tools_fn", null),
 		"invoke_tool_fn": dict_get_or(options_map, "invoke_tool_fn", null),
 		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
@@ -126,23 +346,42 @@ func map_external_tool_to_registry_entry_impl(external_tool_input, options) {
 	provider_name := normalize_string(dict_get_or(options_map, "provider_name", dict_get_or(external_tool, "provider_name", "external")), "external")
 	tool_name := normalize_string(dict_get_or(external_tool, "name", dict_get_or(external_tool, "tool_name", "external_tool")), "external_tool")
 	tool_id := normalize_string(dict_get_or(external_tool, "id", provider_name + "." + tool_name), provider_name + "." + tool_name)
+	input_schema := clone_value(dict_get_or(external_tool, "input_schema", dict_get_or(external_tool, "inputSchema", {})))
+	output_schema := clone_value(dict_get_or(external_tool, "output_schema", dict_get_or(external_tool, "outputSchema", {})))
+	protocol_version := normalize_string(dict_get_or(options_map, "protocol_version", dict_get_or(external_tool, "protocolVersion", "")), "")
+	if protocol_version == "" && provider_name == "mcp" {
+		protocol_version = mcp_2026_protocol_version_impl()
+	}
 
 	return {
 		"id": tool_id,
 		"name": tool_name,
-		"description": normalize_string(dict_get_or(external_tool, "description", "External provider tool"), "External provider tool"),
-		"input_schema": clone_value(dict_get_or(external_tool, "input_schema", {})),
-		"output_schema": clone_value(dict_get_or(external_tool, "output_schema", {})),
+		"description": normalize_string(dict_get_or(external_tool, "description", dict_get_or(external_tool, "title", "External provider tool")), "External provider tool"),
+		"input_schema": input_schema,
+		"output_schema": output_schema,
 		"permissions": clone_value(dict_get_or(external_tool, "permissions", [])),
 		"risk_level": normalize_string(dict_get_or(external_tool, "risk_level", "medium"), "medium"),
 		"timeout_ms": dict_get_or(external_tool, "timeout_ms", 0),
 		"metadata": {
 			"integration_provider": provider_name,
 			"integration_kind": "external_tool_provider",
+			"protocol_version": protocol_version,
+			"title": normalize_string(dict_get_or(external_tool, "title", ""), ""),
+			"icons": clone_value(dict_get_or(external_tool, "icons", [])),
+			"annotations": clone_value(dict_get_or(external_tool, "annotations", {})),
+			"input_schema_dialect": normalize_string(dict_get_or(input_schema, "$schema", "https://json-schema.org/draft/2020-12/schema"), "https://json-schema.org/draft/2020-12/schema"),
+			"output_schema_dialect": normalize_string(dict_get_or(output_schema, "$schema", "https://json-schema.org/draft/2020-12/schema"), "https://json-schema.org/draft/2020-12/schema"),
 			"approval_required": dict_get_or(external_tool, "approval_required", false),
 			"external_contract": clone_value(external_tool)
 		}
 	}
+}
+
+func map_mcp_2026_tool_to_registry_entry_impl(mcp_tool_input, options) {
+	options_map := normalize_dict(options)
+	options_map["provider_name"] := normalize_string(dict_get_or(options_map, "provider_name", "mcp"), "mcp")
+	options_map["protocol_version"] := mcp_2026_protocol_version_impl()
+	return map_external_tool_to_registry_entry_impl(mcp_tool_input, options_map)
 }
 
 func create_dispatch_integration_hooks_impl(options) {
@@ -453,6 +692,16 @@ func describe_integration_adapters_module_impl() {
 		"status": "active",
 		"contract_version": "0.1.0",
 		"exports": [
+			"mcp_2026_protocol_version",
+			"create_mcp_2026_request_meta",
+			"create_mcp_2026_jsonrpc_request",
+			"create_mcp_2026_discover_request",
+			"create_mcp_2026_list_tools_request",
+			"create_mcp_2026_call_tool_request",
+			"normalize_mcp_2026_list_tools_result",
+			"normalize_mcp_2026_call_tool_result",
+			"create_mcp_2026_unsupported_protocol_error",
+			"map_mcp_2026_tool_to_registry_entry",
 			"create_external_tool_provider_adapter",
 			"external_provider_list_tools",
 			"external_provider_invoke_tool",
@@ -469,6 +718,16 @@ func describe_integration_adapters_module_impl() {
 	}
 }
 
+export mcp_2026_protocol_version := mcp_2026_protocol_version_impl
+export create_mcp_2026_request_meta := create_mcp_2026_request_meta_impl
+export create_mcp_2026_jsonrpc_request := create_mcp_2026_jsonrpc_request_impl
+export create_mcp_2026_discover_request := create_mcp_2026_discover_request_impl
+export create_mcp_2026_list_tools_request := create_mcp_2026_list_tools_request_impl
+export create_mcp_2026_call_tool_request := create_mcp_2026_call_tool_request_impl
+export normalize_mcp_2026_list_tools_result := normalize_mcp_2026_list_tools_result_impl
+export normalize_mcp_2026_call_tool_result := normalize_mcp_2026_call_tool_result_impl
+export create_mcp_2026_unsupported_protocol_error := create_mcp_2026_unsupported_protocol_error_impl
+export map_mcp_2026_tool_to_registry_entry := map_mcp_2026_tool_to_registry_entry_impl
 export create_external_tool_provider_adapter := create_external_tool_provider_adapter_impl
 export external_provider_list_tools := external_provider_list_tools_impl
 export external_provider_invoke_tool := external_provider_invoke_tool_impl

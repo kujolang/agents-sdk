@@ -260,6 +260,7 @@ Testing guidance: Use `create_mock_retrieval_provider` for integration tests so 
 `src/agents/integrations/adapters.kujo` provides integration boundaries for:
 
 - external tool-provider adapters (`create_external_tool_provider_adapter`) for MCP/MCT-style catalog and invocation mapping
+- MCP `2026-07-28` stateless request helpers for `server/discover`, `tools/list`, `tools/call`, per-request `_meta`, Streamable HTTP routing headers, tool-list cache metadata, input-required tool results, and JSON Schema 2020-12 tool contract preservation
 - Dispatch hooks (`create_dispatch_integration_hooks`) for step execution and workflow-as-tool invocation
 - Watchdog trace transformation adapters (`create_watchdog_trace_adapter`) for core-to-watchdog event mapping
 - Scout code-context providers (`create_scout_code_context_provider`) plus deterministic retrieval-enrichment mapping (`map_scout_context_to_retrieval_enrichment`) so Scout intelligence can feed retrieval/context flows without introducing a hard core dependency

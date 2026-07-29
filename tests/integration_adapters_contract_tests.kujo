@@ -1,9 +1,175 @@
 test_setup {
+	from src.agents.integrations.adapters import mcp_2026_protocol_version
+	from src.agents.integrations.adapters import create_mcp_2026_request_meta, create_mcp_2026_discover_request
+	from src.agents.integrations.adapters import create_mcp_2026_list_tools_request, create_mcp_2026_call_tool_request
+	from src.agents.integrations.adapters import normalize_mcp_2026_list_tools_result, normalize_mcp_2026_call_tool_result
+	from src.agents.integrations.adapters import create_mcp_2026_unsupported_protocol_error, map_mcp_2026_tool_to_registry_entry
 	from src.agents.integrations.adapters import create_external_tool_provider_adapter, external_provider_list_tools, external_provider_invoke_tool
 	from src.agents.integrations.adapters import map_external_tool_to_registry_entry
 	from src.agents.integrations.adapters import create_dispatch_integration_hooks, dispatch_run_agent_step, dispatch_invoke_workflow_as_tool
 	from src.agents.integrations.adapters import create_watchdog_trace_adapter, watchdog_transform_trace_event
 	from src.agents.integrations.adapters import create_scout_code_context_provider, scout_provider_resolve_context, map_scout_context_to_retrieval_enrichment
+}
+
+test "mcp 2026 request helpers build stateless metadata and headers" {
+	meta := create_mcp_2026_request_meta({
+		"client_info": {
+			"name": "agents-test",
+			"version": "1.2.3"
+		},
+		"extensions": {
+			"io.modelcontextprotocol/tasks": {}
+		},
+		"trace_context": {
+			"traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
+		}
+	})
+	assert_equal(mcp_2026_protocol_version(), "2026-07-28")
+	assert_equal(meta["io.modelcontextprotocol/protocolVersion"], "2026-07-28")
+	assert_equal(meta["io.modelcontextprotocol/clientInfo"]["name"], "agents-test")
+	assert_equal(has_key(meta["io.modelcontextprotocol/clientCapabilities"]["extensions"], "io.modelcontextprotocol/tasks"), 1)
+	assert_equal(meta["io.modelcontextprotocol/traceparent"], "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
+
+	discover := create_mcp_2026_discover_request({
+		"id": "discover-1",
+		"client_info": {
+			"name": "agents-test",
+			"version": "1.2.3"
+		}
+	})
+	assert_equal(discover["ok"], true)
+	assert_equal(discover["request"]["method"], "server/discover")
+	assert_equal(discover["headers"]["MCP-Protocol-Version"], "2026-07-28")
+	assert_equal(discover["headers"]["Mcp-Method"], "server/discover")
+
+	list_request := create_mcp_2026_list_tools_request({
+		"id": "tools-1",
+		"cursor": "cursor-1"
+	})
+	assert_equal(list_request["request"]["method"], "tools/list")
+	assert_equal(list_request["request"]["params"]["cursor"], "cursor-1")
+	assert_equal(list_request["request"]["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"], "2026-07-28")
+
+	call_request := create_mcp_2026_call_tool_request("search", {
+		"query": "agents"
+	}, {
+		"id": "call-1",
+		"input_responses": {
+			"confirm": {
+				"action": "accept"
+			}
+		},
+		"request_state": "state-1"
+	})
+	assert_equal(call_request["request"]["method"], "tools/call")
+	assert_equal(call_request["request"]["params"]["name"], "search")
+	assert_equal(call_request["request"]["params"]["arguments"]["query"], "agents")
+	assert_equal(call_request["request"]["params"]["inputResponses"]["confirm"]["action"], "accept")
+	assert_equal(call_request["request"]["params"]["requestState"], "state-1")
+	assert_equal(call_request["headers"]["Mcp-Name"], "search")
+}
+
+test "mcp 2026 tool mapping preserves schema dialect cache and display metadata" {
+	response := {
+		"jsonrpc": "2.0",
+		"id": "tools-1",
+		"result": {
+			"resultType": "complete",
+			"ttlMs": 300000,
+			"cacheScope": "public",
+			"nextCursor": "next-page",
+			"tools": [
+				{
+					"name": "search",
+					"title": "Search",
+					"description": "Search external index",
+					"inputSchema": {
+						"$schema": "https://json-schema.org/draft/2020-12/schema",
+						"type": "object",
+						"properties": {
+							"query": {
+								"type": "string",
+								"x-mcp-header": "Query"
+							}
+						},
+						"required": ["query"]
+					},
+					"outputSchema": {
+						"type": "object"
+					},
+					"icons": [
+						{
+							"src": "https://example.invalid/search.png",
+							"mimeType": "image/png"
+						}
+					],
+					"annotations": {
+						"readOnlyHint": true
+					}
+				}
+			]
+		}
+	}
+
+	normalized := normalize_mcp_2026_list_tools_result(response)
+	assert_equal(normalized["ok"], true)
+	assert_equal(normalized["ttl_ms"], 300000)
+	assert_equal(normalized["cache_scope"], "public")
+	assert_equal(normalized["next_cursor"], "next-page")
+	assert_equal(normalized["metadata"]["cacheable"], true)
+
+	mapped := map_mcp_2026_tool_to_registry_entry(normalized["tools"][0], {})
+	assert_equal(mapped["id"], "mcp.search")
+	assert_equal(mapped["name"], "search")
+	assert_equal(mapped["input_schema"]["properties"]["query"]["x-mcp-header"], "Query")
+	assert_equal(mapped["metadata"]["protocol_version"], "2026-07-28")
+	assert_equal(mapped["metadata"]["input_schema_dialect"], "https://json-schema.org/draft/2020-12/schema")
+	assert_equal(mapped["metadata"]["title"], "Search")
+	assert_equal(mapped["metadata"]["icons"][0]["mimeType"], "image/png")
+	assert_equal(mapped["metadata"]["annotations"]["readOnlyHint"], true)
+}
+
+test "mcp 2026 call results normalize complete input-required and version errors" {
+	complete := normalize_mcp_2026_call_tool_result({
+		"result": {
+			"resultType": "complete",
+			"content": [
+				{
+					"type": "text",
+					"text": "done"
+				}
+			],
+			"structuredContent": {
+				"count": 1
+			},
+			"isError": false
+		}
+	})
+	assert_equal(complete["ok"], true)
+	assert_equal(complete["status"], "complete")
+	assert_equal(complete["content"][0]["text"], "done")
+	assert_equal(complete["structured_content"]["count"], 1)
+
+	input_required := normalize_mcp_2026_call_tool_result({
+		"result": {
+			"resultType": "input_required",
+			"inputRequests": {
+				"confirm": {
+					"method": "elicitation/create"
+				}
+			},
+			"requestState": "opaque-state"
+		}
+	})
+	assert_equal(input_required["ok"], true)
+	assert_equal(input_required["status"], "input_required")
+	assert_equal(input_required["input_requests"]["confirm"]["method"], "elicitation/create")
+	assert_equal(input_required["request_state"], "opaque-state")
+
+	error_response := create_mcp_2026_unsupported_protocol_error("1900-01-01", ["2026-07-28", "2025-11-25"])
+	assert_equal(error_response["error"]["code"], -32022)
+	assert_equal(error_response["error"]["data"]["supported"][0], "2026-07-28")
+	assert_equal(error_response["error"]["data"]["requested"], "1900-01-01")
 }
 
 test "external tool provider adapter lists and invokes tools" {
