@@ -12,10 +12,10 @@ categories = ["ai", "developer-tools"]
 readme = "README.md"
 
 [package.status]
-stage = "experimental"
-stability = "early"
+stage = "production"
+stability = "stable"
 public_api = true
-notes = "Core runtime contracts and offline-first integration coverage are active; hosted/commercial layers remain adapter-only."
+notes = "Stable local-first runtime primitives and offline integration contracts; hosted and commercial layers remain adapter-only."
 
 [agents-sdk]
 minimum_version = "1.0.0"

@@ -6,7 +6,7 @@
 
 Library-first agent workflow primitives for Kujo, built on top of the Kujo AI SDK.
 
-Current status: production-oriented runtime primitives with deterministic offline fixtures and contract coverage. The package is intentionally still marked experimental while integration payload metadata continues to evolve additively.
+Current status: stable 1.0 runtime primitives with deterministic offline fixtures and contract coverage. Integration payload metadata may continue to evolve through backward-compatible additions.
 
 ## Production Readiness
 
@@ -54,7 +54,7 @@ The Agents SDK is intentionally runtime-focused and local-first:
 ## Stability Notes
 
 - Stable surface: contract constructors, runner/tool/security/session/memory/retrieval/handoff/trace/artifact/budget primitives, and integration adapter boundaries.
-- Experimental surface: higher-level integration payload conventions that may evolve as upstream systems (for example Scout/Dispatch/Watchdog providers) add capabilities.
+- Extensible surface: higher-level integration payload conventions may gain backward-compatible fields as upstream systems (for example Scout/Dispatch/Watchdog providers) add capabilities.
 - Compatibility intent: preserve backwards-compatible contract keys where possible and introduce new fields additively.
 
 ## Contract Stability Statement
