@@ -111,6 +111,28 @@ func array_contains(values_input, expected) {
 	return false
 }
 
+func entry_matches_memory_query(entry_input, query_input) {
+	entry := normalize_dict(entry_input)
+	query := normalize_dict(query_input)
+	query_text := normalize_string(dict_get_or(query, "text", ""), "")
+	if query_text != "" {
+		content := normalize_string(dict_get_or(entry, "content", ""), "")
+		if index_of(content, query_text) < 0 {
+			return false
+		}
+	}
+
+	entry_tags := normalize_string_array(dict_get_or(entry, "tags", []))
+	query_tags := normalize_string_array(dict_get_or(query, "tags", []))
+	for query_tag in query_tags {
+		if array_contains(entry_tags, query_tag) == false {
+			return false
+		}
+	}
+
+	return true
+}
+
 func clone_value(value) {
 	if type(value) == "dict" {
 		cloned_dict := {}
@@ -169,23 +191,30 @@ func create_memory_provenance_impl(options) {
 
 func create_memory_entry_impl(options) {
 	options_map := normalize_dict(options)
-	scope_map := normalize_dict(dict_get_or(options_map, "scope", {}))
+	scope_map := normalize_dict(direct_option_value(options_map, "scope", {}))
 
-	scope_kind := normalize_memory_scope_kind(dict_get_or(options_map, "scope_kind", dict_get_or(scope_map, "scope_kind", "session")))
-	scope_id := normalize_string(dict_get_or(options_map, "scope_id", dict_get_or(scope_map, "scope_id", "default")), "default")
+	scope_kind := normalize_memory_scope_kind(direct_option_value(options_map, "scope_kind", dict_get_or(scope_map, "scope_kind", "session")))
+	scope_id := normalize_string(direct_option_value(options_map, "scope_id", dict_get_or(scope_map, "scope_id", "default")), "default")
+	entry_id := normalize_string(direct_option_value(options_map, "entry_id", "mem-entry-default"), "mem-entry-default")
+	content := normalize_string(direct_option_value(options_map, "content", ""), "")
+	tags := normalize_string_array(direct_option_value(options_map, "tags", []))
+	metadata := clone_value(direct_option_value(options_map, "metadata", {}))
+	provenance := create_memory_provenance_impl(direct_option_value(options_map, "provenance", {}))
+	created_at := normalize_string(direct_option_value(options_map, "created_at", ""), "")
+	updated_at := normalize_string(direct_option_value(options_map, "updated_at", ""), "")
 
 	return {
 		"type": "MemoryEntry",
-		"entry_id": normalize_string(dict_get_or(options_map, "entry_id", "mem-entry-default"), "mem-entry-default"),
+		"entry_id": entry_id,
 		"scope": create_memory_scope_impl(scope_kind, scope_id, {
 			"metadata": dict_get_or(scope_map, "metadata", {})
 		}),
-		"content": normalize_string(dict_get_or(options_map, "content", ""), ""),
-		"tags": normalize_string_array(dict_get_or(options_map, "tags", [])),
-		"metadata": clone_value(dict_get_or(options_map, "metadata", {})),
-		"provenance": create_memory_provenance_impl(dict_get_or(options_map, "provenance", {})),
-		"created_at": normalize_string(dict_get_or(options_map, "created_at", ""), ""),
-		"updated_at": normalize_string(dict_get_or(options_map, "updated_at", ""), "")
+		"content": content,
+		"tags": tags,
+		"metadata": metadata,
+		"provenance": provenance,
+		"created_at": created_at,
+		"updated_at": updated_at
 	}
 }
 
@@ -257,7 +286,7 @@ func create_memory_query_result_impl(options) {
 		"type": "MemoryQueryResult",
 		"ok": normalize_bool(direct_option_value(options_map, "ok", true), true),
 		"query": query,
-		"entries": clone_value(entries),
+		"entries": parse_json(to_json(entries)),
 		"count": count,
 		"total_count": total_count,
 		"provenance": clone_value(provenance),
@@ -339,7 +368,7 @@ func memory_store_query_impl(store_input, query_input) {
 		"type": "MemoryQueryResult",
 		"ok": normalize_bool(dict_get_or(result, "ok", true), true),
 		"query": query,
-		"entries": clone_value(entries),
+		"entries": parse_json(to_json(entries)),
 		"count": count,
 		"total_count": total_count,
 		"provenance": clone_value(provenance),
@@ -447,7 +476,32 @@ func in_memory_write_memory_fn_impl(store_map, entry_input) {
 	entries_by_id := normalize_dict(dict_get_or(state, "entries_by_id", {}))
 	ordered_entry_ids := normalize_array(dict_get_or(state, "ordered_entry_ids", []))
 	next_entry_number := normalize_non_negative_int(dict_get_or(state, "next_entry_number", 1), 1)
-	entry := clone_value(entry_input)
+	entry_content := ""
+	if has_key(entry_input, "content") {
+		entry_content = entry_input["content"]
+	}
+	entry_tags := []
+	if has_key(entry_input, "tags") {
+		entry_tags = entry_input["tags"]
+	}
+	entry_provenance := {}
+	if has_key(entry_input, "provenance") {
+		entry_provenance = entry_input["provenance"]
+	}
+	entry_metadata := {}
+	if has_key(entry_input, "metadata") {
+		entry_metadata = entry_input["metadata"]
+	}
+	entry := create_memory_entry_impl({
+		"entry_id": dict_get_or(entry_input, "entry_id", "mem-entry-default"),
+		"scope": dict_get_or(entry_input, "scope", {}),
+		"content": entry_content,
+		"tags": entry_tags,
+		"metadata": entry_metadata,
+		"provenance": entry_provenance,
+		"created_at": dict_get_or(entry_input, "created_at", ""),
+		"updated_at": dict_get_or(entry_input, "updated_at", "")
+	})
 	entry_id := normalize_string(dict_get_or(entry, "entry_id", ""), "")
 	created := false
 
@@ -457,9 +511,12 @@ func in_memory_write_memory_fn_impl(store_map, entry_input) {
 		created = true
 	}
 
-	if key_in_dict(entries_by_id, entry_id) == false {
+	existing_entry := dict_get_or(entries_by_id, entry_id, null)
+	if key_in_dict(entries_by_id, entry_id) == false || type(existing_entry) != "dict" {
 		created = true
-		ordered_entry_ids = push(ordered_entry_ids, entry_id)
+		if array_contains(ordered_entry_ids, entry_id) == false {
+			ordered_entry_ids = push(ordered_entry_ids, entry_id)
+		}
 	}
 
 	entry["entry_id"] := entry_id
@@ -473,7 +530,7 @@ func in_memory_write_memory_fn_impl(store_map, entry_input) {
 	return {
 		"ok": true,
 		"created": created,
-		"entry": clone_value(entry)
+		"entry": parse_json(to_json(entry))
 	}
 }
 
@@ -488,7 +545,7 @@ func in_memory_read_memory_fn_impl(store_map, entry_id_input) {
 		if type(entry_value) == "dict" {
 			return {
 				"ok": true,
-				"entry": clone_value(entry_value)
+				"entry": parse_json(to_json(entry_value))
 			}
 		}
 	}
@@ -520,8 +577,8 @@ func in_memory_query_memory_fn_impl(store_map, query_input) {
 				entry_scope_kind := normalize_memory_scope_kind(dict_get_or(scope, "scope_kind", "session"))
 				entry_scope_id := normalize_string(dict_get_or(scope, "scope_id", "default"), "default")
 
-				if entry_scope_kind == query_scope_kind && entry_scope_id == query_scope_id {
-					filtered = push(filtered, clone_value(entry))
+				if entry_scope_kind == query_scope_kind && entry_scope_id == query_scope_id && entry_matches_memory_query(entry, query) {
+					filtered = push(filtered, parse_json(to_json(entry)))
 				}
 			}
 		}
@@ -542,7 +599,7 @@ func in_memory_query_memory_fn_impl(store_map, query_input) {
 
 	return {
 		"ok": true,
-		"entries": items,
+		"entries": parse_json(to_json(items)),
 		"count": count
 	}
 }

@@ -245,3 +245,50 @@ test "memory query supports limit offset filtering with provenance summary" {
 	assert_equal(query_result["provenance"]["scope_id"], "session-77")
 	assert_equal(query_result["provenance"]["entries_with_provenance"] >= 0, true)
 }
+
+test "in-memory memory query filters entries by text" {
+	store_id := "mem-query-text"
+	reset_in_memory_memory_store({"store_id": store_id})
+	store := create_in_memory_memory_store({"store_id": store_id})
+	memory_store_write(store, {"scope_id": "session-text", "content": "alpha release notes"})
+	memory_store_write(store, {"scope_id": "session-text", "content": "beta roadmap"})
+
+	result := memory_store_query(store, {
+		"scope_id": "session-text",
+		"text": "release"
+	})
+
+	assert_equal(result["count"], 1)
+	assert_equal(result["entries"][0]["content"], "alpha release notes")
+}
+
+test "in-memory memory query filters entries by all requested tags" {
+	store_id := "mem-query-tags"
+	reset_in_memory_memory_store({"store_id": store_id})
+	store := create_in_memory_memory_store({"store_id": store_id})
+	memory_store_write(store, {"scope_id": "session-tags", "content": "one", "tags": ["release", "sdk"]})
+	memory_store_write(store, {"scope_id": "session-tags", "content": "two", "tags": ["release"]})
+
+	result := memory_store_query(store, {
+		"scope_id": "session-tags",
+		"tags": ["release", "sdk"]
+	})
+
+	assert_equal(result["count"], 1)
+	assert_equal(result["entries"][0]["content"], "one")
+}
+
+test "rewriting a deleted memory entry reports a new creation" {
+	store_id := "mem-recreate-deleted"
+	reset_in_memory_memory_store({"store_id": store_id})
+	store := create_in_memory_memory_store({"store_id": store_id})
+	memory_store_write(store, {"entry_id": "entry-reused", "content": "first"})
+	memory_store_delete(store, "entry-reused")
+
+	recreated := memory_store_write(store, {"entry_id": "entry-reused", "content": "second"})
+	query := memory_store_query(store, {})
+
+	assert_equal(recreated["created"], true)
+	assert_equal(query["count"], 1)
+	assert_equal(query["entries"][0]["content"], "second")
+}
