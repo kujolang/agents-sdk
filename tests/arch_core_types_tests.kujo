@@ -47,6 +47,28 @@ test "validate_agent_config rejects missing required fields and invalid limits" 
 	assert_true(len(validation["errors"]) >= 4)
 }
 
+test "validate_agent_config rejects non-integer max_iterations" {
+	validation := validate_agent_config({
+		"id": "writer",
+		"name": "Writer",
+		"max_iterations": "8"
+	})
+
+	assert_false(validation["ok"])
+	assert_equal(validation["errors"][0]["field"], "max_iterations")
+}
+
+test "validate_agent_config rejects non-integer timeout_ms" {
+	validation := validate_agent_config({
+		"id": "writer",
+		"name": "Writer",
+		"timeout_ms": "120000"
+	})
+
+	assert_false(validation["ok"])
+	assert_equal(validation["errors"][0]["field"], "timeout_ms")
+}
+
 test "message step request context and result constructors produce stable contracts" {
 	message := create_agent_message("assistant", "Hello", {"token_count": 2})
 	step := create_agent_step("tool_call", "call search", {"tool": "search_docs"}, {})

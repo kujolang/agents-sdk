@@ -171,8 +171,14 @@ func validate_agent_config_impl(config_input) {
 		})
 	}
 
-	if type(dict_get_or(config_input, "max_iterations", 1)) == "int" {
-		if dict_get_or(config_input, "max_iterations", 1) <= 0 {
+	max_iterations_input := dict_get_or(config_input, "max_iterations", 1)
+	if type(max_iterations_input) != "int" {
+		errors := push(errors, {
+			"field": "max_iterations",
+			"message": "max_iterations must be an integer."
+		})
+	} else {
+		if max_iterations_input <= 0 {
 			errors := push(errors, {
 				"field": "max_iterations",
 				"message": "max_iterations must be greater than zero."
@@ -180,8 +186,14 @@ func validate_agent_config_impl(config_input) {
 		}
 	}
 
-	if type(dict_get_or(config_input, "timeout_ms", 0)) == "int" {
-		if dict_get_or(config_input, "timeout_ms", 0) < 0 {
+	timeout_ms_input := dict_get_or(config_input, "timeout_ms", 0)
+	if type(timeout_ms_input) != "int" {
+		errors := push(errors, {
+			"field": "timeout_ms",
+			"message": "timeout_ms must be an integer."
+		})
+	} else {
+		if timeout_ms_input < 0 {
 			errors := push(errors, {
 				"field": "timeout_ms",
 				"message": "timeout_ms must be zero or greater."

@@ -26,6 +26,23 @@ test "build_ai_request_options merges model policy and run overrides" {
 	assert_equal(has_key(request_options, "structured_output_schema"), 1)
 }
 
+test "build_ai_request_options does not mutate agent model policy" {
+	agent := {
+		"model_policy": {
+			"model": "gpt-4.1-mini"
+		},
+		"output_schema": {
+			"type": "object",
+			"required": ["summary"]
+		}
+	}
+
+	request_options := build_ai_request_options(agent, {})
+
+	assert_equal(has_key(request_options, "structured_output_schema"), 1)
+	assert_equal(has_key(agent["model_policy"], "structured_output_schema"), 0)
+}
+
 test "call_chat maps AI SDK success response" {
 	fake_chat := func(client, messages, request_options) {
 		return {

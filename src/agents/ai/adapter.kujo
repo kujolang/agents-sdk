@@ -206,7 +206,7 @@ func apply_observability_hooks_to_options_impl(request_options, adapter_hooks, a
 
 func build_ai_request_options_impl(agent, run_options) {
 	agent_map := normalize_dict(agent)
-	base_options := normalize_dict(dict_get_or(agent_map, "model_policy", {}))
+	base_options := map_merge({}, dict_get_or(agent_map, "model_policy", {}))
 	output_schema := dict_get_or(agent_map, "output_schema", null)
 	if type(output_schema) == "dict" {
 		base_options["structured_output_schema"] := output_schema
