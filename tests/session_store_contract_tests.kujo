@@ -230,3 +230,36 @@ test "in-memory session store persists CRUD and run-state operations determinist
 	assert_equal(list_after_delete["ok"], true)
 	assert_equal(list_after_delete["count"], 1)
 }
+
+test "in-memory session update cannot change the stored session identity" {
+	store_id := "mem-session-identity"
+	reset_in_memory_session_store({"store_id": store_id})
+	store := create_in_memory_session_store({"store_id": store_id})
+	session_store_create(store, {"session_id": "session-original"})
+
+	updated := session_store_update(store, "session-original", {
+		"session_id": "session-replacement",
+		"state": {
+			"session_id": "session-replacement"
+		}
+	})
+
+	assert_equal(updated["ok"], true)
+	assert_equal(updated["session"]["session_id"], "session-original")
+	assert_equal(updated["session"]["state"]["session_id"], "session-original")
+	assert_equal(session_store_get(store, "session-replacement")["ok"], false)
+}
+
+test "deleting an in-memory session removes its saved run state" {
+	store_id := "mem-session-delete-state"
+	reset_in_memory_session_store({"store_id": store_id})
+	store := create_in_memory_session_store({"store_id": store_id})
+	session_store_create(store, {"session_id": "session-delete"})
+	session_store_save_run_state(store, "session-delete", {"cursor": 9}, {})
+
+	deleted := session_store_delete(store, "session-delete")
+	run_state := session_store_get_run_state(store, "session-delete", {})
+
+	assert_equal(deleted["ok"], true)
+	assert_equal(run_state["ok"], false)
+}

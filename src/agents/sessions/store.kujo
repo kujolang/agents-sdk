@@ -2,9 +2,6 @@ func key_in_dict(obj, expected_key) {
 	if type(obj) != "dict" {
 		return false
 	}
-	if has_key(obj, expected_key) == 1 {
-		return true
-	}
 
 	for key in keys(obj) {
 		if key == expected_key {
@@ -311,12 +308,12 @@ func in_memory_create_session_fn_impl(store_map, session_input) {
 	sessions_by_id := normalize_dict(dict_get_or(state, "sessions_by_id", {}))
 	active_ids := normalize_dict(dict_get_or(state, "active_ids", {}))
 	ordered_ids := normalize_array(dict_get_or(state, "ordered_ids", []))
-	session := session_input
+	session := create_session_impl(session_input)
 	session_id := resolve_session_id_value(dict_get_or(session_input, "session_id", ""), {
 		"fallback": "session-default"
 	})
 
-	sessions_by_id[session_id] := clone_value(session)
+	sessions_by_id[session_id] := parse_json(to_json(session))
 	active_ids[session_id] := true
 	if array_contains_value(ordered_ids, session_id) == false {
 		ordered_ids = push(ordered_ids, session_id)
@@ -329,7 +326,7 @@ func in_memory_create_session_fn_impl(store_map, session_input) {
 
 	return {
 		"ok": true,
-		"session": clone_value(session)
+		"session": parse_json(to_json(session))
 	}
 }
 
@@ -345,7 +342,7 @@ func in_memory_get_session_fn_impl(store_map, session_id_input) {
 	if key_in_dict(active_ids, session_id) && active_ids[session_id] == true && key_in_dict(sessions_by_id, session_id) {
 		return {
 			"ok": true,
-			"session": clone_value(dict_get_or(sessions_by_id, session_id, {}))
+			"session": parse_json(to_json(dict_get_or(sessions_by_id, session_id, {})))
 		}
 	}
 
@@ -365,15 +362,21 @@ func in_memory_update_session_fn_impl(store_map, session_id_input, patch_input) 
 	})
 
 	if key_in_dict(active_ids, session_id) && active_ids[session_id] == true && key_in_dict(sessions_by_id, session_id) {
-		current := normalize_dict(dict_get_or(sessions_by_id, session_id, {}))
+		current := parse_json(to_json(dict_get_or(sessions_by_id, session_id, {})))
 		updated := merge_dicts(current, patch)
+		updated["session_id"] := session_id
+		updated_state := normalize_dict(dict_get_or(updated, "state", {}))
+		if len(keys(updated_state)) > 0 {
+			updated_state["session_id"] := session_id
+			updated["state"] := updated_state
+		}
 		sessions_by_id[session_id] := updated
 		state["sessions_by_id"] := sessions_by_id
 		save_in_memory_store_state(store_id, state)
 
 		return {
 			"ok": true,
-			"session": clone_value(updated)
+			"session": parse_json(to_json(updated))
 		}
 	}
 
@@ -407,13 +410,16 @@ func in_memory_delete_session_fn_impl(store_map, session_id_input) {
 	store_id := resolve_in_memory_store_id(store_map)
 	state := ensure_in_memory_store_state(store_id)
 	active_ids := normalize_dict(dict_get_or(state, "active_ids", {}))
+	run_state_by_session := normalize_dict(dict_get_or(state, "run_state_by_session", {}))
 	session_id := resolve_session_id_value(session_id_input, {
 		"fallback": "session-default"
 	})
 
 	if key_in_dict(active_ids, session_id) {
 		active_ids[session_id] := false
+		run_state_by_session[session_id] := null
 		state["active_ids"] := active_ids
+		state["run_state_by_session"] := run_state_by_session
 		save_in_memory_store_state(store_id, state)
 		return {
 			"ok": true,
@@ -454,7 +460,7 @@ func in_memory_get_run_state_fn_impl(store_map, session_id_input, options) {
 		"fallback": "session-default"
 	})
 
-	if key_in_dict(run_state_by_session, session_id) {
+	if key_in_dict(run_state_by_session, session_id) && type(dict_get_or(run_state_by_session, session_id, null)) == "dict" {
 		return {
 			"ok": true,
 			"run_state": clone_value(dict_get_or(run_state_by_session, session_id, {}))
