@@ -60,6 +60,40 @@ test "tool registry registers, resolves, and lists tool metadata deterministical
 	assert_equal(listed[0]["risk"], "low")
 }
 
+test "tool registry preserves registry metadata after registration" {
+	registry := create_tool_registry({
+		"metadata": {
+			"scope": "unit"
+		}
+	})
+	registered := register_tool(registry, {
+		"id": "tool.metadata",
+		"name": "metadata_tool"
+	})
+
+	assert_equal(registered["ok"], true)
+	assert_equal(registered["registry"]["metadata"]["scope"], "unit")
+}
+
+test "registered tool execution maps handler exceptions to tool_execution_failed" {
+	registered := register_tool(create_tool_registry({}), {
+		"id": "tool.exception",
+		"name": "exception_tool",
+		"handler": func(input, context) {
+			parse_json("{")
+		}
+	})
+	context := create_tool_execution_context({
+		"run_id": "run-handler-exception"
+	})
+
+	result := execute_registered_tool(registered["registry"], "exception_tool", {}, context, {})
+
+	assert_equal(result["ok"], false)
+	assert_equal(result["error"]["kind"], "tool_execution_failed")
+	assert_equal(result["error"]["details"]["reason"], "handler_exception")
+}
+
 test "tool registry rejects duplicate tool names" {
 	registry := create_tool_registry({})
 

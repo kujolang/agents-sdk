@@ -208,7 +208,7 @@ func normalize_registry(registry_input) {
 	return {
 		"type": "ToolRegistry",
 		"tools": clone_array_shallow(dict_get_or(registry, "tools", [])),
-		"metadata": {}
+		"metadata": clone_value(dict_get_or(registry, "metadata", {}))
 	}
 }
 
@@ -745,7 +745,24 @@ func execute_tool_impl(tool_input, input_payload, context_input, options_input) 
 		}
 	}
 
-	handler_result := handler(dict_get_or(input_validation, "normalized_input", {}), tool_context)
+	handler_result := {}
+	try {
+		handler_result = handler(dict_get_or(input_validation, "normalized_input", {}), tool_context)
+	} except err {
+		return {
+			"ok": false,
+			"error": create_tool_execution_failed_error(tool_name, "Tool handler raised an exception.", {
+				"reason": "handler_exception",
+				"error": to_string(err)
+			}),
+			"metadata": {
+				"tool_name": tool_name,
+				"timeout_ms": timeout_ms,
+				"elapsed_ms": resolve_tool_elapsed_ms(start_ms, current_timestamp(), options),
+				"timed_out": false
+			}
+		}
+	}
 	finish_ms := current_timestamp()
 	elapsed_ms := resolve_tool_elapsed_ms(start_ms, finish_ms, options)
 
@@ -1026,7 +1043,7 @@ func register_tool_impl(registry_input, tool_input) {
 	updated_registry := {
 		"type": "ToolRegistry",
 		"tools": tools,
-		"metadata": {}
+		"metadata": clone_value(dict_get_or(registry, "metadata", {}))
 	}
 
 	return {
