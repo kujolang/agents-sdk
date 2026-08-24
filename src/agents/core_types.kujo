@@ -105,9 +105,13 @@ func default_agent_config_impl() {
 		"description": "",
 		"instructions": "",
 		"role": "assistant",
+		"handler_id": "",
+		"execution_contract": {},
 		"capabilities": {},
 		"policy": {},
 		"model_policy": {},
+		"model_candidates": [],
+		"routing": {},
 		"tools": [],
 		"memory": {},
 		"guardrails": [],
@@ -130,9 +134,13 @@ func create_agent_config_impl(config_input) {
 	config["description"] := normalize_string(dict_get_or(config, "description", defaults["description"]), defaults["description"])
 	config["instructions"] := normalize_string(dict_get_or(config, "instructions", defaults["instructions"]), defaults["instructions"])
 	config["role"] := normalize_string(dict_get_or(config, "role", defaults["role"]), defaults["role"])
+	config["handler_id"] := normalize_string(dict_get_or(config, "handler_id", config["id"]), config["id"])
+	config["execution_contract"] := normalize_dict(dict_get_or(config, "execution_contract", defaults["execution_contract"]))
 	config["capabilities"] := normalize_dict(dict_get_or(config, "capabilities", defaults["capabilities"]))
 	config["policy"] := normalize_dict(dict_get_or(config, "policy", defaults["policy"]))
 	config["model_policy"] := normalize_dict(dict_get_or(config, "model_policy", defaults["model_policy"]))
+	config["model_candidates"] := normalize_array(dict_get_or(config, "model_candidates", defaults["model_candidates"]))
+	config["routing"] := normalize_dict(dict_get_or(config, "routing", defaults["routing"]))
 	config["tools"] := normalize_array(dict_get_or(config, "tools", defaults["tools"]))
 	config["memory"] := normalize_dict(dict_get_or(config, "memory", defaults["memory"]))
 	config["guardrails"] := normalize_array(dict_get_or(config, "guardrails", defaults["guardrails"]))
@@ -201,6 +209,25 @@ func validate_agent_config_impl(config_input) {
 		}
 	}
 
+	if has_key(config_input, "handler_id") && type(config_input["handler_id"]) != "string" {
+		errors := push(errors, {"field": "handler_id", "message": "handler_id must be a string."})
+	}
+	if has_key(config_input, "execution_contract") && type(config_input["execution_contract"]) != "dict" {
+		errors := push(errors, {"field": "execution_contract", "message": "execution_contract must be a dict."})
+	}
+	if type(dict_get_or(config_input, "execution_contract", null)) == "dict" && len(keys(config_input["execution_contract"])) > 0 {
+		contract := config_input["execution_contract"]
+		if normalize_string(dict_get_or(contract, "id", ""), "") == "" || normalize_string(dict_get_or(contract, "version", ""), "") == "" {
+			errors := push(errors, {"field": "execution_contract", "message": "execution_contract requires non-empty id and version fields."})
+		}
+	}
+	if has_key(config_input, "model_candidates") && type(config_input["model_candidates"]) != "array" {
+		errors := push(errors, {"field": "model_candidates", "message": "model_candidates must be an array."})
+	}
+	if has_key(config_input, "routing") && type(config_input["routing"]) != "dict" {
+		errors := push(errors, {"field": "routing", "message": "routing must be a dict."})
+	}
+
 	return {
 		"ok": len(errors) == 0,
 		"errors": errors,
@@ -217,9 +244,13 @@ func create_agent_impl(config_input) {
 		"description": config["description"],
 		"instructions": config["instructions"],
 		"role": config["role"],
+		"handler_id": config["handler_id"],
+		"execution_contract": config["execution_contract"],
 		"capabilities": config["capabilities"],
 		"policy": config["policy"],
 		"model_policy": config["model_policy"],
+		"model_candidates": config["model_candidates"],
+		"routing": config["routing"],
 		"tools": config["tools"],
 		"memory": config["memory"],
 		"guardrails": config["guardrails"],
@@ -230,6 +261,34 @@ func create_agent_impl(config_input) {
 		"budget": config["budget"],
 		"output_schema": dict_get_or(config, "output_schema", null),
 		"metadata": config["metadata"]
+	}
+}
+
+func agent_execution_compatible_impl(requested_agent_input, candidate_agent_input) {
+	requested_agent := normalize_dict(requested_agent_input)
+	candidate_agent := normalize_dict(candidate_agent_input)
+	requested_handler := normalize_string(dict_get_or(requested_agent, "handler_id", dict_get_or(requested_agent, "id", "")), "")
+	candidate_handler := normalize_string(dict_get_or(candidate_agent, "handler_id", dict_get_or(candidate_agent, "id", "")), "")
+	requested_contract := normalize_dict(dict_get_or(requested_agent, "execution_contract", {}))
+	candidate_contract := normalize_dict(dict_get_or(candidate_agent, "execution_contract", {}))
+	requested_contract_id := normalize_string(dict_get_or(requested_contract, "id", ""), "")
+	candidate_contract_id := normalize_string(dict_get_or(candidate_contract, "id", ""), "")
+	requested_contract_version := normalize_string(dict_get_or(requested_contract, "version", ""), "")
+	candidate_contract_version := normalize_string(dict_get_or(candidate_contract, "version", ""), "")
+
+	if requested_handler == candidate_handler && requested_handler != "" {
+		return {"compatible": true, "reason_code": "same_handler"}
+	}
+	if requested_contract_id != "" && requested_contract_version != "" && requested_contract_id == candidate_contract_id && requested_contract_version == candidate_contract_version {
+		return {"compatible": true, "reason_code": "execution_contract_match"}
+	}
+	return {
+		"compatible": false,
+		"reason_code": "execution_contract_mismatch",
+		"requested_handler_id": requested_handler,
+		"candidate_handler_id": candidate_handler,
+		"requested_contract_id": requested_contract_id,
+		"candidate_contract_id": candidate_contract_id
 	}
 }
 
@@ -340,6 +399,7 @@ func describe_core_types_module_impl() {
 			"agent_run_status_values",
 			"default_agent_config",
 			"create_agent_config",
+			"agent_execution_compatible",
 			"validate_agent_config",
 			"create_agent",
 			"create_agent_message",
@@ -358,6 +418,7 @@ export default_agent_config := default_agent_config_impl
 export create_agent_config := create_agent_config_impl
 export validate_agent_config := validate_agent_config_impl
 export create_agent := create_agent_impl
+export agent_execution_compatible := agent_execution_compatible_impl
 export create_agent_message := create_agent_message_impl
 export create_agent_step := create_agent_step_impl
 export create_agent_run_request := create_agent_run_request_impl

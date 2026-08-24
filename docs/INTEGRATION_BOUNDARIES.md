@@ -14,7 +14,7 @@ This document defines what belongs inside the open, local-first Agents SDK and w
 | Capability Area | In-SDK Responsibility (Local/Open) | Hosted/Commercial Responsibility (Optional) |
 | --- | --- | --- |
 | Agent execution | Deterministic runner contracts, lifecycle state, stop conditions, and event schemas | Fleet scheduling, multi-tenant orchestration, hosted run management |
-| Model access | AI adapter boundary contracts and normalized model result mapping | Managed provider routing, hosted credential brokerage, dynamic model policy controls |
+| Model access | AI adapter boundary contracts, normalized model result mapping, and additive agent-side routing metadata | Managed provider routing, hosted credential brokerage, dynamic model policy controls |
 | Tooling | Tool registry contracts, validation, approval/guardrail policy hooks | Centralized tool catalogs, team-level policy distribution, hosted audit dashboards |
 | Sessions and memory | Session/memory interfaces and local in-memory implementations | Cross-organization persistence, hosted retention policy automation, account-level backups |
 | Retrieval and context | Retrieval provider contracts, mock fixtures, context/citation schemas | Hosted index lifecycle, enterprise corpus sync, managed retrieval ranking pipelines |
@@ -33,6 +33,7 @@ This document defines what belongs inside the open, local-first Agents SDK and w
 - Add new hosted capabilities through adapter interfaces, not direct imports into core modules.
 - Keep hosted-only metadata additive and optional in payloads.
 - When adding fields, preserve backward compatibility and deterministic defaults.
+- Local orchestrators may make deterministic route decisions, but provider catalogs remain AI SDK/platform inputs and must not be embedded into Agents SDK runtime policy.
 
 ## Explicit Integration Contracts
 

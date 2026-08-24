@@ -1,7 +1,40 @@
 test_setup {
-	from src.agents.core_types import default_agent_config, create_agent_config, validate_agent_config
+	from src.agents.core_types import default_agent_config, create_agent_config, validate_agent_config, create_agent, agent_execution_compatible
 	from src.agents.core_types import create_agent_message, create_agent_step, create_agent_run_request, create_agent_context, create_agent_run_result
 	from src.agents.core_types import agent_message_role_values, agent_step_kind_values, agent_run_status_values
+}
+
+test "routable agent metadata preserves handler and execution boundaries" {
+	agent := create_agent({
+		"id": "writer-a",
+		"name": "Writer A",
+		"handler_id": "writer-handler",
+		"execution_contract": {"id": "report-writer", "version": "1"},
+		"capabilities": {"write_report": true},
+		"model_candidates": [{"provider": "openai", "model": "approved"}],
+		"routing": {"enabled": true}
+	})
+	assert_equal(agent["handler_id"], "writer-handler")
+	assert_equal(agent["execution_contract"]["id"], "report-writer")
+	assert_equal(len(agent["model_candidates"]), 1)
+	assert_true(agent["routing"]["enabled"])
+}
+
+test "execution compatibility requires same handler or versioned contract" {
+	requested := create_agent({"id": "writer-a", "name": "A", "handler_id": "handler-a", "execution_contract": {"id": "writer", "version": "1"}})
+	same_contract := create_agent({"id": "writer-b", "name": "B", "handler_id": "handler-b", "execution_contract": {"id": "writer", "version": "1"}})
+	wrong_contract := create_agent({"id": "research", "name": "Research", "handler_id": "research", "execution_contract": {"id": "research", "version": "1"}})
+	assert_true(agent_execution_compatible(requested, same_contract)["compatible"])
+	assert_false(agent_execution_compatible(requested, wrong_contract)["compatible"])
+	unversioned_a := create_agent({"id": "a", "name": "A", "handler_id": "a", "execution_contract": {"id": "writer"}})
+	unversioned_b := create_agent({"id": "b", "name": "B", "handler_id": "b", "execution_contract": {"id": "writer"}})
+	assert_false(agent_execution_compatible(unversioned_a, unversioned_b)["compatible"])
+}
+
+test "agent config validation requires versioned execution contracts" {
+	validation := validate_agent_config({"id": "writer", "name": "Writer", "execution_contract": {"id": "writer"}})
+	assert_false(validation["ok"])
+	assert_equal(validation["errors"][0]["field"], "execution_contract")
 }
 
 test "default agent config exposes stable baseline fields" {

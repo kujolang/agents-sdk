@@ -30,9 +30,15 @@ from src.agents.core_types import create_agent
 agent := create_agent({
 	"id": "writer-agent",
 	"name": "Writer Agent",
-	"instructions": "Write concise responses."
+	"instructions": "Write concise responses.",
+	"handler_id": "writer-handler",
+	"execution_contract": {"id": "report-writer", "version": "1"},
+	"capabilities": {"write_report": true},
+	"model_candidates": [{"provider": "openai", "model": "approved-model"}]
 })
 ```
+
+`handler_id` identifies the runtime implementation. `execution_contract` identifies agents that may safely substitute for each other even when their handlers differ. Routing engines should require the same handler or an exact execution-contract ID/version match before agent substitution. `model_candidates` are declarative references only; provider metadata and selection policy remain owned by the AI SDK and the external orchestrator.
 
 ## Register Tools
 

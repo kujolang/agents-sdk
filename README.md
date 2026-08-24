@@ -113,6 +113,8 @@ The Agents SDK is intentionally runtime-focused and local-first:
 - composes adapter and agent request hooks with dedupe guards via `build_observability_hooks`
 - keeps provider/model logic outside the Agents SDK runtime
 
+Agent definitions may additionally declare `handler_id`, a versioned `execution_contract`, `model_candidates`, and routing metadata. These fields let workflow orchestrators compare agent execution compatibility without coupling agent identity to a runtime handler. Provider/model catalogs and route selection remain outside the Agents SDK runner; the SDK only preserves and validates the agent-side contract.
+
 ## Non-Streaming Runner
 
 `src/agents/runner.kujo` provides a baseline non-stream runner that:
