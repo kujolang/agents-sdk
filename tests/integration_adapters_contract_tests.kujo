@@ -9,6 +9,18 @@ test_setup {
 	from src.agents.integrations.adapters import create_dispatch_integration_hooks, dispatch_run_agent_step, dispatch_invoke_workflow_as_tool
 	from src.agents.integrations.adapters import create_watchdog_trace_adapter, watchdog_transform_trace_event
 	from src.agents.integrations.adapters import create_scout_code_context_provider, scout_provider_resolve_context, map_scout_context_to_retrieval_enrichment
+	from src.agents.integrations.adapters import convert_agent_to_dispatch, validate_dispatch_agent_conversion
+}
+
+test "Agents SDK configs convert to executable Dispatch model agents" {
+	converted := convert_agent_to_dispatch({"id": "analyst", "name": "Analyst", "description": "Analyze inputs", "instructions": "Return a concise analysis.", "role": "assistant", "model_candidates": [{"provider": "openai", "model": "gpt-test"}], "tools": ["lookup"]}, {})
+	assert_equal(converted["ok"], true)
+	assert_equal(converted["agent"]["handler_id"], "model")
+	assert_equal(converted["agent"]["execution_contract"]["id"], "analyst")
+	assert_equal(converted["agent"]["metadata"]["source"], "kujo-agents-sdk")
+	invalid := validate_dispatch_agent_conversion({"id": "", "name": "Missing"}, {})
+	assert_equal(invalid["ok"], false)
+	assert_true(len(invalid["errors"]) >= 2)
 }
 
 test "mcp 2026 request helpers build stateless metadata and headers" {

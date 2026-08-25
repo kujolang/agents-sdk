@@ -686,6 +686,50 @@ func map_scout_context_to_retrieval_enrichment_impl(context_result_input, option
 	}
 }
 
+func convert_agent_to_dispatch_impl(agent_input, options) {
+	agent := normalize_dict(agent_input)
+	config := normalize_dict(options)
+	errors := []
+	agent_id := normalize_string(dict_get_or(agent, "id", ""), "")
+	name := normalize_string(dict_get_or(agent, "name", ""), "")
+	instructions := normalize_string(dict_get_or(agent, "instructions", ""), "")
+	if agent_id == "" { errors := push(errors, {"field": "id", "message": "Agent id is required."}) }
+	if name == "" { errors := push(errors, {"field": "name", "message": "Agent name is required."}) }
+	if instructions == "" { errors := push(errors, {"field": "instructions", "message": "Dispatch model agents require instructions."}) }
+	candidates := normalize_array(dict_get_or(agent, "model_candidates", []))
+	if len(candidates) == 0 { errors := push(errors, {"field": "model_candidates", "message": "At least one provider/model candidate is required."}) }
+	for candidate in candidates {
+		if type(candidate) != "dict" || normalize_string(dict_get_or(candidate, "provider", ""), "") == "" || normalize_string(dict_get_or(candidate, "model", ""), "") == "" {
+			errors := push(errors, {"field": "model_candidates", "message": "Each candidate requires provider and model."})
+		}
+	}
+	if len(errors) > 0 { return {"ok": false, "errors": errors} }
+	capabilities := normalize_dict(dict_get_or(agent, "capabilities", {}))
+	role := normalize_string(dict_get_or(agent, "role", "assistant"), "assistant")
+	if len(keys(capabilities)) == 0 { capabilities[role] := true }
+	dispatch_agent := {
+		"id": agent_id, "name": name, "role": role,
+		"purpose": normalize_string(dict_get_or(agent, "description", dict_get_or(agent, "purpose", role)), role),
+		"instructions": instructions,
+		"handler_id": normalize_string(dict_get_or(config, "handler_id", "model"), "model"),
+		"execution_contract": normalize_dict(dict_get_or(agent, "execution_contract", {"id": agent_id, "version": "1"})),
+		"capabilities": capabilities,
+		"model": normalize_dict(dict_get_or(agent, "model", {})),
+		"model_candidates": candidates,
+		"tools": normalize_array(dict_get_or(agent, "tools", [])),
+		"output_schema": dict_get_or(agent, "output_schema", null),
+		"routing": normalize_dict(dict_get_or(agent, "routing", {})),
+		"guardrails": normalize_array(dict_get_or(agent, "guardrails", [])),
+		"handoff_targets": normalize_array(dict_get_or(agent, "handoff_targets", [])),
+		"metadata": {"source": "kujo-agents-sdk", "source_handler_id": normalize_string(dict_get_or(agent, "handler_id", agent_id), agent_id)}
+	}
+	return {"ok": true, "agent": dispatch_agent, "warnings": []}
+}
+
+func validate_dispatch_agent_conversion_impl(agent_input, options) {
+	return convert_agent_to_dispatch_impl(agent_input, options)
+}
+
 func describe_integration_adapters_module_impl() {
 	return {
 		"module": "agents.integrations.adapters",
@@ -713,7 +757,9 @@ func describe_integration_adapters_module_impl() {
 			"watchdog_transform_trace_event",
 			"create_scout_code_context_provider",
 			"scout_provider_resolve_context",
-			"map_scout_context_to_retrieval_enrichment"
+			"map_scout_context_to_retrieval_enrichment",
+			"convert_agent_to_dispatch",
+			"validate_dispatch_agent_conversion"
 		]
 	}
 }
@@ -740,4 +786,6 @@ export watchdog_transform_trace_event := watchdog_transform_trace_event_impl
 export create_scout_code_context_provider := create_scout_code_context_provider_impl
 export scout_provider_resolve_context := scout_provider_resolve_context_impl
 export map_scout_context_to_retrieval_enrichment := map_scout_context_to_retrieval_enrichment_impl
+export convert_agent_to_dispatch := convert_agent_to_dispatch_impl
+export validate_dispatch_agent_conversion := validate_dispatch_agent_conversion_impl
 export describe_integration_adapters_module := describe_integration_adapters_module_impl
