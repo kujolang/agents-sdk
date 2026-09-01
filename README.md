@@ -162,6 +162,14 @@ identity and canonical definition digest in Tool metadata, and derives only a
 conservative risk hint from declared effects. `register_ability_tool` performs
 the projection and registers it through the standard Tool registry.
 
+For server-owned execution, `register_ability_gateway_tool` accepts a narrow
+transport callback instead of a local handler. It sends a versioned gateway
+call with canonical identity, digest, input, agent correlation, approval ID,
+and idempotency key; validates the returned canonical receipt; rejects identity
+mismatches; and preserves the receipt under Tool execution metadata as durable
+evidence. Authentication and server-resolved principal/tenant identity remain
+the gateway's responsibility.
+
 The SDK pins the canonical `ability` package to an exact commit in
 `kennel.lock`; tests load its schema directly from that dependency. There is no
 copied schema to drift. The CMS is the initial producer, not a runtime

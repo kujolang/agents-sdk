@@ -1,4 +1,4 @@
-from ability import ABILITY_SCHEMA_ID, validate_ability_definition, validate_ability_value, ability_definition_digest
+from ability import ABILITY_SCHEMA_ID, validate_ability_definition, validate_ability_value, validate_ability_receipt, ability_definition_digest
 from src.agents.tools.registry import register_tool
 
 export ABILITY_SCHEMA_ID := ABILITY_SCHEMA_ID
@@ -48,6 +48,42 @@ func ability_handler_wrapper(definition, binding_handler) {
 	}
 }
 
+func ability_gateway_handler(definition, gateway_invoke) {
+	digest := ability_definition_digest(definition)["digest"]
+	return func(input_payload, context) {
+		context_metadata := dict_get_or(context, "metadata", {})
+		invocation_id := trim(to_string(dict_get_or(context_metadata, "ability_invocation_id", "")))
+		if invocation_id == "" { invocation_id = "agent-" + substring(sha256(to_string(dict_get_or(context, "run_id", "")) + ":" + definition["id"] + ":" + to_json(input_payload)), 0, 24) }
+		gateway_call := {
+			"schema": "kujo.ability.gateway-call/v1",
+			"invocation_id": invocation_id,
+			"ability_id": definition["id"],
+			"ability_version": definition["version"],
+			"definition_digest": digest,
+			"input": input_payload,
+			"approval_id": to_string(dict_get_or(context_metadata, "ability_approval_id", "")),
+			"idempotency_key": to_string(dict_get_or(context_metadata, "ability_idempotency_key", "")),
+			"correlation": {"run_id": dict_get_or(context, "run_id", ""), "session_id": dict_get_or(context, "session_id", ""), "agent_id": dict_get_or(context, "agent_id", ""), "tool_name": dict_get_or(context, "tool_name", "")}
+		}
+		gateway_result := null; gateway_error := null
+		try { gateway_result = gateway_invoke(gateway_call, context) } except e { gateway_error = e }
+		if type(gateway_error) != "null" { return {"ok": false, "error": {"kind": "ability_gateway_failed", "message": "Ability gateway invocation failed.", "details": {"error": to_string(gateway_error)}}} }
+		if type(gateway_result) != "dict" { return {"ok": false, "error": {"kind": "ability_gateway_invalid", "message": "Ability gateway returned an invalid result.", "details": {}}} }
+		receipt := dict_get_or(gateway_result, "receipt", null)
+		if type(receipt) != "dict" { return {"ok": false, "error": {"kind": "ability_receipt_missing", "message": "Ability gateway did not return a receipt.", "details": {}}} }
+		receipt_validation := validate_ability_receipt(receipt)
+		if receipt_validation["ok"] == false { return {"ok": false, "error": {"kind": receipt_validation["code"], "message": receipt_validation["message"], "details": receipt_validation["details"]}} }
+		if receipt["invocation_id"] != invocation_id || receipt["ability_id"] != definition["id"] || receipt["ability_version"] != definition["version"] || receipt["definition_digest"] != digest { return {"ok": false, "error": {"kind": "ability_receipt_identity_mismatch", "message": "Ability receipt does not match the gateway call.", "details": {}}} }
+		if receipt["status"] != "succeeded" {
+			receipt_error := dict_get_or(receipt, "error", {})
+			return {"ok": false, "error": {"kind": dict_get_or(receipt_error, "code", "ability_execution_failed"), "message": dict_get_or(receipt_error, "message", "Ability execution failed."), "details": {"receipt": receipt}}}
+		}
+		output_validation := validate_ability_value(receipt["result"], definition["output_schema"], "output")
+		if output_validation["ok"] == false { return {"ok": false, "error": {"kind": "ability_receipt_output_invalid", "message": output_validation["message"], "details": output_validation["details"]}} }
+		return {"ok": true, "output": receipt["result"], "metadata": {"ability_receipt": receipt}}
+	}
+}
+
 export ability_to_tool_contract := func(definition_input, binding_input, exposure_input) {
 	definition_result := validate_ability_definition(definition_input)
 	if definition_result["ok"] == false { return definition_result }
@@ -92,6 +128,23 @@ export ability_to_tool_contract := func(definition_input, binding_input, exposur
 
 export register_ability_tool := func(registry, definition, binding, exposure) {
 	projection := ability_to_tool_contract(definition, binding, exposure)
+	if projection["ok"] == false { return projection }
+	registration := register_tool(registry, projection["tool"])
+	if registration["ok"] == false { return registration }
+	return {"ok": true, "registry": registration["registry"], "tool": projection["tool"]}
+}
+
+export ability_gateway_to_tool_contract := func(definition, gateway_binding, exposure) {
+	binding := gateway_binding
+	if type(binding) != "dict" { binding = {} }
+	invoke := dict_get_or(binding, "invoke", null)
+	if type(invoke) != "function" { return failure("ability_gateway_missing", "Ability gateway binding must provide invoke", {}) }
+	local_binding := {"handler": ability_gateway_handler(definition, invoke), "timeout_ms": dict_get_or(binding, "timeout_ms", 30000)}
+	return ability_to_tool_contract(definition, local_binding, exposure)
+}
+
+export register_ability_gateway_tool := func(registry, definition, gateway_binding, exposure) {
+	projection := ability_gateway_to_tool_contract(definition, gateway_binding, exposure)
 	if projection["ok"] == false { return projection }
 	registration := register_tool(registry, projection["tool"])
 	if registration["ok"] == false { return registration }

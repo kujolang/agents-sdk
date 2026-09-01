@@ -5,6 +5,8 @@
 - Pin the canonical `ability` package, remove the duplicated schema, expose
   definition digests, and register Ability projections through the standard
   Tool registry.
+- Add receipt-validating remote Ability gateway tools and preserve canonical
+  receipts in Tool execution metadata.
 - Add `convert_agent_to_dispatch` and `validate_dispatch_agent_conversion` helpers for producing executable Dispatch model-agent definitions from the shared agent contract.
 - Add launch readiness spec and deterministic Eval suite for prelaunch review evidence.
 - Declare the documented local-first runtime primitives and offline integration contracts stable for the official 1.0 release.

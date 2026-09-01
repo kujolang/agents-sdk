@@ -13,7 +13,7 @@ from src.agents.artifacts.store import describe_artifact_store_module
 from src.agents.budgets.limits import describe_budget_limits_module
 from src.agents.streaming.events import describe_streaming_events_module
 from src.agents.integrations.adapters import describe_integration_adapters_module
-from src.agents.abilities.contract import ability_to_tool_contract, register_ability_tool, ability_risk_hint
+from src.agents.abilities.contract import ability_to_tool_contract, register_ability_tool, ability_gateway_to_tool_contract, register_ability_gateway_tool, ability_risk_hint
 
 func describe_module_tree_impl() {
 	modules := {
@@ -63,4 +63,6 @@ export describe_streaming_events_module := describe_streaming_events_module
 export describe_integration_adapters_module := describe_integration_adapters_module
 export ability_to_tool_contract := ability_to_tool_contract
 export register_ability_tool := register_ability_tool
+export ability_gateway_to_tool_contract := ability_gateway_to_tool_contract
+export register_ability_gateway_tool := register_ability_gateway_tool
 export ability_risk_hint := ability_risk_hint

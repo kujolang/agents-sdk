@@ -1,6 +1,6 @@
 test_setup {
-	from src.agents.abilities.contract import ABILITY_SCHEMA_ID, ability_risk_hint, ability_to_tool_contract, register_ability_tool, validate_ability_definition, validate_ability_value
-	from src.agents.tools.registry import create_tool_registry, resolve_registry_tool
+	from src.agents.abilities.contract import ABILITY_SCHEMA_ID, ability_risk_hint, ability_to_tool_contract, register_ability_tool, register_ability_gateway_tool, validate_ability_definition, validate_ability_value
+	from src.agents.tools.registry import create_tool_execution_context, create_tool_registry, execute_registered_tool, resolve_registry_tool
 	read_definition := func() {
 		return {
 			"schema": ABILITY_SCHEMA_ID,
@@ -55,6 +55,48 @@ test "Ability projection registers in the standard tool registry" {
 	resolved := resolve_registry_tool(registered["registry"], "find_documentation")
 	assert_true(resolved["ok"])
 	assert_equal(resolved["tool"]["metadata"]["ability_id"], definition["id"])
+}
+
+test "Ability gateway tools validate identity and preserve receipts as execution evidence" {
+	definition := read_definition()
+	gateway := func(call, context) {
+		return {"ok": true, "receipt": {
+			"schema": "kujo.ability.receipt/v1", "receipt_id": "receipt-agent-1", "invocation_id": call["invocation_id"],
+			"ability_id": call["ability_id"], "ability_version": call["ability_version"], "definition_digest": call["definition_digest"],
+			"handler_id": "kujo.cms.gateway", "handler_version": "1.0.0", "status": "succeeded", "result": {"count": 1}, "error": null,
+			"policy_decision": {"outcome": "allow"}, "approval_id": call["approval_id"], "idempotency": {"mode": "intrinsic", "state": "completed"},
+			"request_id": "request-agent-1", "trace_id": "trace-agent-1", "surface": "rest",
+			"principal": {"type": "cms", "id": "agent-1", "tenant_id": "tenant-1", "claims": {}},
+			"started_at_ms": 1000, "completed_at_ms": 1001, "duration_ms": 1, "audit": {"written": true}, "metadata": {}
+		}}
+	}
+	registered := register_ability_gateway_tool(create_tool_registry({}), definition, {"invoke": gateway}, {"name": "find_documentation", "permissions": ["docs.read"]})
+	assert_true(registered["ok"])
+	context := create_tool_execution_context({"run_id": "run-agent-1", "session_id": "session-agent-1", "agent_id": "agent-1", "metadata": {"ability_invocation_id": "invocation-agent-1"}})
+	executed := execute_registered_tool(registered["registry"], "find_documentation", {"query": "ability"}, context, {})
+	assert_true(executed["ok"])
+	assert_equal(executed["output"]["count"], 1)
+	assert_equal(executed["metadata"]["handler"]["ability_receipt"]["receipt_id"], "receipt-agent-1")
+}
+
+test "Ability gateway tools reject receipts with mismatched semantic identity" {
+	definition := read_definition()
+	gateway := func(call, context) {
+		return {"ok": true, "receipt": {
+			"schema": "kujo.ability.receipt/v1", "receipt_id": "receipt-agent-mismatch", "invocation_id": call["invocation_id"],
+			"ability_id": "kujo.docs.content.other", "ability_version": call["ability_version"], "definition_digest": call["definition_digest"],
+			"handler_id": "kujo.cms.gateway", "handler_version": "1.0.0", "status": "succeeded", "result": {"count": 1}, "error": null,
+			"policy_decision": {"outcome": "allow"}, "approval_id": "", "idempotency": {"mode": "intrinsic", "state": "completed"},
+			"request_id": "request-agent-mismatch", "trace_id": "trace-agent-mismatch", "surface": "rest",
+			"principal": {"type": "cms", "id": "agent-1", "tenant_id": "tenant-1", "claims": {}},
+			"started_at_ms": 1000, "completed_at_ms": 1001, "duration_ms": 1, "audit": {"written": true}, "metadata": {}
+		}}
+	}
+	registered := register_ability_gateway_tool(create_tool_registry({}), definition, {"invoke": gateway}, {"name": "find_documentation", "permissions": ["docs.read"]})
+	context := create_tool_execution_context({"run_id": "run-agent-mismatch", "metadata": {"ability_invocation_id": "invocation-agent-mismatch"}})
+	executed := execute_registered_tool(registered["registry"], "find_documentation", {"query": "ability"}, context, {})
+	assert_false(executed["ok"])
+	assert_equal(executed["error"]["details"]["handler_error"]["kind"], "ability_receipt_identity_mismatch")
 }
 
 test "Ability tool handlers enforce full input and output schemas" {

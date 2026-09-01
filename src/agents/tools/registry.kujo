@@ -831,6 +831,7 @@ func execute_tool_impl(tool_input, input_payload, context_input, options_input) 
 			"approval_decision": dict_get_or(approval_gate, "approval_decision", {}),
 			"approval_provider_decision": dict_get_or(approval_gate, "approval_provider_decision", {}),
 			"sanitizer": normalize_dict(dict_get_or(sanitized_output, "metadata", {})),
+			"handler": normalize_dict(dict_get_or(handler_result, "metadata", {})),
 			"artifact_writes": normalize_array(dict_get_or(artifact_emission, "writes", []))
 		}
 	}

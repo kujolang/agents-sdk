@@ -114,6 +114,17 @@ exposure inputs. The canonical definition validator and schema come from the
 exact `ability` package revision pinned by Kennel; the projected Tool metadata
 contains a digest that can be compared with a discovery document or receipt.
 
+When execution belongs to a remote service, register the same definition with
+`register_ability_gateway_tool`. Its `invoke` callback is the transport seam:
+it receives a `kujo.ability.gateway-call/v1` payload and must return
+`{"receipt": <canonical receipt>}`. Put `ability_invocation_id`,
+`ability_approval_id`, and `ability_idempotency_key` in the Tool execution
+context metadata when supplied by the caller. The SDK validates the receipt,
+matches it to the exact definition and invocation, validates successful output,
+and preserves it in `result.metadata.handler.ability_receipt`. The callback—not
+the portable Ability definition—owns authentication, endpoint selection, and
+response-envelope normalization.
+
 ## Run Non-Stream Mode
 
 ```agents-sdk

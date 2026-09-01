@@ -15,7 +15,7 @@ This document defines what belongs inside the open, local-first Agents SDK and w
 | --- | --- | --- |
 | Agent execution | Deterministic runner contracts, lifecycle state, stop conditions, and event schemas | Fleet scheduling, multi-tenant orchestration, hosted run management |
 | Model access | AI adapter boundary contracts, normalized model result mapping, and additive agent-side routing metadata | Managed provider routing, hosted credential brokerage, dynamic model policy controls |
-| Tooling | Tool registry contracts, validation, approval/guardrail policy hooks, and pinned canonical Ability-to-Tool projection | Centralized Ability catalogs, team-level policy distribution, remote execution gateways, hosted audit dashboards |
+| Tooling | Tool registry contracts, validation, approval/guardrail policy hooks, pinned canonical Ability-to-Tool projection, and receipt-validating gateway callback boundary | Centralized Ability catalogs, team-level policy distribution, concrete authenticated transports, hosted audit dashboards |
 | Sessions and memory | Session/memory interfaces and local in-memory implementations | Cross-organization persistence, hosted retention policy automation, account-level backups |
 | Retrieval and context | Retrieval provider contracts, mock fixtures, context/citation schemas | Hosted index lifecycle, enterprise corpus sync, managed retrieval ranking pipelines |
 | Observability | Trace/event schema contracts and local sinks/adapters | Hosted aggregation, alerting, incident dashboards, long-term analytics |
