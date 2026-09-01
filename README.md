@@ -163,6 +163,9 @@ declared effects. `config/ability.schema.json` is the executable contract copy
 used by compatibility tests; the CMS is the initial producer, not a runtime
 dependency of the Agents SDK.
 
+The canonical contract and cross-consumer conformance matrix live in
+[`kujolang/ability`](https://github.com/kujolang/ability).
+
 ## Approval Policy Contracts
 
 `src/agents/security/approval.kujo` provides deterministic approval policy primitives for:
