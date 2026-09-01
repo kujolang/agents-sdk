@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned Kujo runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/kujo-v1.2.0-linux-x64.tar.gz"
+          curl -fsSL \
+            https://github.com/kujolang/kujo/releases/download/v1.2.0/kujo-v1.2.0-linux-x64.tar.gz \
+            -o "$archive"
+          echo "3f9d69779fef64c8f329c69301ac666cf74499ff083f1a5f25f729368b318fcb  $archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/kujo-bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/kujo-bin"
+          chmod +x "$RUNNER_TEMP/kujo-bin/kujo"
+          "$RUNNER_TEMP/kujo-bin/kujo" --version
+          echo "KUJO_BIN=$RUNNER_TEMP/kujo-bin/kujo" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/kujo-bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          kennel_dir="$RUNNER_TEMP/kennel"
+          git clone --filter=blob:none https://github.com/kujolang/kennel.git "$kennel_dir"
+          git -C "$kennel_dir" checkout --detach b5e0cf290aa2af7a90b637a7c3bdb4324ea4f66d
+          test "$(git -C "$kennel_dir" rev-parse HEAD)" = "b5e0cf290aa2af7a90b637a7c3bdb4324ea4f66d"
+          "$KUJO_BIN" run "$kennel_dir/kennel.kujo" --interpreter -- validate --project-dir "$GITHUB_WORKSPACE"
+          "$KUJO_BIN" run "$kennel_dir/kennel.kujo" --interpreter -- install --project-dir "$GITHUB_WORKSPACE"
+          test -f kennel_packages/ability/ability.kujo
+
+      - name: Verify module exports
+        run: |
+          "$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter
+
+      - name: Verify offline examples and contracts
+        run: bash scripts/ci_no_network_enforcement.sh
