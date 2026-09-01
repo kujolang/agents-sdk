@@ -158,9 +158,13 @@ definition.
 `ability_to_tool_contract` maps a validated Ability plus a local handler and
 an explicit exposure policy into the existing Tool shape. Its wrapper performs
 full JSON Schema validation before and after execution, preserves the Ability
-identity in Tool metadata, and derives only a conservative risk hint from the
-declared effects. `config/ability.schema.json` is the executable contract copy
-used by compatibility tests; the CMS is the initial producer, not a runtime
+identity and canonical definition digest in Tool metadata, and derives only a
+conservative risk hint from declared effects. `register_ability_tool` performs
+the projection and registers it through the standard Tool registry.
+
+The SDK pins the canonical `ability` package to an exact commit in
+`kennel.lock`; tests load its schema directly from that dependency. There is no
+copied schema to drift. The CMS is the initial producer, not a runtime
 dependency of the Agents SDK.
 
 The canonical contract and cross-consumer conformance matrix live in

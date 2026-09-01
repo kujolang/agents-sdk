@@ -1,57 +1,64 @@
-[package]
-name = "agents-sdk"
-version = "1.0.0"
-description = "Production-oriented agent runtime primitives for Kujo, built on top of the Kujo AI SDK."
-license = "MIT"
-authors = ["Kujolang <contact@kujolang.ai>"]
-homepage = ""
-repository = "https://github.com/kujolang/agents-sdk"
-documentation = ""
-keywords = ["agents-sdk", "agents", "sdk", "ai", "runtime"]
-categories = ["ai", "developer-tools"]
-readme = "README.md"
-
-[package.status]
-stage = "production"
-stability = "stable"
-public_api = true
-notes = "Stable local-first runtime primitives and offline integration contracts; hosted and commercial layers remain adapter-only."
-
 [agents-sdk]
-minimum_version = "1.0.0"
 entry = "examples/module_exports_smoke.kujo"
-sources = ["src", "."]
-includes = ["README.md", "tests"]
 excludes = [".git", "kennel_packages", "dist", "build", "node_modules"]
+includes = ["README.md", "tests"]
+minimum_version = "1.0.0"
+sources = ["src", "."]
 
 [build]
+artifacts = []
 command = ""
 output = "dist"
-artifacts = []
 
-[dependencies]
+[dependencies.ability]
+commit = "8f82496f48ac01fb93d6e2a6eb9e3c9d01f7fdaa"
+source = "github:kujolang/ability"
 
 [dev-dependencies]
 
-[scripts]
-test = '"$KUJO_BIN" test'
-test-contracts = '"$KUJO_BIN" test-run tests/runner_result_event_contract_tests.kujo -v'
-test-examples = '"$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v'
-smoke = '"$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter'
-smoke-examples = '"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter'
-verify-offline = "bash scripts/ci_no_network_enforcement.sh"
+[package]
+authors = ["Kujolang <contact@kujolang.ai>"]
+categories = ["ai", "developer-tools"]
+description = "Production-oriented agent runtime primitives for Kujo, built on top of the Kujo AI SDK."
+documentation = ""
+homepage = ""
+keywords = ["agents-sdk", "agents", "sdk", "ai", "runtime"]
+license = "MIT"
+name = "agents-sdk"
+readme = "README.md"
+repository = "https://github.com/kujolang/agents-sdk"
+version = "1.0.0"
 
 [package.exports]
 agents = "src/agents/index.kujo"
+ai_adapter = "src/agents/ai/adapter.kujo"
 core_types = "src/agents/core_types.kujo"
 errors = "src/agents/errors.kujo"
 events = "src/agents/events.kujo"
 runner = "src/agents/runner.kujo"
-ai_adapter = "src/agents/ai/adapter.kujo"
+
+[package.status]
+notes = "Stable local-first runtime primitives and offline integration contracts; hosted and commercial layers remain adapter-only."
+public_api = true
+stability = "stable"
+stage = "production"
+
+[policy.resolution]
+
+[policy.source]
 
 [registry]
 index = ""
+mirrors = []
 publish = ""
+
+[scripts]
+smoke = '"$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter'
+smoke-examples = '"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter'
+test = '"$KUJO_BIN" test'
+test-contracts = '"$KUJO_BIN" test-run tests/runner_result_event_contract_tests.kujo -v'
+test-examples = '"$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v'
+verify-offline = "bash scripts/ci_no_network_enforcement.sh"
 
 [trust]
 checksum = ""

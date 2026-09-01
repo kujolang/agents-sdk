@@ -73,9 +73,10 @@ Keep the portable definition separate from the local binding and exposure
 policy. The adapter validates both the definition and every invocation:
 
 ```agents-sdk
-from src.agents.abilities.contract import ability_to_tool_contract
+from src.agents.abilities.contract import register_ability_tool
+from src.agents.tools.registry import create_tool_registry
 
-projection := ability_to_tool_contract({
+registration := register_ability_tool(create_tool_registry({}), {
 	"schema": "kujo.ability/v1",
 	"id": "kujo.docs.content.find",
 	"version": "1.0.0",
@@ -103,12 +104,15 @@ projection := ability_to_tool_contract({
 	"permissions": ["docs.read"]
 })
 
-ability_tool := projection["tool"]
+ability_registry := registration["registry"]
+ability_tool := registration["tool"]
 ```
 
 Do not put credentials, transport details, tenant policy, approval state, or a
 handler reference into the Ability definition. Those belong to the binding or
-exposure inputs.
+exposure inputs. The canonical definition validator and schema come from the
+exact `ability` package revision pinned by Kennel; the projected Tool metadata
+contains a digest that can be compared with a discovery document or receipt.
 
 ## Run Non-Stream Mode
 

@@ -1,5 +1,6 @@
 test_setup {
-	from src.agents.abilities.contract import ABILITY_SCHEMA_ID, ability_risk_hint, ability_to_tool_contract, validate_ability_definition, validate_ability_value
+	from src.agents.abilities.contract import ABILITY_SCHEMA_ID, ability_risk_hint, ability_to_tool_contract, register_ability_tool, validate_ability_definition, validate_ability_value
+	from src.agents.tools.registry import create_tool_registry, resolve_registry_tool
 	read_definition := func() {
 		return {
 			"schema": ABILITY_SCHEMA_ID,
@@ -18,7 +19,7 @@ test_setup {
 test "Ability definitions satisfy the shared executable schema" {
 	definition := read_definition()
 	assert_true(validate_ability_definition(definition)["ok"])
-	contract_schema := parse_json(read_file("config/ability.schema.json"))
+	contract_schema := parse_json(read_file("kennel_packages/ability/schema/ability.schema.json"))
 	assert_true(json_schema_validate(definition, contract_schema)["valid"])
 	definition["idempotency"] := {"mode": "retry-everything"}
 	assert_equal(validate_ability_definition(definition)["code"], "invalid_ability_idempotency_mode")
@@ -42,7 +43,18 @@ test "Ability tool projection preserves semantic identity and separates policy" 
 	assert_equal(tool["permissions"][0], "docs.read")
 	assert_equal(tool["metadata"]["ability_id"], "kujo.docs.content.find")
 	assert_equal(tool["metadata"]["ability_version"], "1.0.0")
+	assert_equal(len(tool["metadata"]["ability_definition_digest"]), 64)
 	assert_equal(tool["metadata"]["channel"], "agent")
+}
+
+test "Ability projection registers in the standard tool registry" {
+	definition := read_definition()
+	registry := create_tool_registry({})
+	registered := register_ability_tool(registry, definition, {"handler": func(input_payload, context) { return {"ok": true, "output": {"count": 1}} }}, {"name": "find_documentation", "permissions": ["docs.read"]})
+	assert_true(registered["ok"])
+	resolved := resolve_registry_tool(registered["registry"], "find_documentation")
+	assert_true(resolved["ok"])
+	assert_equal(resolved["tool"]["metadata"]["ability_id"], definition["id"])
 }
 
 test "Ability tool handlers enforce full input and output schemas" {
