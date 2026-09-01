@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Pin the production-stable Ability 1.0.0 contract and runtime package.
 - Pin the canonical `ability` package, remove the duplicated schema, expose
   definition digests, and register Ability projections through the standard
   Tool registry.
