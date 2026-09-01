@@ -146,6 +146,23 @@ Agent definitions may additionally declare `handler_id`, a versioned `execution_
 - optional tool output sanitizer callback support with deterministic fallback-to-original output when sanitizer callbacks fail or reject output
 - artifact-aware execution contexts via `artifact_handles` plus persisted handler-emitted artifact references when an `ArtifactStore` is provided
 
+## Portable Ability Contracts
+
+`src/agents/abilities/contract.kujo` is the Agents SDK projection boundary for
+portable `kujo.ability/v1` definitions. An Ability carries semantic identity,
+version, input/output JSON Schemas, declared effects, and idempotency. The
+adapter deliberately keeps runtime bindings, agent permissions, approval
+policy, exposure names, and execution timeouts outside that portable
+definition.
+
+`ability_to_tool_contract` maps a validated Ability plus a local handler and
+an explicit exposure policy into the existing Tool shape. Its wrapper performs
+full JSON Schema validation before and after execution, preserves the Ability
+identity in Tool metadata, and derives only a conservative risk hint from the
+declared effects. `config/ability.schema.json` is the executable contract copy
+used by compatibility tests; the CMS is the initial producer, not a runtime
+dependency of the Agents SDK.
+
 ## Approval Policy Contracts
 
 `src/agents/security/approval.kujo` provides deterministic approval policy primitives for:
@@ -287,6 +304,7 @@ Hosted/commercial product capabilities must remain outside core runtime modules 
 - `src/agents/events.kujo`
 - `src/agents/runner.kujo`
 - `src/agents/tools/registry.kujo`
+- `src/agents/abilities/contract.kujo`
 - `src/agents/security/approval.kujo`
 - `src/agents/sessions/store.kujo`
 - `src/agents/memory/store.kujo`

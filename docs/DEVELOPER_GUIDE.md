@@ -67,6 +67,49 @@ register_result := register_tool(registry, {
 })
 ```
 
+## Project a Portable Ability into a Tool
+
+Keep the portable definition separate from the local binding and exposure
+policy. The adapter validates both the definition and every invocation:
+
+```agents-sdk
+from src.agents.abilities.contract import ability_to_tool_contract
+
+projection := ability_to_tool_contract({
+	"schema": "kujo.ability/v1",
+	"id": "kujo.docs.content.find",
+	"version": "1.0.0",
+	"description": "Find a bounded set of documentation records.",
+	"input_schema": {
+		"type": "object",
+		"required": ["query"],
+		"properties": {"query": {"type": "string", "minLength": 1}},
+		"additionalProperties": false
+	},
+	"output_schema": {
+		"type": "object",
+		"required": ["count"],
+		"properties": {"count": {"type": "integer", "minimum": 0}},
+		"additionalProperties": false
+	},
+	"effects": [{"kind": "read", "resource": "kujo.docs.content"}],
+	"idempotency": {"mode": "intrinsic"}
+}, {
+	"handler": func(input_payload, context) {
+		return {"ok": true, "output": {"count": 1}}
+	}
+}, {
+	"name": "find_documentation",
+	"permissions": ["docs.read"]
+})
+
+ability_tool := projection["tool"]
+```
+
+Do not put credentials, transport details, tenant policy, approval state, or a
+handler reference into the Ability definition. Those belong to the binding or
+exposure inputs.
+
 ## Run Non-Stream Mode
 
 ```agents-sdk

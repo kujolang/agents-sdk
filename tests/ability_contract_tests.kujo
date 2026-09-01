@@ -1,0 +1,66 @@
+test_setup {
+	from src.agents.abilities.contract import ABILITY_SCHEMA_ID, ability_risk_hint, ability_to_tool_contract, validate_ability_definition, validate_ability_value
+	read_definition := func() {
+		return {
+			"schema": ABILITY_SCHEMA_ID,
+			"id": "kujo.docs.content.find",
+			"version": "1.0.0",
+			"title": "Find documentation",
+			"description": "Find a bounded set of documentation records.",
+			"input_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 200}}, "additionalProperties": false},
+			"output_schema": {"type": "object", "required": ["count"], "properties": {"count": {"type": "integer", "minimum": 0}}, "additionalProperties": false},
+			"effects": [{"kind": "read", "resource": "kujo.docs.content"}],
+			"idempotency": {"mode": "intrinsic"}
+		}
+	}
+}
+
+test "Ability definitions satisfy the shared executable schema" {
+	definition := read_definition()
+	assert_true(validate_ability_definition(definition)["ok"])
+	contract_schema := parse_json(read_file("config/ability.schema.json"))
+	assert_true(json_schema_validate(definition, contract_schema)["valid"])
+	definition["idempotency"] := {"mode": "retry-everything"}
+	assert_equal(validate_ability_definition(definition)["code"], "invalid_ability_idempotency_mode")
+}
+
+test "Ability tool projection preserves semantic identity and separates policy" {
+	definition := read_definition()
+	mapped := ability_to_tool_contract(definition, {
+		"timeout_ms": 2500,
+		"handler": func(input_payload, context) { return {"ok": true, "output": {"count": 2}} }
+	}, {
+		"name": "find_documentation",
+		"permissions": ["docs.read"],
+		"metadata": {"channel": "agent"}
+	})
+	assert_true(mapped["ok"])
+	tool := mapped["tool"]
+	assert_equal(tool["id"], "ability.kujo.docs.content.find.v1.0.0")
+	assert_equal(tool["name"], "find_documentation")
+	assert_equal(tool["risk"], "low")
+	assert_equal(tool["permissions"][0], "docs.read")
+	assert_equal(tool["metadata"]["ability_id"], "kujo.docs.content.find")
+	assert_equal(tool["metadata"]["ability_version"], "1.0.0")
+	assert_equal(tool["metadata"]["channel"], "agent")
+}
+
+test "Ability tool handlers enforce full input and output schemas" {
+	definition := read_definition()
+	bad_output := ability_to_tool_contract(definition, {"handler": func(input_payload, context) { return {"ok": true, "output": {"count": "two"}} }}, {})
+	bad_input_result := bad_output["tool"]["handler"]({"query": 7}, {})
+	assert_false(bad_input_result["ok"])
+	assert_equal(bad_input_result["error"]["kind"], "ability_input_invalid")
+	bad_output_result := bad_output["tool"]["handler"]({"query": "ability"}, {})
+	assert_false(bad_output_result["ok"])
+	assert_equal(bad_output_result["error"]["kind"], "ability_output_invalid")
+}
+
+test "Ability effects produce conservative tool risk hints" {
+	definition := read_definition()
+	assert_equal(ability_risk_hint(definition), "low")
+	definition["effects"] = [{"kind": "write", "resource": "kujo.docs.content"}]
+	assert_equal(ability_risk_hint(definition), "high")
+	definition["effects"] = [{"kind": "delete", "resource": "kujo.docs.content"}]
+	assert_equal(ability_risk_hint(definition), "critical")
+}
