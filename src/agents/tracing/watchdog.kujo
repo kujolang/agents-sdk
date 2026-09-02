@@ -134,6 +134,17 @@ func wd_usage(event) {
 	output_tokens := wd_get(usage, "output_tokens", wd_get(usage, "completion_tokens", null))
 	total_tokens := wd_get(usage, "total_tokens", null)
 	if type(input_tokens) == "null" && type(output_tokens) == "null" && type(total_tokens) == "null" { return null }
+	provider_source := wd_get(usage, "provider_usage", usage)
+	provider_usage := {}
+	provider_keys := ["prompt_tokens", "completion_tokens", "input_tokens", "output_tokens", "total_tokens", "cached_tokens", "cached_input_tokens", "cache_read_input_tokens", "cache_write_input_tokens", "cache_creation_input_tokens", "reasoning_tokens"]
+	if type(provider_source) == "dict" {
+		for key in provider_keys {
+			if has_key(provider_source, key) {
+				value := provider_source[key]
+				if type(value) == "int" || type(value) == "float" || type(value) == "bool" || type(value) == "string" || type(value) == "null" { provider_usage[key] := value }
+			}
+		}
+	}
 	return {
 		"input_tokens": input_tokens,
 		"output_tokens": output_tokens,
@@ -143,7 +154,7 @@ func wd_usage(event) {
 		"reasoning_tokens": wd_get(usage, "reasoning_tokens", null),
 		"usage_source": wd_text(wd_get(usage, "usage_source", "agents-sdk"), 80),
 		"total_semantics": wd_text(wd_get(usage, "total_semantics", "source_preserved"), 120),
-		"provider_usage": wd_get(usage, "provider_usage", usage)
+		"provider_usage": provider_usage
 	}
 }
 
