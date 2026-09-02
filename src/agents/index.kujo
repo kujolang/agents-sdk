@@ -9,6 +9,7 @@ from src.agents.memory.store import describe_memory_store_module
 from src.agents.retrieval.provider import describe_retrieval_provider_module
 from src.agents.handoffs.handoff import describe_handoff_module
 from src.agents.tracing.sink import describe_trace_sink_module
+from src.agents.tracing.watchdog import watchdog_telemetry_record, watchdog_telemetry_batch, watchdog_telemetry_batches_from_run_result, watchdog_trace_context, watchdog_deliver_batches
 from src.agents.artifacts.store import describe_artifact_store_module
 from src.agents.budgets.limits import describe_budget_limits_module
 from src.agents.streaming.events import describe_streaming_events_module
@@ -57,6 +58,11 @@ export describe_memory_store_module := describe_memory_store_module
 export describe_retrieval_provider_module := describe_retrieval_provider_module
 export describe_handoff_module := describe_handoff_module
 export describe_trace_sink_module := describe_trace_sink_module
+export watchdog_telemetry_record := watchdog_telemetry_record
+export watchdog_telemetry_batch := watchdog_telemetry_batch
+export watchdog_telemetry_batches_from_run_result := watchdog_telemetry_batches_from_run_result
+export watchdog_trace_context := watchdog_trace_context
+export watchdog_deliver_batches := watchdog_deliver_batches
 export describe_artifact_store_module := describe_artifact_store_module
 export describe_budget_limits_module := describe_budget_limits_module
 export describe_streaming_events_module := describe_streaming_events_module

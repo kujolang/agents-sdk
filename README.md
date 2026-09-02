@@ -298,6 +298,9 @@ Testing guidance: Use `create_mock_retrieval_provider` for integration tests so 
 - Dispatch hooks (`create_dispatch_integration_hooks`) for step execution and workflow-as-tool invocation
 - Dispatch agent conversion (`convert_agent_to_dispatch` and `validate_dispatch_agent_conversion`) for turning a validated Agents SDK config into Dispatch's built-in declarative `model` agent contract
 - Watchdog trace transformation adapters (`create_watchdog_trace_adapter`) for core-to-watchdog event mapping
+- Canonical Watchdog v2 lifecycle mapping, run-result batching, W3C context,
+  and fail-open delivery composition in `src/agents/tracing/watchdog.kujo`; see
+  `docs/WATCHDOG_TELEMETRY.md`.
 - Scout code-context providers (`create_scout_code_context_provider`) plus deterministic retrieval-enrichment mapping (`map_scout_context_to_retrieval_enrichment`) so Scout intelligence can feed retrieval/context flows without introducing a hard core dependency
 
 Hosted/commercial product capabilities must remain outside core runtime modules and integrate through adapters documented in `docs/INTEGRATION_BOUNDARIES.md`.
