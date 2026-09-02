@@ -1,0 +1,40 @@
+test_setup {
+	from src.agents.tracing.watchdog import watchdog_telemetry_record, watchdog_telemetry_batch
+}
+
+test "Watchdog adapter emits metadata-only canonical records" {
+	event := {
+		"trace_id": "trace-source-1", "run_id": "run-1", "session_id": "session-1", "agent_id": "agent-1", "step_id": "step-1",
+		"event_kind": "tool_call_completed", "timestamp": "2026-09-01 12:00:00", "sequence": 4,
+		"payload": {"tool_name": "search", "status": "ok", "tool_input": "must-not-leak", "tool_output": "must-not-leak"}
+	}
+	result := watchdog_telemetry_record(event)
+	assert_equal(result["ok"], true)
+	record := result["record"]
+	assert_equal(record["record_type"], "event")
+	assert_equal(len(record["trace_id"]), 32)
+	assert_equal(record["observed_at"], "2026-09-01T12:00:00Z")
+	assert_equal(record["attributes"]["agents_sdk.tool_name"], "search")
+	assert_equal(has_key(record["attributes"], "agents_sdk.tool_input"), 0)
+	assert_equal(record["privacy"]["content_mode"], "off")
+	assert_equal(len(record["content"]), 0)
+}
+
+test "Watchdog adapter creates a bounded v2 batch" {
+	events := [{"trace_id": "trace-2", "run_id": "run-2", "event_kind": "run_started", "timestamp": "2026-09-01T12:00:00Z", "sequence": 1, "payload": {}}]
+	result := watchdog_telemetry_batch(events, "batch-2", "0.1.0")
+	assert_equal(result["ok"], true)
+	assert_equal(result["batch"]["schema_version"], "watchdog.telemetry.v2")
+	assert_equal(result["batch"]["producer"]["name"], "kujo-agents-sdk")
+	assert_equal(len(result["batch"]["records"]), 1)
+}
+
+test "Watchdog adapter rejects uncorrelated and oversized input" {
+	missing := watchdog_telemetry_record({"event_kind": "run_started"})
+	assert_equal(missing["ok"], false)
+	too_many := []
+	index := 0
+	while index < 101 { too_many = push(too_many, {"run_id": "run", "event_kind": "run_started"}); index = index + 1 }
+	bounded := watchdog_telemetry_batch(too_many, "batch", "0.1.0")
+	assert_equal(bounded["ok"], false)
+}

@@ -1,0 +1,108 @@
+# Metadata-only Watchdog v2 adapter for Agents SDK lifecycle events.
+# Delivery, credentials, retries, and retention remain host responsibilities.
+
+func wd_get(value, key, fallback_value) {
+	if type(value) == "dict" && has_key(value, key) { return value[key] }
+	return fallback_value
+}
+
+func wd_text(value, max_len) {
+	if type(value) == "null" { return "" }
+	text := trim(to_string(value))
+	if len(text) <= max_len { return text }
+	return substring(text, 0, max_len)
+}
+
+func wd_timestamp(value) {
+	text := wd_text(value, 80)
+	if text == "" { return "1970-01-01T00:00:00Z" }
+	if contains(text, "T") == 0 { text = replace(text, " ", "T") }
+	if ends_with(text, "Z") == false && contains(substring(text, 10, len(text)), "+") == 0 { text = text + "Z" }
+	return text
+}
+
+func wd_id(value, length) {
+	return substring(sha256("agents-sdk:" + wd_text(value, 512)), 0, length)
+}
+
+func wd_reference(ref_type, ref_id) {
+	return {"type": ref_type, "id": wd_text(ref_id, 160), "namespace": "kujo-agents-sdk", "relation": "groups"}
+}
+
+func wd_references(event) {
+	references := []
+	session_id := wd_text(wd_get(event, "session_id", ""), 160)
+	run_id := wd_text(wd_get(event, "run_id", ""), 160)
+	agent_id := wd_text(wd_get(event, "agent_id", ""), 160)
+	step_id := wd_text(wd_get(event, "step_id", ""), 160)
+	if session_id != "" { references = push(references, wd_reference("session", session_id)) }
+	if run_id != "" { references = push(references, wd_reference("run", run_id)) }
+	if agent_id != "" { references = push(references, wd_reference("agent", agent_id)) }
+	if step_id != "" { references = push(references, wd_reference("task", step_id)) }
+	return references
+}
+
+func wd_scalar_attributes(event) {
+	attributes := {"agents_sdk.event_kind": wd_text(wd_get(event, "event_kind", wd_get(event, "kind", "unknown")), 80), "agents_sdk.sequence": wd_get(event, "sequence", 0)}
+	payload := wd_get(event, "payload", {})
+	allowlist := ["model", "provider", "tool_name", "tool_call_id", "status", "reason", "attempt", "handoff_target", "artifact_type"]
+	if type(payload) == "dict" {
+		for key in allowlist {
+			if has_key(payload, key) {
+				value := payload[key]
+				if type(value) == "string" || type(value) == "int" || type(value) == "float" || type(value) == "bool" || type(value) == "null" { attributes["agents_sdk." + key] = value }
+			}
+		}
+	}
+	return attributes
+}
+
+func watchdog_record_impl(event) {
+	if type(event) != "dict" { return {"ok": false, "error": "event must be an object", "record": null} }
+	trace_source := wd_text(wd_get(event, "trace_id", wd_get(event, "run_id", "")), 160)
+	if trace_source == "" { return {"ok": false, "error": "trace_id or run_id is required", "record": null} }
+	event_kind := wd_text(wd_get(event, "event_kind", wd_get(event, "kind", "unknown")), 80)
+	event_id := wd_text(wd_get(event, "event_id", trace_source + ":" + event_kind + ":" + to_string(wd_get(event, "sequence", 0))), 160)
+	record := {
+		"record_id": "agents-sdk:event:" + event_id,
+		"record_type": "event",
+		"trace_id": wd_id(trace_source, 32),
+		"span_id": null,
+		"parent_span_id": null,
+		"observed_at": wd_timestamp(wd_get(event, "timestamp", "")),
+		"started_at": null,
+		"ended_at": null,
+		"kind": null,
+		"name": event_kind,
+		"status": "unset",
+		"source": {"producer": "kujo-agents-sdk", "adapter_id": "kujo-agents-sdk.native", "adapter_version": "watchdog.ingestion-adapter.v1", "original_schema": "agents-sdk.TraceEvent"},
+		"references": wd_references(event),
+		"attributes": wd_scalar_attributes(event),
+		"usage": null,
+		"costs": [],
+		"error": null,
+		"content": [],
+		"privacy": {"content_mode": "off", "policy_version": "watchdog.privacy.v1", "transformations": []}
+	}
+	return {"ok": true, "error": "", "record": record}
+}
+
+func watchdog_batch_impl(events, batch_id, producer_version) {
+	if type(events) != "array" || len(events) == 0 || len(events) > 100 { return {"ok": false, "error": "events must contain 1-100 items", "batch": null} }
+	records := []
+	for event in events {
+		mapped := watchdog_record_impl(event)
+		if mapped["ok"] == false { return {"ok": false, "error": mapped["error"], "batch": null} }
+		records = push(records, mapped["record"])
+	}
+	return {"ok": true, "error": "", "batch": {
+		"schema_version": "watchdog.telemetry.v2",
+		"batch_id": wd_text(batch_id, 160),
+		"sent_at": records[len(records) - 1]["observed_at"],
+		"producer": {"name": "kujo-agents-sdk", "version": wd_text(producer_version, 40), "adapter_id": "kujo-agents-sdk.native", "adapter_version": "watchdog.ingestion-adapter.v1", "original_schema": "agents-sdk.TraceEvent"},
+		"records": records
+	}}
+}
+
+export watchdog_telemetry_record := watchdog_record_impl
+export watchdog_telemetry_batch := watchdog_batch_impl
