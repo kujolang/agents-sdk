@@ -28,10 +28,10 @@ Expected output:
 {"approval_agent":{"ok":true,"requires_network":false,"status":"failed"},"artifact_agent":{"ok":true,"requires_network":false,"status":"completed"},"handoff_agent":{"ok":true,"requires_network":false,"status":"completed"},"hello_agent":{"ok":true,"requires_network":false,"status":"completed"},"retrieval_agent":{"ok":true,"requires_network":false,"status":"completed"},"tool_agent":{"ok":true,"requires_network":false,"status":"completed"},"traced_agent":{"ok":true,"requires_network":false,"status":"completed"}}
 ```
 
-2. Run the full offline test suite:
+2. Run all offline contracts and fixture checks (with the pinned dependencies installed):
 
 ```bash
-kujo test
+bash scripts/ci_no_network_enforcement.sh
 ```
 
 Agent/contributor notes: see `AGENTS.md` for canonical example labels, fixture boundaries, and search hygiene.

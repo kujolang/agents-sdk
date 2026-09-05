@@ -44,3 +44,12 @@ jobs:
 
       - name: Verify offline examples and contracts
         run: bash scripts/ci_no_network_enforcement.sh
+
+      - name: Preserve offline verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offline-verification-logs
+          path: .tmp/offline-checks.*/*.log
+          include-hidden-files: true
+          retention-days: 7

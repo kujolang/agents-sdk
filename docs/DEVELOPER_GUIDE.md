@@ -4,14 +4,14 @@
 
 1. Export a pinned Agents SDK runtime binary.
 2. Run the offline example smoke check.
-3. Run offline tests.
+3. Run the complete offline verification command.
 
 Commands:
 
 ```bash
 export KUJO_BIN=kujo
 "$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
-"$KUJO_BIN" test
+bash scripts/ci_no_network_enforcement.sh
 ```
 
 Expected example-smoke output:
@@ -171,10 +171,25 @@ runner := create_agent_runner({"ai_adapter": harness["model_adapter"]})
 
 ## Validate Locally
 
+Use Kujo 1.2.2 (the CI pin) and install the exact Ability dependency from
+`kennel.lock` before validating. An older runtime may fail to resolve the
+`ability` package even when its installed directory exists.
+
+`bash scripts/ci_no_network_enforcement.sh` executes every `tests/*_tests.kujo`
+file with `test-run`, then checks fixture snapshots with `kujo test`. Snapshot
+execution alone does not execute test blocks. The script continues collecting
+failures, exits nonzero if any check fails, and prints a short receipt with the
+private local log directory under `.tmp/`. CI uploads those logs for seven days.
+
+Contract execution uses `--untrusted` with only filesystem read/write/delete
+and clock capabilities enabled. Network, AI, shell, and subprocess capabilities
+remain denied. Fixture execution uses Kujo's separate snapshot runner.
+
 ```bash
 "$KUJO_BIN" test-run tests/run_basic_runner_tests.kujo -v
 "$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
 "$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+bash scripts/ci_no_network_enforcement.sh
 ```
 
 ## Agent Search Hygiene
