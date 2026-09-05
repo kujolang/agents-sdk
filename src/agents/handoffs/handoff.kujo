@@ -69,24 +69,8 @@ func normalize_bool(value, fallback) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		source := normalize_dict(value)
-		cloned := {}
-		for key in keys(source) {
-			cloned[key] := clone_value(source[key])
-		}
-		return cloned
-	}
-
-	if type(value) == "array" {
-		cloned := []
-		for item in value {
-			cloned = push(cloned, clone_value(item))
-		}
-		return cloned
-	}
-
-	return value
+	// Collections already have value semantics; avoid recursive reconstruction.
+	return unwrap_dict(value)
 }
 
 func array_contains(values_input, expected_value) {

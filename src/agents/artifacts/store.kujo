@@ -72,6 +72,11 @@ func normalize_non_negative_int(value, fallback) {
 	return fallback
 }
 
+func normalize_content(value) {
+	if type(value) == "string" { return value }
+	return ""
+}
+
 func array_contains(values_input, expected) {
 	values := normalize_array(values_input)
 	for value in values {
@@ -83,24 +88,8 @@ func array_contains(values_input, expected) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		source := normalize_dict(value)
-		cloned := {}
-		for key in keys(source) {
-			cloned[key] := clone_value(source[key])
-		}
-		return cloned
-	}
-
-	if type(value) == "array" {
-		cloned := []
-		for item in value {
-			cloned = push(cloned, clone_value(item))
-		}
-		return cloned
-	}
-
-	return value
+	// Collections already have value semantics; avoid recursive reconstruction.
+	return unwrap_dict(value)
 }
 
 func merge_dicts(base_input, patch_input) {
@@ -163,6 +152,9 @@ func resolve_file_artifact_path(metadata_input, artifact_id_input) {
 			}
 		}
 	}
+	if contains_traversal_segment(file_extension) || index_of(file_extension, "/") >= 0 {
+		return {"ok": false, "error": {"kind": "invalid_path", "message": "Artifact file extension must be a safe suffix.", "details": {"field": "file_extension"}}}
+	}
 
 	return {
 		"ok": true,
@@ -220,7 +212,7 @@ func estimated_artifact_bytes(content_input, explicit_bytes_input) {
 		return explicit_bytes
 	}
 
-	content := normalize_string(content_input, "")
+	content := normalize_content(content_input)
 	if content == "" {
 		return 0
 	}
@@ -234,7 +226,7 @@ func create_artifact_impl(options) {
 		"fallback": "artifact-default"
 	})
 
-	content := normalize_string(dict_get_or(options_map, "content", ""), "")
+	content := normalize_content(dict_get_or(options_map, "content", ""))
 
 	return {
 		"type": "Artifact",
@@ -323,6 +315,11 @@ func artifact_store_create_impl(store_input, artifact_input) {
 
 	max_artifact_bytes := normalize_non_negative_int(dict_get_or(store_metadata, "max_artifact_bytes", 0), 0)
 	artifact_bytes := normalize_non_negative_int(dict_get_or(artifact, "bytes", 0), 0)
+	if max_artifact_bytes > 0 {
+		// The declared estimate must not undercount the content being persisted.
+		content_bytes := len(decode_base64(encode_base64(artifact["content"])))
+		if content_bytes > artifact_bytes { artifact_bytes = content_bytes }
+	}
 	if max_artifact_bytes > 0 && artifact_bytes > max_artifact_bytes {
 		return {
 			"ok": false,
@@ -365,7 +362,7 @@ func artifact_store_list_impl(store_input, options) {
 
 func to_artifact_record(value_input) {
 	value := normalize_dict(value_input)
-	content := normalize_string(dict_get_or(value, "content", ""), "")
+	content := normalize_content(dict_get_or(value, "content", ""))
 
 	return {
 		"type": "Artifact",
@@ -630,13 +627,10 @@ func file_store_create_artifact_fn_impl(store_map, artifact_input) {
 	}
 
 	file_path := normalize_string(dict_get_or(path_result, "file_path", ""), "")
-	content := normalize_string(dict_get_or(artifact, "content", ""), "")
+	content := normalize_content(dict_get_or(artifact, "content", ""))
 
 	try {
-		if file_exists(file_path) {
-			rename_file(file_path, file_path + ".bak." + to_string(current_timestamp()))
-		}
-		write_file(file_path, content)
+		write_file_atomic(file_path, content, true)
 	} except err {
 		return {
 			"ok": false,
@@ -661,7 +655,7 @@ func file_store_create_artifact_fn_impl(store_map, artifact_input) {
 	}
 
 	artifact["artifact_id"] := artifact_id
-	artifact["metadata"] := artifact_metadata
+	artifact["metadata"] := merge_dicts(dict_get_or(artifact, "metadata", {}), artifact_metadata)
 
 	index_store := file_store_index_map(store_map)
 	create_result := in_memory_create_artifact_fn_impl(index_store, artifact)
@@ -684,7 +678,7 @@ func file_store_get_artifact_fn_impl(store_map, artifact_id_input) {
 	if dict_get_or(get_result, "ok", false) {
 		artifact := to_artifact_record(dict_get_or(get_result, "artifact", {}))
 		file_path := normalize_string(dict_get_or(normalize_dict(dict_get_or(artifact, "metadata", {})), "file_path", ""), "")
-		if file_path != "" && file_exists(file_path) {
+		if file_path != "" {
 			try {
 				artifact["content"] = to_string(read_file(file_path))
 			} except err {

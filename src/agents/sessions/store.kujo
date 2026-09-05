@@ -83,24 +83,8 @@ func normalize_non_negative_int(value, fallback) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		source := normalize_dict(value)
-		cloned_dict := {}
-		for key in keys(source) {
-			cloned_dict[key] := clone_value(dict_get_or(source, key, null))
-		}
-		return cloned_dict
-	}
-
-	if type(value) == "array" {
-		cloned_array := []
-		for item in value {
-			cloned_array = push(cloned_array, clone_value(item))
-		}
-		return cloned_array
-	}
-
-	return value
+	// Collections already have value semantics; avoid recursive reconstruction.
+	return unwrap_dict(value)
 }
 
 func merge_dicts(base_input, patch_input) {
@@ -221,31 +205,31 @@ func create_session_state_impl(options) {
 }
 
 func create_session_impl(options) {
-	options_map := normalize_dict(options)
-	session_id := resolve_session_id_value(dict_get_or(options_map, "session_id", ""), {
+	session_options := normalize_dict(options)
+	session_id := resolve_session_id_value(dict_get_or(session_options, "session_id", ""), {
 		"fallback": "session-default"
 	})
 
 	state_map := create_session_state_impl(merge_dicts(
-		normalize_dict(dict_get_or(options_map, "state", {})),
+		normalize_dict(dict_get_or(session_options, "state", {})),
 		{
 			"session_id": session_id,
-			"messages": dict_get_or(options_map, "messages", dict_get_or(dict_get_or(options_map, "state", {}), "messages", [])),
-			"context": dict_get_or(options_map, "context", dict_get_or(dict_get_or(options_map, "state", {}), "context", {})),
-			"run_state": dict_get_or(options_map, "run_state", dict_get_or(dict_get_or(options_map, "state", {}), "run_state", {})),
-			"last_run_id": dict_get_or(options_map, "last_run_id", dict_get_or(dict_get_or(options_map, "state", {}), "last_run_id", "")),
-			"metadata": dict_get_or(dict_get_or(options_map, "state", {}), "metadata", {})
+			"messages": dict_get_or(session_options, "messages", dict_get_or(dict_get_or(session_options, "state", {}), "messages", [])),
+			"context": dict_get_or(session_options, "context", dict_get_or(dict_get_or(session_options, "state", {}), "context", {})),
+			"run_state": dict_get_or(session_options, "run_state", dict_get_or(dict_get_or(session_options, "state", {}), "run_state", {})),
+			"last_run_id": dict_get_or(session_options, "last_run_id", dict_get_or(dict_get_or(session_options, "state", {}), "last_run_id", "")),
+			"metadata": dict_get_or(dict_get_or(session_options, "state", {}), "metadata", {})
 		}
 	))
 
 	return {
 		"type": "Session",
 		"session_id": session_id,
-		"user_id": normalize_string(dict_get_or(options_map, "user_id", ""), ""),
-		"created_at": normalize_string(dict_get_or(options_map, "created_at", ""), ""),
-		"updated_at": normalize_string(dict_get_or(options_map, "updated_at", ""), ""),
+		"user_id": normalize_string(dict_get_or(session_options, "user_id", ""), ""),
+		"created_at": normalize_string(dict_get_or(session_options, "created_at", ""), ""),
+		"updated_at": normalize_string(dict_get_or(session_options, "updated_at", ""), ""),
 		"state": state_map,
-		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+		"metadata": clone_value(dict_get_or(session_options, "metadata", {}))
 	}
 }
 

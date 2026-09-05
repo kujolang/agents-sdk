@@ -134,22 +134,7 @@ func entry_matches_memory_query(entry_input, query_input) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		cloned_dict := {}
-		for key in keys(value) {
-			cloned_dict[key] := clone_value(value[key])
-		}
-		return cloned_dict
-	}
-
-	if type(value) == "array" {
-		cloned_array := []
-		for item in value {
-			cloned_array = push(cloned_array, clone_value(item))
-		}
-		return cloned_array
-	}
-
+	// Collections already have value semantics; avoid recursive reconstruction.
 	return value
 }
 

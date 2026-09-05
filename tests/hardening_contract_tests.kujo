@@ -1,0 +1,176 @@
+test_setup {
+	from src.agents.security.approval import create_approval_policy, evaluate_approval_policy, evaluate_guardrail_rule
+	from src.agents.tools.registry import execute_tool
+	from src.agents.artifacts.store import create_file_artifact_store, artifact_store_create, artifact_store_get
+	from src.agents.tracing.sink import create_jsonl_trace_sink, trace_sink_append, trace_sink_list
+	from src.agents.abilities.contract import ability_gateway_to_tool_contract
+	from src.agents.integrations.adapters import map_external_tool_to_registry_entry
+	from src.agents.tools.registry import create_tool
+	from src.agents.tools.registry import create_tool_registry, register_tool
+	from src.agents.core_types import create_agent, create_agent_run_request
+	from src.agents.ai.adapter import create_ai_sdk_adapter
+	from src.agents.runner import create_agent_runner, run_agent
+	from src.agents.artifacts.store import create_artifact
+	from src.agents.memory.store import create_memory_entry
+	from src.agents.sessions.store import create_session
+	from src.agents.retrieval.provider import create_retrieved_document
+	from src.agents.handoffs.handoff import create_handoff_target
+	from src.agents.budgets.limits import create_budget_usage
+}
+
+test "explicit invalid approval modes fail closed while omitted mode stays compatible" {
+	assert_equal(create_approval_policy({})["mode"], "always_allow")
+	for mode in ["always_denyy", "", 7, null] {
+		decision := evaluate_approval_policy({"mode": mode}, {"tool_name": "write"})
+		assert_equal(decision["outcome"], "deny")
+	}
+}
+
+test "failed approval resolution never authorizes a tool handler" {
+	called := {"count": 0}
+	result := execute_tool({
+		"id": "write", "name": "write", "permissions": ["write"],
+		"handler": func(input, context) { called["count"] = called["count"] + 1; return {"ok": true, "output": {}} }
+	}, {}, {}, {
+		"approval_policy": {"mode": "write_tool"},
+		"approval_provider": {"resolve_fn": func(provider, request) { return {"ok": false, "decision": {"status": "approved"}} }}
+	})
+	assert_equal(result["ok"], false)
+	assert_equal(result["status"], "approval_required")
+	assert_equal(called["count"], 0)
+}
+
+test "external tool risk survives registry normalization and high risk approval" {
+	entry := map_external_tool_to_registry_entry({"name": "remote-write", "risk_level": "high"}, {})
+	tool := create_tool(entry)["tool"]
+	assert_equal(tool["risk"], "high")
+	assert_equal(to_json(tool["metadata"]), to_json(entry["metadata"]))
+	result := execute_tool(tool, {}, {}, {"approval_policy": {"mode": "high_risk"}})
+	assert_equal(result["status"], "approval_required")
+}
+
+test "tool metadata cloning preserves nested dictionaries and sibling keys" {
+	metadata := {"a": {"nested": {"value": "original"}}, "z": "sibling", "list": [{"entry": 1}]}
+	tool := create_tool({"id": "nested", "name": "nested", "metadata": metadata})["tool"]
+	assert_equal(to_json(tool["metadata"]), to_json(metadata))
+	nested := tool["metadata"]["a"]["nested"]
+	nested["value"] = "changed"
+	assert_equal(nested["value"], "changed")
+	assert_equal(metadata["a"]["nested"]["value"], "original")
+}
+
+test "runtime contracts preserve nested metadata without recursive rebuilding" {
+	metadata := {"a": {"nested": {"value": "original"}}, "z": "sibling", "list": [{"entry": 1}]}
+	for constructor in [create_artifact, create_memory_entry, create_session, create_retrieved_document, create_handoff_target, create_budget_usage, create_approval_policy] {
+		contract := constructor({"metadata": metadata})
+		assert_equal(to_json(contract["metadata"]), to_json(metadata))
+		nested := contract["metadata"]["a"]["nested"]
+		nested["value"] = "changed"
+		assert_equal(metadata["a"]["nested"]["value"], "original")
+	}
+}
+
+test "unsupported guardrail matcher results block" {
+	result := evaluate_guardrail_rule({"matcher_fn": func(context, rule) { return null }}, {"stage": "before_model"})
+	assert_equal(result["action"], "block")
+}
+
+test "guardrail callbacks fail closed on malformed maps and exceptions" {
+	for invalid in [{}, {"matched": "false"}] {
+		result := evaluate_guardrail_rule({"matcher_fn": func(context, rule) { return invalid }}, {})
+		assert_equal(result["action"], "block")
+	}
+	result := evaluate_guardrail_rule({"matcher_fn": func(context, rule) { return {}["missing"] }}, {})
+	assert_equal(result["action"], "block")
+}
+
+test "approval callback exceptions block invocation with a structured result" {
+	result := execute_tool({"name": "write", "permissions": ["write"]}, {}, {}, {
+		"approval_policy": {"mode": "write_tool"},
+		"approval_provider": {"resolve_fn": func(provider, request) { return {}["missing"] }}
+	})
+	assert_equal(result["status"], "approval_required")
+}
+
+test "artifact byte limits cannot be bypassed by a caller supplied estimate" {
+	store := create_file_artifact_store({"max_artifact_bytes": 5})
+	result := artifact_store_create(store, {"artifact_id": "audit-size-bypass", "content": "123456", "bytes": 0})
+	assert_equal(result["ok"], false)
+	assert_equal(result["error"]["kind"], "budget_exceeded")
+}
+
+test "artifact byte limits count UTF-8 bytes" {
+	store := create_file_artifact_store({"max_artifact_bytes": 5})
+	content := parse_json("\"\\u00e9\\u00e9\\u00e9\"")
+	result := artifact_store_create(store, {"artifact_id": "audit-utf8-size", "content": content})
+	assert_equal(result["ok"], false)
+	assert_equal(result["error"]["kind"], "budget_exceeded")
+}
+
+test "gateway projection validates definitions before reading identity fields" {
+	result := ability_gateway_to_tool_contract({}, {"invoke": func(call, context) { return {} }}, {})
+	assert_equal(result["ok"], false)
+	assert_equal(has_key(result, "code"), 1)
+}
+
+test "file artifacts preserve exact content and caller metadata on replacement" {
+	id := "audit-artifact-" + to_string(current_timestamp())
+	store := create_file_artifact_store({"store_id": id, "root_path": "/tmp"})
+	first := artifact_store_create(store, {"artifact_id": id, "content": "first"})
+	assert_equal(first["ok"], true)
+	second := artifact_store_create(store, {"artifact_id": id, "content": "  second\n", "metadata": {"citation_id": "doc-1"}})
+	assert_equal(second["ok"], true)
+	assert_equal(second["created"], false)
+	assert_equal(second["artifact"]["metadata"]["citation_id"], "doc-1")
+	loaded := artifact_store_get(store, id)
+	assert_equal(loaded["artifact"]["content"], "  second\n")
+	delete_file(second["artifact"]["metadata"]["file_path"])
+	missing := artifact_store_get(store, id)
+	assert_equal(missing["ok"], false)
+	assert_equal(missing["error"]["kind"], "artifact_store_read_failed")
+}
+
+test "artifact file extensions cannot introduce path components" {
+	store := create_file_artifact_store({"file_extension": "/../../escape"})
+	result := artifact_store_create(store, {"artifact_id": "audit-extension", "content": "blocked"})
+	assert_equal(result["ok"], false)
+	assert_equal(result["error"]["kind"], "invalid_path")
+}
+
+test "JSONL corruption is reported with its line number" {
+	name := "audit-corrupt-" + to_string(current_timestamp()) + ".jsonl"
+	sink := create_jsonl_trace_sink({"root_path": "/tmp", "file_name": name})
+	assert_equal(trace_sink_append(sink, {"event_kind": "run_started"}, {})["ok"], true)
+	append_file("/tmp/" + name, "{invalid json}\n")
+	listed := trace_sink_list(sink, {"limit": 1})
+	delete_file("/tmp/" + name)
+	assert_equal(listed["ok"], false)
+	assert_equal(listed["error"]["details"]["line_number"], 2)
+}
+
+test "runner enforces tool call budgets before additional side effects" {
+	called := {"count": 0}
+	registry := register_tool(create_tool_registry({}), {"id": "count", "name": "count", "handler": func(input, context) {
+		called["count"] = called["count"] + 1
+		return {"ok": true, "output": {}}
+	}})["registry"]
+	runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+		return {"ok": true, "output_text": "done", "tool_calls": [{"name": "count", "input": {}}, {"name": "count", "input": {}}]}
+	}})})
+	result := run_agent(runner, create_agent({"id": "bounded", "name": "Bounded"}), create_agent_run_request("run", {}), {
+		"tool_registry": registry, "budget_policy": {"limits": {"max_tool_calls": 1}}
+	})
+	assert_equal(result["status"], "budget_exceeded")
+	assert_equal(result["metadata"]["budget"]["usage"]["counters"]["tool_calls"], 1)
+	checks := result["metadata"]["budget"]["checks"]
+	assert_equal(checks[len(checks) - 1]["stage"], "before_tool")
+}
+
+test "stream implementation errors are not relabeled as guardrail decisions" {
+	runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_stream_fn": func(client, messages, options, on_event) {
+		return {}["type"]
+	}})})
+	result := run_agent(runner, create_agent({"id": "stream", "name": "Stream"}), create_agent_run_request("run", {}), {"stream": true})
+	assert_equal(result["status"], "failed")
+	assert_equal(result["error"]["kind"], "model_error")
+}

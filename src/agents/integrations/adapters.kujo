@@ -47,18 +47,7 @@ func normalize_string(value, fallback) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		return value
-	}
-
-	if type(value) == "array" {
-		cloned := []
-		for item in value {
-			cloned = push(cloned, clone_value(item))
-		}
-		return cloned
-	}
-
+	// Collections already have value semantics; avoid recursive reconstruction.
 	return value
 }
 
@@ -360,6 +349,7 @@ func map_external_tool_to_registry_entry_impl(external_tool_input, options) {
 		"input_schema": input_schema,
 		"output_schema": output_schema,
 		"permissions": clone_value(dict_get_or(external_tool, "permissions", [])),
+		"risk": normalize_string(dict_get_or(external_tool, "risk", dict_get_or(external_tool, "risk_level", "medium")), "medium"),
 		"risk_level": normalize_string(dict_get_or(external_tool, "risk_level", "medium"), "medium"),
 		"timeout_ms": dict_get_or(external_tool, "timeout_ms", 0),
 		"metadata": {

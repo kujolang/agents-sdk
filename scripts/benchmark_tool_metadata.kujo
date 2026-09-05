@@ -1,0 +1,13 @@
+from src.agents.tools.registry import create_tool
+
+metadata := {}
+for i in range(32) { metadata["field-" + to_string(i)] := "value-" + to_string(i) }
+expected := to_json(metadata)
+iterations := 200
+valid := true
+started := current_timestamp()
+for i in range(iterations) {
+	created := create_tool({"id": "benchmark", "name": "benchmark", "metadata": metadata})
+	if created["ok"] == false || to_json(created["tool"]["metadata"]) != expected { valid = false }
+}
+print(to_json({"ok": valid, "iterations": iterations, "fields": len(keys(metadata)), "elapsed_ms": current_timestamp() - started, "metadata_sha256": sha256(expected)}))

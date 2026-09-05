@@ -44,23 +44,7 @@ func normalize_non_negative_int(value, fallback) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		source := normalize_dict(value)
-		cloned := {}
-		for key in keys(source) {
-			cloned[key] := clone_value(source[key])
-		}
-		return cloned
-	}
-
-	if type(value) == "array" {
-		cloned := []
-		for item in value {
-			cloned = push(cloned, clone_value(item))
-		}
-		return cloned
-	}
-
+	// Collections already have value semantics; avoid recursive reconstruction.
 	return value
 }
 

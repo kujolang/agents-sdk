@@ -208,24 +208,8 @@ func copy_dict(source_input) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		source := normalize_dict(value)
-		cloned := {}
-		for key in keys(source) {
-			cloned[key] := clone_value(source[key])
-		}
-		return cloned
-	}
-
-	if type(value) == "array" {
-		cloned := []
-		for item in value {
-			cloned = push(cloned, clone_value(item))
-		}
-		return cloned
-	}
-
-	return value
+	// Collections already have value semantics; avoid recursive reconstruction.
+	return unwrap_dict(value)
 }
 
 func append_lifecycle_result(results_input, stage_input, result_input) {
@@ -2365,6 +2349,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 			"context": context,
 			"retrieval": retrieval_state,
 			"model_result": model_result,
+			"stream": {"enabled": stream_enabled, "events": stream_events, "events_count": len(stream_events)},
 			"retry_counters": retry_counters,
 			"session_store": {
 				"restore": session_restore_result,
@@ -2493,6 +2478,17 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 					"checks": budget_checks
 				}
 			})
+		}
+
+		tool_call_stage = "check_tool_budget"
+		projected_tool_usage := increment_budget_usage(budget_usage, {"steps": 1, "tool_calls": 1})
+		tool_budget := evaluate_budget_limits(budget_policy, projected_tool_usage, {})
+		if budget_check_passed(tool_budget) == false {
+			budget_checks = append_budget_check_result(budget_checks, "before_tool", tool_budget)
+			events = push(events, create_agent_event("run_failed", {"error_kind": "budget_exceeded"}, {
+				"run_id": run_id, "agent_id": agent_id, "session_id": session_id, "runtime_services": runtime_services
+			}))
+			return create_budget_exceeded_result("before_tool", tool_budget, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks)
 		}
 
 		tool_call_stage = "create_tool_step"
@@ -3419,81 +3415,15 @@ func describe_runner_module_impl() {
 
 func run_agent_safe_impl(runner, agent, run_request_input, options) {
 	try {
-		result := run_agent_impl(runner, agent, run_request_input, options)
-		result_map := normalize_dict(result)
-		run_request := as_run_request(run_request_input)
-		options_map := normalize_dict(options)
-		agent_map := normalize_dict(agent)
-		stream_enabled := resolve_stream_enabled(options_map, run_request, agent_map)
-
-		if stream_enabled && normalize_string(dict_get_or(result_map, "status", ""), "") == "failed" {
-			error_payload := normalize_dict(dict_get_or(result_map, "error", {}))
-			error_kind := normalize_string(dict_get_or(error_payload, "kind", ""), "")
-			error_details := normalize_dict(dict_get_or(error_payload, "details", {}))
-			error_text := normalize_string(dict_get_or(error_details, "error", ""), "")
-
-			if error_kind == "model_error" && index_of(error_text, "Missing map key: \"type\"") >= 0 {
-				result_map["error"] := create_agent_error("guardrail_blocked", "Streaming run was blocked by guardrail event.", {
-					"details": {
-						"error": error_text,
-						"source": "run_agent_safe_impl"
-					}
-				})
-
-				metadata_map := normalize_dict(dict_get_or(result_map, "metadata", {}))
-				metadata_map["stream"] := {
-					"enabled": true,
-					"events": [
-						{
-							"type": "AgentStreamEvent",
-							"kind": "guardrail_blocked",
-							"payload": {
-								"reason": "run_agent_safe_impl_fallback"
-							}
-						}
-					],
-					"events_count": 1
-				}
-				result_map["metadata"] := metadata_map
-			}
-		}
-
-		return result_map
+		return normalize_dict(run_agent_impl(runner, agent, run_request_input, options))
 	} except err {
 		run_request := as_run_request(run_request_input)
-		options_map := normalize_dict(options)
-		agent_map := normalize_dict(agent)
-		error_text := to_string(err)
-		stream_enabled := resolve_stream_enabled(options_map, run_request, agent_map)
-
-		if stream_enabled && index_of(error_text, "Missing map key: \"type\"") >= 0 {
-			error_payload := create_agent_error("guardrail_blocked", "Streaming run was blocked by guardrail event.", {
-				"details": {
-					"error": error_text,
-					"source": "run_agent_safe_impl"
-				}
-			})
-			return create_runner_error_result("failed", error_payload, [], {
-				"stream": {
-					"enabled": true,
-					"events": [],
-					"events_count": 0
-				}
-			})
-		}
-
+		stream_enabled := resolve_stream_enabled(normalize_dict(options), run_request, normalize_dict(agent))
 		error_payload := create_agent_error("internal_error", "Runner execution raised an exception.", {
-			"details": {
-				"error": error_text,
-				"source": "run_agent_safe_impl"
-			}
+			"details": {"error": to_string(err), "source": "run_agent_safe_impl"}
 		})
 		return create_runner_error_result("failed", error_payload, [], {
-			"stream": {
-				"enabled": stream_enabled,
-				"events": [],
-				"events_count": 0
-			}
+			"stream": {"enabled": stream_enabled, "events": [], "events_count": 0}
 		})
 	}
 }

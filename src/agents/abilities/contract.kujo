@@ -135,6 +135,9 @@ export register_ability_tool := func(registry, definition, binding, exposure) {
 }
 
 export ability_gateway_to_tool_contract := func(definition, gateway_binding, exposure) {
+	validation := validate_ability_definition(definition)
+	if validation["ok"] == false { return validation }
+	definition = validation["definition"]
 	binding := gateway_binding
 	if type(binding) != "dict" { binding = {} }
 	invoke := dict_get_or(binding, "invoke", null)

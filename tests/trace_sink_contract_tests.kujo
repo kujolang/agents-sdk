@@ -231,6 +231,7 @@ test "jsonl trace sink appends parseable lines and applies redaction metadata" {
 			"input": "hello"
 		}
 	}, {})
+	assert_equal(first["ok"], true)
 	second := trace_sink_append(sink, {
 		"event_kind": "run_completed",
 		"run_id": "run-jsonl-1",
@@ -246,21 +247,17 @@ test "jsonl trace sink appends parseable lines and applies redaction metadata" {
 		}
 	})
 
-	if second["ok"] {
-		listed := trace_sink_list(sink, {
-			"run_id": "run-jsonl-1"
-		})
-		if listed["ok"] {
-			assert_equal(listed["count"] >= 1, true)
-			last_trace := listed["traces"][len(listed["traces"]) - 1]
-			assert_equal(last_trace["payload"]["secret"], "[REDACTED]")
-			assert_equal(last_trace["payload"]["message"], "abcde")
-			assert_equal(has_key(last_trace["metadata"], "redaction"), 1)
-			assert_equal(last_trace["metadata"]["redaction"]["transformed_field_count"], 2)
-		} else {
-			assert_equal(has_key(listed, "error"), 1)
-		}
-	} else {
-		assert_equal(has_key(second, "error"), 1)
-	}
+	assert_equal(second["ok"], true)
+	listed := trace_sink_list(sink, {"run_id": "run-jsonl-1"})
+	assert_equal(listed["ok"], true)
+	assert_equal(listed["count"], 2)
+	last_trace := listed["traces"][1]
+	assert_equal(last_trace["payload"]["secret"], "[REDACTED]")
+	assert_equal(last_trace["payload"]["message"], "abcde")
+	assert_equal(last_trace["metadata"]["redaction"]["transformed_field_count"], 2)
+	paged := trace_sink_list(sink, {"offset": 1, "limit": 1})
+	assert_equal(paged["count"], 2)
+	assert_equal(len(paged["traces"]), 1)
+	assert_equal(paged["traces"][0]["event_kind"], "run_completed")
+	delete_file("/tmp/" + file_name)
 }

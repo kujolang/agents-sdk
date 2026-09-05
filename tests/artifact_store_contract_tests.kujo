@@ -178,7 +178,7 @@ test "file artifact store persists content and exposes deterministic file refere
 
 	assert_equal(created["ok"], true)
 	assert_equal(created["artifact"]["metadata"]["store_kind"], "file")
-	assert_equal(contains(created["artifact"]["metadata"]["file_path"], "/tmp/report-002.txt") >= 0, true)
+	assert_equal(created["artifact"]["metadata"]["file_path"], "/tmp/report-002.txt")
 
 	loaded := artifact_store_get(store, "report-002")
 	assert_equal(loaded["ok"], true)

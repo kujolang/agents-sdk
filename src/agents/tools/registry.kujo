@@ -85,24 +85,9 @@ func normalize_bool(value, fallback) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		source := normalize_dict(value)
-		cloned_dict := {}
-		for key in keys(source) {
-			cloned_dict[key] := clone_value(source[key])
-		}
-		return cloned_dict
-	}
-
-	if type(value) == "array" {
-		cloned_array := []
-		for item in value {
-			cloned_array = push(cloned_array, clone_value(item))
-		}
-		return cloned_array
-	}
-
-	return value
+	// Kujo collections have value semantics; recursive rebuilding corrupts nested
+	// metadata on supported interpreters. Preserve callbacks and nested values.
+	return unwrap_dict(value)
 }
 
 func clone_array_shallow(value) {
@@ -644,7 +629,7 @@ func evaluate_tool_approval_gate(tool_input, context_input, options_input) {
 	provider_status := normalize_string(dict_get_or(provider_decision, "status", "pending"), "pending")
 	updated_provider := dict_get_or(provider_resolution, "provider", approval_provider)
 
-	if provider_status == "approved" {
+	if provider_status == "approved" && dict_get_or(provider_resolution, "ok", false) == true {
 		return {
 			"ok": true,
 			"status": "approved_by_provider",

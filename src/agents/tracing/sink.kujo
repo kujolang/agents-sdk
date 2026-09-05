@@ -87,11 +87,11 @@ func contains_traversal_segment(path_input) {
 		return false
 	}
 
-	if contains(path_value, "..") >= 0 {
+	if index_of(path_value, "..") >= 0 {
 		return true
 	}
 
-	if contains(path_value, "\\") >= 0 {
+	if index_of(path_value, "\\") >= 0 {
 		return true
 	}
 
@@ -117,7 +117,7 @@ func resolve_jsonl_trace_file_path(sink_input) {
 		}
 	}
 
-	if contains_traversal_segment(file_name) || contains(file_name, "/") >= 0 {
+	if contains_traversal_segment(file_name) || index_of(file_name, "/") >= 0 {
 		return {
 			"ok": false,
 			"error": {
@@ -238,24 +238,8 @@ func apply_trace_redaction_policy(trace_input, options_input) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		source := normalize_dict(value)
-		cloned := {}
-		for key in keys(source) {
-			cloned[key] := clone_value(source[key])
-		}
-		return cloned
-	}
-
-	if type(value) == "array" {
-		cloned := []
-		for item in value {
-			cloned = push(cloned, clone_value(item))
-		}
-		return cloned
-	}
-
-	return value
+	// Collections already have value semantics; avoid recursive reconstruction.
+	return unwrap_dict(value)
 }
 
 func array_contains(values_input, expected) {
@@ -625,11 +609,7 @@ func jsonl_append_trace_fn_impl(sink_input, trace_input, options) {
 	line_text := to_json(trace) + "\n"
 
 	try {
-		if file_exists(file_path) {
-			append_file(file_path, line_text)
-		} else {
-			write_file(file_path, line_text)
-		}
+		append_file(file_path, line_text)
 	} except err {
 		return {
 			"ok": false,
@@ -695,7 +675,10 @@ func jsonl_list_traces_fn_impl(sink_input, options_input) {
 	}
 
 	lines := split(raw_text, "\n")
-	filtered := []
+	items := []
+	matched_count := 0
+	offset := normalize_non_negative_int(dict_get_or(filter_map, "offset", 0), 0)
+	limit := normalize_non_negative_int(dict_get_or(filter_map, "limit", 0), 0)
 	index := 0
 	total_lines := len(lines)
 	while index < total_lines {
@@ -704,44 +687,30 @@ func jsonl_list_traces_fn_impl(sink_input, options_input) {
 			parsed := {}
 			parsed_ok := true
 			try {
-				parsed = normalize_dict(parse_json(line_text))
+				parsed = parse_json(line_text)
 			} except err {
 				parsed_ok = false
 			}
 
-			if parsed_ok {
-				trace := to_trace_record(parsed)
-				if matches_trace_filter(trace, filter_map) {
-					filtered = push(filtered, trace)
+			if parsed_ok == false || type(parsed) != "dict" {
+				return {"ok": false, "error": {"kind": "trace_sink_read_failed", "message": "Invalid JSONL trace record.", "details": {"file_path": file_path, "line_number": index + 1}}}
+			}
+			trace := to_trace_record(parsed)
+			if matches_trace_filter(trace, filter_map) {
+				if matched_count >= offset && (limit == 0 || len(items) < limit) {
+					items = push(items, trace)
 				}
+				matched_count = matched_count + 1
 			}
 		}
 		index = index + 1
 	}
 
-	offset := normalize_non_negative_int(dict_get_or(filter_map, "offset", 0), 0)
-	limit := normalize_non_negative_int(dict_get_or(filter_map, "limit", len(filtered)), len(filtered))
-	if limit <= 0 {
-		limit = len(filtered)
-	}
-
-	items := []
-	cursor := offset
-	max_items := offset + limit
-	if max_items > len(filtered) {
-		max_items = len(filtered)
-	}
-
-	while cursor < max_items {
-		items = push(items, filtered[cursor])
-		cursor = cursor + 1
-	}
-
 	return {
 		"ok": true,
 		"traces": items,
-		"count": len(filtered),
-		"total_count": len(filtered),
+		"count": matched_count,
+		"total_count": matched_count,
 		"file_path": file_path
 	}
 }

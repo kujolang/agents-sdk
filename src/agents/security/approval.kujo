@@ -82,22 +82,7 @@ func normalize_non_negative_int(value, fallback) {
 }
 
 func clone_value(value) {
-	if type(value) == "dict" {
-		cloned_dict := {}
-		for key in keys(value) {
-			cloned_dict[key] := clone_value(value[key])
-		}
-		return cloned_dict
-	}
-
-	if type(value) == "array" {
-		cloned_array := []
-		for item in value {
-			cloned_array = push(cloned_array, clone_value(item))
-		}
-		return cloned_array
-	}
-
+	// Collections already have value semantics; avoid recursive reconstruction.
 	return value
 }
 
@@ -174,11 +159,11 @@ func approval_policy_mode_values_impl() {
 }
 
 func normalize_approval_policy_mode(value) {
-	mode := normalize_string(value, "always_allow")
+	mode := normalize_string(value, "always_deny")
 	if array_contains(approval_policy_mode_values_impl(), mode) {
 		return mode
 	}
-	return "always_allow"
+	return "always_deny"
 }
 
 func approval_provider_kind_values_impl() {
@@ -349,7 +334,16 @@ func evaluate_guardrail_rule_impl(rule_input, context_input) {
 		})
 	}
 
-	match_result := matcher_fn(context, rule)
+	match_result := null
+	try {
+		match_result = matcher_fn(context, rule)
+	} except err {
+		return create_guardrail_result_impl("block", "Guardrail matcher raised an exception.", {
+			"rule_id": dict_get_or(rule, "rule_id", ""),
+			"rule_name": dict_get_or(rule, "name", ""),
+			"stage": context_stage
+		})
+	}
 
 	if type(match_result) == "bool" {
 		if match_result {
@@ -368,6 +362,12 @@ func evaluate_guardrail_rule_impl(rule_input, context_input) {
 	}
 
 	if type(match_result) == "dict" {
+		if type(dict_get_or(match_result, "matched", null)) != "bool" {
+			return create_guardrail_result_impl("block", "Guardrail matcher must return a boolean matched field.", {
+				"rule_id": dict_get_or(rule, "rule_id", ""),
+				"stage": context_stage
+			})
+		}
 		matched := normalize_bool(dict_get_or(match_result, "matched", false), false)
 		if matched == false {
 			return create_guardrail_result_impl("pass", normalize_string(dict_get_or(match_result, "reason", "Guardrail matcher passed."), "Guardrail matcher passed."), {
@@ -386,7 +386,7 @@ func evaluate_guardrail_rule_impl(rule_input, context_input) {
 		})
 	}
 
-	return create_guardrail_result_impl("pass", "Guardrail matcher returned an unsupported result type.", {
+	return create_guardrail_result_impl("block", "Guardrail matcher returned an unsupported result type.", {
 		"rule_id": dict_get_or(rule, "rule_id", ""),
 		"rule_name": dict_get_or(rule, "name", ""),
 		"stage": context_stage,
@@ -979,7 +979,19 @@ func resolve_approval_provider_decision_impl(provider_input, provider_request_in
 		}
 	}
 
-	result := resolve_fn(provider, provider_request)
+	result := null
+	try {
+		result = resolve_fn(provider, provider_request)
+	} except err {
+		return {
+			"ok": false,
+			"provider": provider,
+			"decision": create_approval_provider_decision_impl("pending", "Approval provider raised an exception.", {
+				"provider_kind": dict_get_or(provider, "kind", "manual_stub"),
+				"request_id": dict_get_or(provider_request, "request_id", "approval-request")
+			})
+		}
+	}
 	if type(result) != "dict" {
 		return {
 			"ok": false,
