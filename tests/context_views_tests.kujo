@@ -1,0 +1,31 @@
+test_setup {
+    from src.agents.context.views import context_scope_tools, context_tool_catalog, context_tool_schemas, context_repository_select, context_tool_output
+    from src.agents.context.manifest import context_store_value
+    from src.agents.tools.registry import create_tool_registry, register_tool
+    from src.agents.artifacts.store import create_in_memory_artifact_store
+}
+
+test "scoped registry preserves handlers and blocks unavailable capabilities" {
+    let registry := {"type": "ToolRegistry", "tools": [{"name": "write", "permissions": ["write"], "input_schema": {}, "handler": func(input) { return input }}, {"name": "read", "permissions": ["read"], "input_schema": {"type": "object"}, "description": "Read source"}], "metadata": {}}
+    assert_equal(context_scope_tools(registry, ["write"], ["read"])["error"]["code"], "tool_capability_denied")
+    let scoped := context_scope_tools(registry, ["read"], ["read"])
+    assert_equal(len(scoped["registry"]["tools"]), 1)
+    let catalog := context_tool_catalog(scoped["registry"])
+    let id := catalog["entries"][0]["schema_id"]
+    assert_equal(has_key(catalog["entries"][0], "input_schema"), 0)
+    assert_equal(context_tool_schemas(scoped["registry"], [id])["schemas"][0]["input_schema"], {"type": "object"})
+    assert_equal(context_tool_schemas(scoped["registry"], ["forged"])["error"]["code"], "schema_not_found_or_stale")
+}
+
+test "structural selection keeps exact source and reverse dependencies" {
+    let store := create_in_memory_artifact_store({})
+    let reference := context_store_value(store, {"source": "exact"}, {})["reference"]
+    let index := {"serialization_version": "kujo.repository-index/v1", "revision": "rev", "files": {"main": {"symbols": ["main"], "imports": ["lib"], "reference": reference}, "lib": {"symbols": ["helper"], "reference": reference}, "unrelated": {"reference": reference}}}
+    let selected := context_repository_select(index, "rev", ["lib"], [], store)
+    assert_equal(selected["ok"], true)
+    assert_equal(len(selected["selected"]), 2)
+    assert_equal(selected["selected"][0]["path"], "lib")
+    assert_equal(context_repository_select(index, "new", ["lib"], [], store)["error"]["code"], "stale_source")
+    assert_equal(context_repository_select(index, "rev", ["missing"], [], store)["error"]["code"], "missing_repository_source")
+    assert_equal(context_tool_output(store, {"full": "evidence"}, "completed")["summary"], "completed")
+}

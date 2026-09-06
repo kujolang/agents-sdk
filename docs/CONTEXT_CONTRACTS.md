@@ -72,3 +72,23 @@ current failure, retry count, remaining steps and next action. It never silently
 reuses stale state. A caller must reload/replan on `stale_source` or
 `stale_context`. Existing unversioned session state remains readable through
 the original SessionStore API; it cannot impersonate verified compact state.
+
+## Scoped tools and repository sources
+
+`context_scope_tools` returns a deterministic registry containing only explicitly
+selected names whose declared permissions fit the caller's capability ceiling.
+It preserves handlers and approval metadata. `context_tool_catalog` exposes
+bounded summaries and stable content-derived schema IDs. `context_tool_schemas`
+expands those IDs, rejecting stale or unknown schemas. Full schemas remain the
+fallback for providers requiring them. Registry scoping complements existing
+runtime/approval gates; it cannot constrain arbitrary effects inside trusted
+handlers beyond Kujo's own capabilities.
+
+`context_tool_output` returns a bounded caller-sanitized summary plus a verified
+reference to full output. No automatic lossy summarizer is used.
+`context_repository_select` consumes a `kujo.repository-index/v1` adapter view
+of existing structural outputs: revision plus files keyed by path with symbols,
+imports, dependencies and artifact references. It follows forward and reverse
+dependencies to a bounded fixed point and validates exact source references.
+Paths are data, never shell commands. This module does not replace Scout's
+index or create a semantic/vector index; producers supply the structural view.

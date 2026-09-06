@@ -1,0 +1,100 @@
+from src.agents.context.ledger import context_get, context_hash, context_json
+from src.agents.context.manifest import context_error, context_fetch, context_store_value
+
+export func context_scope_tools(registry, selected_names, capabilities) {
+    if type(selected_names) != "array" || type(capabilities) != "array" { return context_error("invalid_tool_scope") }
+    mut selected := []
+    mut names := []
+    for tool in context_get(registry, "tools", []) {
+        let name := context_get(tool, "name", "")
+        if contains(selected_names, name) {
+            if contains(names, name) { return context_error("duplicate_tool") }
+            for permission in context_get(tool, "permissions", []) {
+                if contains(capabilities, permission) == false { return context_error("tool_capability_denied") }
+            }
+            selected = push(selected, tool)
+            names = push(names, name)
+        }
+    }
+    for name in selected_names { if contains(names, name) == false { return context_error("tool_not_found") } }
+    mut ordered := []
+    for name in sort(names) {
+        for tool in selected { if tool["name"] == name { ordered = push(ordered, tool) } }
+    }
+    mut scoped := registry
+    scoped["tools"] = ordered
+    return {"ok": true, "registry": scoped}
+}
+
+func schema_view(tool) {
+    return {"name": tool["name"], "description": context_get(tool, "description", ""), "input_schema": context_get(tool, "input_schema", {}), "output_schema": context_get(tool, "output_schema", {}), "permissions": context_get(tool, "permissions", []), "risk": context_get(tool, "risk", "medium")}
+}
+
+export func context_tool_catalog(scoped_registry) {
+    mut entries := []
+    for tool in context_get(scoped_registry, "tools", []) {
+        let schema := schema_view(tool)
+        let hash := context_hash(schema)
+        entries = push(entries, {"name": tool["name"], "schema_id": "tool-" + hash, "schema_hash": hash, "permissions": schema["permissions"], "description": substring(schema["description"], 0, 160)})
+    }
+    return {"serialization_version": "kujo.tool-catalog/v1", "entries": entries}
+}
+
+export func context_tool_schemas(scoped_registry, schema_ids) {
+    if type(schema_ids) != "array" { return context_error("invalid_schema_selection") }
+    mut schemas := []
+    mut found := []
+    for tool in context_get(scoped_registry, "tools", []) {
+        let schema := schema_view(tool)
+        let id := "tool-" + context_hash(schema)
+        if contains(schema_ids, id) {
+            schemas = push(schemas, schema)
+            found = push(found, id)
+        }
+    }
+    for id in schema_ids { if contains(found, id) == false { return context_error("schema_not_found_or_stale") } }
+    return {"ok": true, "schemas": schemas}
+}
+
+export func context_tool_output(store, output, summary) {
+    if type(summary) != "string" || count_chars(summary) > 2048 { return context_error("invalid_summary") }
+    let saved := context_store_value(store, output, {"security_classification": "restricted"})
+    if saved["ok"] == false { return saved }
+    return {"ok": true, "serialization_version": "kujo.tool-output/v1", "summary": summary, "reference": saved["reference"]}
+}
+
+// Consume explicit structural indexes, never evaluate repository text or shell paths.
+export func context_repository_select(index, revision, changed_files, symbols, store) {
+    if context_get(index, "serialization_version", "") != "kujo.repository-index/v1" { return context_error("invalid_repository_index") }
+    if context_get(index, "revision", null) != revision { return context_error("stale_source") }
+    let files := context_get(index, "files", {})
+    if type(files) != "dict" || type(changed_files) != "array" || type(symbols) != "array" { return context_error("invalid_repository_query") }
+    mut wanted := changed_files
+    for path in sort(keys(files)) {
+        for symbol in context_get(files[path], "symbols", []) {
+            if contains(symbols, symbol) && contains(wanted, path) == false { wanted = push(wanted, path) }
+        }
+    }
+    // Bounded fixed point includes forward imports/dependencies and reverse dependents.
+    mut previous_count := -1
+    while previous_count != len(wanted) {
+        if len(wanted) > 512 { return context_error("repository_scope_too_large") }
+        previous_count = len(wanted)
+        for path in sort(keys(files)) {
+            let edges := concat(context_get(files[path], "imports", []), context_get(files[path], "dependencies", []))
+            for edge in edges {
+                if contains(wanted, path) && contains(wanted, edge) == false { wanted = push(wanted, edge) }
+                if contains(wanted, edge) && contains(wanted, path) == false { wanted = push(wanted, path) }
+            }
+        }
+    }
+    mut selected := []
+    for path in sort(wanted) {
+        if has_key(files, path) == 0 { return context_error("missing_repository_source") }
+        let reference := context_get(files[path], "reference", {})
+        let fetched := context_fetch(store, reference)
+        if fetched["ok"] == false { return fetched }
+        selected = push(selected, {"path": path, "reference": reference})
+    }
+    return {"ok": true, "revision": revision, "selected": selected}
+}
