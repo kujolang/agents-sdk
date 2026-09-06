@@ -1,0 +1,99 @@
+// Metadata-only observation. Never serialize raw credentials or model content to a sink.
+export func context_get(value, key, fallback) {
+    if type(value) == "dict" { if has_key(value, key) { return value[key] } }
+    return fallback
+}
+
+export func context_json(value) {
+    if is_secret(value) { throw "context_secret" }
+    if type(value) == "dict" {
+        mut fields := []
+        for key in sort(keys(value)) {
+            fields = push(fields, to_json(key) + ":" + context_json(value[key]))
+        }
+        return "{" + join(fields, ",") + "}"
+    }
+    if type(value) == "array" {
+        mut fields := []
+        for item in value { fields = push(fields, context_json(item)) }
+        return "[" + join(fields, ",") + "]"
+    }
+    if type(value) != "string" && type(value) != "int" && type(value) != "float" && type(value) != "bool" && value != null { throw "context_not_json" }
+    return to_json(value)
+}
+
+export func context_hash(value) { return sha256(context_json(value)) }
+
+export func context_component(content, metadata) {
+    let serialized := context_json(content)
+    let measured := context_get(metadata, "provider_tokens", null)
+    return {
+        "serialization_version": "kujo.context-component/v1",
+        "source": context_get(metadata, "source", "unspecified"),
+        "kind": context_get(metadata, "kind", "session_state"),
+        "load_step": context_get(metadata, "load_step", 0),
+        "load_reason": context_get(metadata, "load_reason", "model_request"),
+        "bytes": byte_length(serialized), "characters": count_chars(serialized),
+        "provider_tokens": measured, "estimated_tokens": ai_count_tokens(serialized),
+        "estimator": "kujo.weighted-characters/v1", "content_hash": sha256(serialized),
+        "cacheable": context_get(metadata, "cacheable", false),
+        "redaction_classification": context_get(metadata, "redaction_classification", "restricted"),
+        "parent_id": context_get(metadata, "parent_id", null),
+        "component_id": context_get(metadata, "component_id", "component"),
+        "retry_number": context_get(metadata, "retry_number", 0),
+        "provider": context_get(metadata, "provider", null), "model": context_get(metadata, "model", null)
+    }
+}
+
+func usage_number(usage, key, alternate) {
+    let value := context_get(usage, key, context_get(usage, alternate, null))
+    if type(value) == "int" { if value >= 0 { return value } }
+    return null
+}
+
+export func context_ledger(messages, schemas, response, options) {
+    let provider := context_get(response, "provider", null)
+    let model := context_get(response, "model", null)
+    let retry := context_get(options, "retry_number", 0)
+    mut components := []
+    mut index := 0
+    for message in messages {
+        let role := context_get(message, "role", "unknown")
+        mut kind := "session_state"
+        if role == "system" { kind = "base_instructions" }
+        if role == "user" { kind = "task_spec" }
+        if role == "tool" { kind = "tool_result" }
+        if role == "assistant" { kind = "assistant_output" }
+        let source := "messages/" + to_string(index)
+        let overrides := context_get(context_get(options, "attribution", {}), source, {})
+        components = push(components, context_component(message, {
+            "source": source, "kind": context_get(overrides, "kind", kind),
+            "load_reason": context_get(overrides, "load_reason", "model_request"),
+            "component_id": source, "parent_id": "request", "load_step": index,
+            "retry_number": retry, "provider": provider, "model": model
+        }))
+        index = index + 1
+    }
+    components = push(components, context_component(schemas, {"source": "tools", "kind": "tool_schemas", "component_id": "tools", "parent_id": "request", "retry_number": retry, "provider": provider, "model": model}))
+    components = push(components, context_component(context_get(response, "output_text", ""), {"source": "response", "kind": "assistant_output", "component_id": "output", "provider": provider, "model": model, "retry_number": retry}))
+    let usage := context_get(response, "usage", {})
+    // Fixture/estimated usage must never be promoted to provider billing.
+    let usage_source := context_get(usage, "usage_source", "unavailable")
+    mut measured := {"input_tokens": null, "output_tokens": null, "total_tokens": null}
+    if usage_source == "provider" {
+        measured = {"input_tokens": usage_number(usage, "input_tokens", "prompt_tokens"), "output_tokens": usage_number(usage, "output_tokens", "completion_tokens"), "total_tokens": usage_number(usage, "total_tokens", "total_tokens")}
+    }
+    return {"serialization_version": "kujo.context-ledger/v1", "payload_hash": context_hash({"messages": messages, "tools": schemas}), "components": components, "provider_usage": measured, "usage_source": usage_source, "retry_number": retry, "provider": provider, "model": model, "accounting_scope": "adapter_messages_and_tools", "content_mode": "off"}
+}
+
+export func observe_context(adapter, messages, request_options, response) {
+    let observer := context_get(adapter, "context_observer", null)
+    if type(observer) != "function" { return false }
+    try {
+        mut observation := context_get(adapter, "context_observation", {})
+        observation["retry_number"] = context_get(request_options, "retry_attempt", 1) - 1
+        let receipt := context_ledger(messages, context_get(request_options, "tools", []), response, observation)
+        observer(receipt)
+        return true
+    } except err { return false }
+}

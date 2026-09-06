@@ -1,3 +1,4 @@
+from src.agents.context.ledger import observe_context
 from src.agents.errors import create_agent_error
 
 func dict_get_or(obj, key, default_value) {
@@ -170,6 +171,8 @@ func create_ai_sdk_adapter_impl(options) {
 	options_map := normalize_dict(options)
 	return {
 		"type": "AiSdkAdapter",
+		"context_observer": dict_get_or(options_map, "context_observer", null),
+		"context_observation": normalize_dict(dict_get_or(options_map, "context_observation", {})),
 		"adapter_name": normalize_string(dict_get_or(options_map, "adapter_name", "ai_sdk"), "ai_sdk"),
 		"client": dict_get_or(options_map, "client", null),
 		"chat_completion_fn": dict_get_or(options_map, "chat_completion_fn", null),
@@ -358,6 +361,7 @@ func call_chat_impl(adapter, messages, request_options) {
 		}
 	}
 
+	observe_context(adapter_map, messages, request_options, response)
 	return map_ai_response_impl(response, request_options)
 }
 
@@ -400,6 +404,7 @@ func call_chat_stream_impl(adapter, messages, request_options, on_event) {
 		}
 	}
 
+	observe_context(adapter_map, messages, request_options, response)
 	return map_ai_response_impl(response, request_options)
 }
 

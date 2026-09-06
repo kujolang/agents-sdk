@@ -1,0 +1,40 @@
+test_setup {
+    from src.agents.context.ledger import context_json, context_hash, context_component, context_ledger, observe_context
+    from src.agents.ai.adapter import create_ai_sdk_adapter, call_chat, call_chat_stream
+}
+
+test "canonical hashing preserves Unicode and ordering without content disclosure" {
+    assert_equal(context_hash({"b": 2, "a": "é"}), context_hash({"a": "é", "b": 2}))
+    let part := context_component("é", {})
+    assert_equal(part["bytes"], 4)
+    assert_equal(part["characters"], 3)
+    assert_equal(part["provider_tokens"], null)
+    assert_equal(has_key(part, "content"), 0)
+}
+
+test "observer keeps messages options results and stream callbacks unchanged" {
+    let messages := [{"role": "user", "content": "private-sentinel"}]
+    let response := {"ok": true, "output_text": "done", "provider": "fixture", "model": "local"}
+    let chat := func(client, actual, options) { assert_equal(actual, messages); assert_equal(options["temperature"], 0); return response }
+    let base := create_ai_sdk_adapter({"chat_completion_fn": chat})
+    let observed := create_ai_sdk_adapter({"chat_completion_fn": chat, "context_observer": func(receipt) {
+        assert_equal(contains(to_json(receipt), "private-sentinel"), 0)
+        assert_equal(receipt["provider_usage"]["input_tokens"], null)
+    }})
+    assert_equal(observe_context(observed, messages, {"temperature": 0}, response), true)
+    assert_equal(call_chat(base, messages, {"temperature": 0}), call_chat(observed, messages, {"temperature": 0}))
+    let broken := create_ai_sdk_adapter({"chat_completion_fn": chat, "context_observer": func(receipt) { throw "sink failure" }})
+    assert_equal(call_chat(base, messages, {"temperature": 0}), call_chat(broken, messages, {"temperature": 0}))
+    let stream := create_ai_sdk_adapter({"chat_completion_stream_fn": func(client, actual, options, callback) { callback({"type": "delta", "text": "done"}); return response }, "context_observer": func(receipt) { assert_equal(receipt["content_mode"], "off") }})
+    assert_equal(call_chat_stream(stream, messages, {}, func(event) { assert_equal(event["text"], "done") })["ok"], true)
+}
+
+test "provider usage stays aggregate and fixture usage stays unmeasured" {
+    let messages := [{"role": "user", "content": "test"}]
+    let measured := context_ledger(messages, [], {"usage": {"usage_source": "provider", "input_tokens": 11, "output_tokens": 2, "total_tokens": 13}}, {"retry_number": 1})
+    assert_equal(measured["provider_usage"]["total_tokens"], 13)
+    assert_equal(measured["components"][0]["provider_tokens"], null)
+    assert_equal(measured["components"][0]["retry_number"], 1)
+    let fixture := context_ledger(messages, [], {"usage": {"input_tokens": 11}}, {})
+    assert_equal(fixture["provider_usage"]["input_tokens"], null)
+}

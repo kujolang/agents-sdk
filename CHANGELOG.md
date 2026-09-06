@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — context accounting
+
+- Add opt-in metadata-only context cost observation at the AI adapter boundary; provider usage remains distinct from heuristic estimates.
+
 ## Unreleased
 
 - Pin the production-stable Ability 1.0.1 contract and runtime package.

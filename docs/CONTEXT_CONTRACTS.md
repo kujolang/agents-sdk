@@ -1,0 +1,37 @@
+# Context contracts
+
+These additive, opt-in APIs live in `src/agents/context/`. Existing model
+messages, provider options, event shapes, approval gates, and ArtifactStore
+ownership remain the defaults. They require Kujo 1.3.1 for exact UTF-8 byte
+counts. No language syntax changes are involved.
+
+## Observe-only ledger
+
+Pass `context_observer: func(receipt) { ... }` to `create_ai_sdk_adapter`.
+Both chat and stream adapters deliver metadata-only `kujo.context-ledger/v1`
+receipts after the callback returns. Disable the observer to roll back.
+Sink failures are contained and do not change model results. No content is
+written automatically. The sink owns persistence and its existing capability
+and redaction policy. Secret-typed content rejects observation; it is never
+revealed. Treat hashes of sensitive content as restricted metadata too.
+
+The hash covers canonical adapter messages and tool schemas, **not the final
+provider wire encoding**. Component bytes and characters count canonical JSON,
+including quotes/escaping; estimates use `ai_count_tokens`, not a tokenizer.
+Each message, tool schema collection, and assistant output has a hash, source,
+load step/reason, parent/component ID, retry number, classification, cacheability,
+provider/model, serialization version, measured-token slot, and estimate.
+`context_component` accepts explicit attribution for selected skills, loaded
+references, repository context, retrieved documents, handoffs, resume state,
+and retry duplication. Adapter attribution uses positional `messages/N` keys;
+callers must supply truthful kinds/reasons through `context_observation`.
+Absent attribution stays role-based; the observer never guesses hidden context.
+
+Provider usage is aggregate, retained only when `usage.usage_source` explicitly
+says `provider`. Missing/fixture usage is null, never zero or an estimated
+billing claim. Component estimates must not be summed and described as exact
+provider attribution. Provider serialization overhead, internal SDK retries,
+cache billing and latency need transport/provider evidence; the adapter ledger
+makes no such claim. Runner retry attempts are recorded from existing retry
+options without adding model payload fields.
+
