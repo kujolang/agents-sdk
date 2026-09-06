@@ -100,53 +100,53 @@ func direct_option_value(options_input, expected_key, default_value) {
 }
 
 func create_retrieval_query_impl(options) {
-	options_map := normalize_dict(options)
+	query_options_map := normalize_dict(options)
 
 	return {
 		"type": "RetrievalQuery",
-		"query_text": normalize_string(dict_get_or(options_map, "query_text", dict_get_or(options_map, "text", "")), ""),
-		"top_k": normalize_non_negative_int(dict_get_or(options_map, "top_k", 5), 5),
-		"scope": normalize_dict(dict_get_or(options_map, "scope", {})),
-		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+		"query_text": normalize_string(dict_get_or(query_options_map, "query_text", dict_get_or(query_options_map, "text", "")), ""),
+		"top_k": normalize_non_negative_int(dict_get_or(query_options_map, "top_k", 5), 5),
+		"scope": normalize_dict(dict_get_or(query_options_map, "scope", {})),
+		"metadata": clone_value(dict_get_or(query_options_map, "metadata", {}))
 	}
 }
 
 func create_retrieved_document_impl(options) {
-	options_map := normalize_dict(options)
+	document_options_map := normalize_dict(options)
 
 	return {
 		"type": "RetrievedDocument",
-		"document_id": normalize_string(dict_get_or(options_map, "document_id", "doc-default"), "doc-default"),
-		"title": normalize_string(dict_get_or(options_map, "title", ""), ""),
-		"content": normalize_string(dict_get_or(options_map, "content", ""), ""),
-		"score": dict_get_or(options_map, "score", 0),
-		"source": normalize_string(dict_get_or(options_map, "source", ""), ""),
-		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+		"document_id": normalize_string(dict_get_or(document_options_map, "document_id", "doc-default"), "doc-default"),
+		"title": normalize_string(dict_get_or(document_options_map, "title", ""), ""),
+		"content": normalize_string(dict_get_or(document_options_map, "content", ""), ""),
+		"score": dict_get_or(document_options_map, "score", 0),
+		"source": normalize_string(dict_get_or(document_options_map, "source", ""), ""),
+		"metadata": clone_value(dict_get_or(document_options_map, "metadata", {}))
 	}
 }
 
 func create_retrieval_citation_impl(options) {
-	options_map := normalize_dict(options)
+	citation_options_map := normalize_dict(options)
 
 	return {
 		"type": "RetrievalCitation",
-		"citation_id": normalize_string(dict_get_or(options_map, "citation_id", "citation-default"), "citation-default"),
-		"document_id": normalize_string(dict_get_or(options_map, "document_id", ""), ""),
-		"span": normalize_string(dict_get_or(options_map, "span", ""), ""),
-		"score": dict_get_or(options_map, "score", 0),
-		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+		"citation_id": normalize_string(dict_get_or(citation_options_map, "citation_id", "citation-default"), "citation-default"),
+		"document_id": normalize_string(dict_get_or(citation_options_map, "document_id", ""), ""),
+		"span": normalize_string(dict_get_or(citation_options_map, "span", ""), ""),
+		"score": dict_get_or(citation_options_map, "score", 0),
+		"metadata": clone_value(dict_get_or(citation_options_map, "metadata", {}))
 	}
 }
 
 func create_retrieved_context_impl(options) {
-	options_map := normalize_dict(options)
-	documents_input := normalize_array(direct_option_value(options_map, "documents", []))
+	context_options_map := normalize_dict(options)
+	documents_input := normalize_array(direct_option_value(context_options_map, "documents", []))
 	documents := []
 	for document in documents_input {
 		documents = push(documents, create_retrieved_document_impl(document))
 	}
 
-	citations_input := normalize_array(direct_option_value(options_map, "citations", []))
+	citations_input := normalize_array(direct_option_value(context_options_map, "citations", []))
 	citations := []
 	for citation in citations_input {
 		citations = push(citations, create_retrieval_citation_impl(citation))
@@ -154,44 +154,48 @@ func create_retrieved_context_impl(options) {
 
 	return {
 		"type": "RetrievedContext",
-		"context_id": normalize_string(direct_option_value(options_map, "context_id", "ctx-default"), "ctx-default"),
+		"context_id": normalize_string(direct_option_value(context_options_map, "context_id", "ctx-default"), "ctx-default"),
 		"documents": documents,
-		"summary": normalize_string(direct_option_value(options_map, "summary", ""), ""),
+		"summary": normalize_string(direct_option_value(context_options_map, "summary", ""), ""),
 		"citations": citations,
-		"metadata": clone_value(direct_option_value(options_map, "metadata", {}))
+		"metadata": clone_value(direct_option_value(context_options_map, "metadata", {}))
 	}
 }
 
 func create_retrieval_policy_impl(options) {
-	options_map := normalize_dict(options)
+	policy_options_map := normalize_dict(options)
 
 	return {
 		"type": "RetrievalPolicy",
-		"enabled": normalize_bool(dict_get_or(options_map, "enabled", true), true),
-		"max_documents": normalize_non_negative_int(dict_get_or(options_map, "max_documents", 5), 5),
-		"min_score": dict_get_or(options_map, "min_score", 0),
-		"include_citations": normalize_bool(dict_get_or(options_map, "include_citations", true), true),
-		"metadata": clone_value(dict_get_or(options_map, "metadata", {}))
+		"enabled": normalize_bool(dict_get_or(policy_options_map, "enabled", true), true),
+		"max_documents": normalize_non_negative_int(dict_get_or(policy_options_map, "max_documents", 5), 5),
+		"min_score": dict_get_or(policy_options_map, "min_score", 0),
+		"include_citations": normalize_bool(dict_get_or(policy_options_map, "include_citations", true), true),
+		"metadata": clone_value(dict_get_or(policy_options_map, "metadata", {}))
 	}
 }
 
 func create_retrieval_result_impl(options) {
-	options_map := normalize_dict(options)
-	query := create_retrieval_query_impl(direct_option_value(options_map, "query", {}))
-	context := create_retrieved_context_impl(direct_option_value(options_map, "context", {}))
+	result_options_map := normalize_dict(options)
+	query := create_retrieval_query_impl(direct_option_value(result_options_map, "query", {}))
+	context := create_retrieved_context_impl(direct_option_value(result_options_map, "context", {}))
 	documents := normalize_array(dict_get_or(context, "documents", []))
 	citations := normalize_array(dict_get_or(context, "citations", []))
 
-	return {
+	result := {
 		"type": "RetrievalResult",
-		"ok": normalize_bool(direct_option_value(options_map, "ok", true), true),
+		"ok": normalize_bool(direct_option_value(result_options_map, "ok", true), true),
 		"query": query,
 		"context": context,
 		"documents": clone_value(documents),
 		"citations": clone_value(citations),
-		"count": normalize_non_negative_int(direct_option_value(options_map, "count", len(documents)), len(documents)),
-		"metadata": clone_value(direct_option_value(options_map, "metadata", {}))
+		"count": normalize_non_negative_int(direct_option_value(result_options_map, "count", len(documents)), len(documents)),
+		"metadata": clone_value(direct_option_value(result_options_map, "metadata", {}))
 	}
+	if has_key(result_options_map, "error") {
+		result["error"] := direct_option_value(result_options_map, "error", null)
+	}
+	return result
 }
 
 func create_retrieval_provider_interface_impl(options) {
@@ -318,18 +322,25 @@ func retrieval_provider_retrieve_impl(provider_input, query_input, options) {
 	}
 
 	result_map := normalize_dict(result)
-	context_map := direct_option_value(result_map, "context", {
-		"documents": direct_option_value(result_map, "documents", []),
-		"citations": direct_option_value(result_map, "citations", [])
-	})
-
-	return create_retrieval_result_impl({
+	// Normalize legacy top-level fields from the original response. Empty results
+	// are valid; compatibility must never cause another provider invocation.
+	context_map := normalize_dict(direct_option_value(result_map, "context", {}))
+	for field in ["documents", "citations", "summary"] {
+		if has_key(context_map, field) == 0 && has_key(result_map, field) {
+			context_map[field] := direct_option_value(result_map, field, null)
+		}
+	}
+	result_options := {
 		"ok": direct_option_value(result_map, "ok", true),
 		"query": query,
 		"context": context_map,
-		"count": direct_option_value(result_map, "count", len(direct_option_value(context_map, "documents", []))),
+		"count": direct_option_value(result_map, "count", len(normalize_array(direct_option_value(context_map, "documents", [])))),
 		"metadata": direct_option_value(result_map, "metadata", {})
-	})
+	}
+	if has_key(result_map, "error") {
+		result_options["error"] := direct_option_value(result_map, "error", null)
+	}
+	return create_retrieval_result_impl(result_options)
 }
 
 func describe_retrieval_provider_module_impl() {

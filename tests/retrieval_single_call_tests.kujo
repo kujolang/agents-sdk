@@ -1,0 +1,65 @@
+test_setup {
+ from src.agents.retrieval.provider import create_retrieval_provider_interface, retrieval_provider_retrieve
+ from src.agents.core_types import create_agent, create_agent_run_request
+ from src.agents.runner import create_agent_runner, run_agent
+ from src.agents.ai.adapter import create_ai_sdk_adapter
+}
+
+test "provider normalization retains multiple documents citations summary and metadata" {
+ provider := create_retrieval_provider_interface({"retrieve_fn": func(p, q, o) {
+  return {"ok": true, "context": {"context_id": "ctx", "summary": "Shared warning", "metadata": {"context": "kept"}, "documents": [{"document_id": "one", "content": "Python example", "metadata": {"language": "python"}}, {"document_id": "two", "content": "Rust example"}], "citations": [{"citation_id": "cite-one", "document_id": "one", "span": "L4-L8"}, {"citation_id": "cite-two", "document_id": "two", "span": "L10-L14"}]}, "metadata": {"provider": "kept"}}
+ }})
+ result := retrieval_provider_retrieve(provider, {"query_text": "examples"}, {})
+ assert_equal(result["count"], 2)
+ assert_equal(result["documents"][0]["content"], "Python example")
+ assert_equal(result["documents"][1]["content"], "Rust example")
+ assert_equal(result["documents"][0]["metadata"]["language"], "python")
+ assert_equal(result["citations"][1]["span"], "L10-L14")
+ assert_equal(result["context"]["summary"], "Shared warning")
+ assert_equal(result["context"]["metadata"]["context"], "kept")
+ assert_equal(result["metadata"]["provider"], "kept")
+}
+
+test "legacy and wrapped responses normalize without losing fields or reviving explicit empties" {
+ for envelope in [
+  {"summary": "Legacy summary", "documents": [{"content": "Legacy example"}]},
+  {"_self": {"context": {}, "summary": "Legacy summary", "documents": {"_self": [{"content": "Legacy example"}]}}},
+  {"context": {"_self": {"summary": "Legacy summary", "documents": [{"content": "Legacy example"}]}}}
+ ] {
+  provider := create_retrieval_provider_interface({"metadata": {"response": envelope}, "retrieve_fn": func(p, q, o) { return p["metadata"]["response"] }})
+  result := retrieval_provider_retrieve(provider, {}, {})
+  assert_equal(result["documents"][0]["content"], "Legacy example")
+  assert_equal(result["context"]["summary"], "Legacy summary")
+ }
+ provider := create_retrieval_provider_interface({"retrieve_fn": func(p, q, o) { return {"context": {"documents": [], "summary": ""}, "documents": [{"content": "Must not revive"}], "summary": "Must not revive"} }})
+ result := retrieval_provider_retrieve(provider, {}, {})
+ assert_equal(result["documents"], [])
+ assert_equal(result["context"]["summary"], "")
+}
+
+test "runner invokes empty failing malformed and summary-only providers exactly once" {
+ for response in [{"ok": true, "context": {"documents": []}}, {"ok": false, "error": {"kind": "unavailable", "message": "Keep this error"}, "summary": "Must not inject"}, null, {"summary": "Shared summary only"}] {
+  receipt_path := "/tmp/retrieval-single-call-" + to_string(current_timestamp()) + ".txt"
+  if file_exists(receipt_path) { delete_file(receipt_path) }
+  provider := create_retrieval_provider_interface({"metadata": {"response": response, "receipt_path": receipt_path}, "retrieve_fn": func(p, q, o) {
+   append_file(p["metadata"]["receipt_path"], "call\n")
+   return p["metadata"]["response"]
+  }})
+  runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(c, messages, o) {
+   assert_equal(contains(to_json(messages), "Must not inject"), 0)
+   return {"ok": true, "status_code": 200, "output_text": "done"}
+  }})})
+  result := run_agent(runner, create_agent({"policy": {"retrieval": {"enabled": true}}}), create_agent_run_request("question", {}), {"retrieval_provider": provider})
+  receipt := read_file(receipt_path)
+  delete_file(receipt_path)
+  assert_equal(receipt, "call\n")
+  assert_equal(result["status"], "completed")
+  retrieval := result["metadata"]["retrieval"]
+  if response == null { assert_equal(retrieval["reason"], "provider_error") }
+  else if has_key(response, "error") {
+   assert_equal(retrieval["reason"], "provider_error")
+   assert_equal(retrieval["result"]["error"]["message"], "Keep this error")
+  } else if has_key(response, "summary") { assert_equal(retrieval["applied"], true) }
+  else { assert_equal(retrieval["reason"], "empty_context") }
+ }
+}

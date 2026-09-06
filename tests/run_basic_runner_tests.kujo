@@ -841,12 +841,12 @@ test "runner injects retrieval context into model messages when enabled" {
 	assert_equal(result["metadata"]["retrieval"]["reason"], "applied")
 	assert_equal(result["metadata"]["retrieval"]["result"]["count"] >= 1, true)
 	assert_equal(result["metadata"]["retrieval"]["citation_count"], 1)
-	assert_equal(result["metadata"]["retrieval"]["citations"][0]["citation_id"], "citation-doc-1")
+	assert_equal(result["metadata"]["retrieval"]["citations"][0]["citation_id"], "cite-rag-1")
 	assert_equal(result["metadata"]["retrieval"]["citations"][0]["document_id"], "doc-rag-1")
 	assert_equal(result["metadata"]["retrieval"]["citations"][0]["path"], "knowledge/rag-note.md")
 	run_completed_event := result["metadata"]["events"][len(result["metadata"]["events"]) - 1]
 	assert_equal(run_completed_event["payload"]["citation_count"], 1)
-	assert_equal(run_completed_event["payload"]["citations"][0]["citation_id"], "citation-doc-1")
+	assert_equal(run_completed_event["payload"]["citations"][0]["citation_id"], "cite-rag-1")
 	assert_equal(contains(result["metadata"]["retrieval"]["context_message"], "Retrieved context:") >= 0, true)
 }
 

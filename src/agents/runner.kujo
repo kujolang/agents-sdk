@@ -1426,45 +1426,6 @@ func maybe_inject_retrieval_context(messages_input, retrieval_provider, retrieva
 		"source": "runner.pre_model"
 	})
 	retrieval_result_map := normalize_dict(retrieval_result)
-	retrieval_context := normalize_dict(dict_get_or(retrieval_result_map, "context", {}))
-	retrieval_documents := normalize_array(dict_get_or(retrieval_context, "documents", []))
-
-	if len(retrieval_documents) == 0 {
-		retrieve_fn := dict_get_or(retrieval_provider, "retrieve_fn", null)
-		if type(retrieve_fn) == "function" {
-			// Compatibility fallback: preserve raw provider payload when wrapper normalization omits documents.
-			raw_result := retrieve_fn(retrieval_provider, {
-				"query_text": query_text,
-				"top_k": max_documents,
-				"scope": normalize_dict(dict_get_or(retrieval_config, "scope", {})),
-				"metadata": query_metadata
-			}, {
-				"source": "runner.pre_model.raw_fallback"
-			})
-			raw_result_map := normalize_dict(raw_result)
-			raw_context := normalize_dict(dict_get_or(raw_result_map, "context", {}))
-			raw_documents := normalize_array(dict_get_or(raw_context, "documents", dict_get_or(raw_result_map, "documents", [])))
-			raw_citations := normalize_array(dict_get_or(raw_context, "citations", dict_get_or(raw_result_map, "citations", [])))
-			raw_summary := normalize_string(dict_get_or(raw_context, "summary", dict_get_or(raw_result_map, "summary", "")), "")
-
-			if len(raw_documents) > 0 || raw_summary != "" {
-				retrieval_result_map = {
-					"ok": true,
-					"query": normalize_dict(dict_get_or(retrieval_result_map, "query", {})),
-					"context": {
-						"context_id": normalize_string(dict_get_or(raw_context, "context_id", "ctx-raw"), "ctx-raw"),
-						"summary": raw_summary,
-						"documents": raw_documents,
-						"citations": raw_citations
-					},
-					"documents": raw_documents,
-					"citations": raw_citations,
-					"count": normalize_non_negative_int(dict_get_or(raw_result_map, "count", len(raw_documents)), len(raw_documents)),
-					"metadata": normalize_dict(dict_get_or(retrieval_result_map, "metadata", {}))
-				}
-			}
-		}
-	}
 
 	if dict_get_or(retrieval_result_map, "ok", false) == false {
 		state := clone_value(default_state)

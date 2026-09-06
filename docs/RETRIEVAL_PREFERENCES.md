@@ -76,3 +76,15 @@ override, normalization, unknown identifiers, suppression, retrieval metadata,
 Dispatch hook payloads, supported MCP mapping, unsupported handlers, provider
 isolation, handoff, and absence. These are offline contract tests, not a claim
 that a third-party MCP server implements this extension.
+
+## Empty results and provider failures
+
+The runner calls the retrieval provider once per pre-model retrieval attempt.
+Empty matches remain empty, and provider failures retain their error payload.
+Legacy top-level documents, citations, and summaries are normalized from that
+same response; explicitly present context fields take precedence. Summary-only
+results are valid. Constructor option names stay distinct across nested calls
+to prevent the interpreter from replacing the outer result options.
+
+`tests/retrieval_single_call_tests.kujo` checks actual callback receipts and
+content preservation, including wrapped legacy envelopes and multiple documents.
