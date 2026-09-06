@@ -348,6 +348,7 @@ func call_chat_impl(adapter, messages, request_options) {
 	try {
 		response = chat_fn(client, messages, request_options_with_hooks)
 	} except err {
+        observe_context(adapter_map, messages, request_options, {"ok": false})
 		return {
 			"ok": false,
 			"error": create_agent_error("model_error", "chat_completion_fn raised an exception.", {
@@ -391,6 +392,7 @@ func call_chat_stream_impl(adapter, messages, request_options, on_event) {
 	try {
 		response = stream_fn(client, messages, request_options_with_hooks, event_handler)
 	} except err {
+        observe_context(adapter_map, messages, request_options, {"ok": false})
 		return {
 			"ok": false,
 			"error": create_agent_error("model_error", "chat_completion_stream_fn raised an exception.", {

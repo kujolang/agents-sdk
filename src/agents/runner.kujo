@@ -1,3 +1,8 @@
+from src.agents.context.dispatch import context_dispatch_receipts, context_verify_dispatch
+from src.agents.context.state import context_validate_handoff
+from src.agents.context.manifest import context_store_value
+from src.agents.context.ledger import context_json, context_evidence
+from src.agents.context.prepare import context_prepare_run, context_finish_run
 from src.agents.core_types import create_agent_run_request, create_agent_context, create_agent_message, resolve_retrieval_preferences
 from src.agents.core_types import create_agent_step, create_agent_run_result, validate_agent_config
 from src.agents.events import create_agent_event
@@ -1851,7 +1856,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 	artifacts := []
 	session_restore_result := restore_session_run_state(session_store, session_id)
 	restored_session_state := normalize_dict(dict_get_or(session_restore_result, "run_state", {}))
- 
+
 	if type(context) == "dict" {
 		context["session_restore"] := session_restore_result
 		context["restored_session_state"] := restored_session_state
@@ -2930,7 +2935,22 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 		events = push(events, handoff_started)
 		runtime_services = dict_get_or(handoff_started, "runtime_services", runtime_services)
 
-		handoff_run_request := create_agent_run_request(output_text, {
+		handoff_input := output_text
+        typed_handoff := dict_get_or(options_map, "context_handoff", null)
+        handoff_evidence_reference := null
+        if typed_handoff != null {
+            checked_handoff := context_validate_handoff(typed_handoff, dict_get_or(dict_get_or(options_map, "context", {}), "capabilities", []), artifact_store)
+            if dict_get_or(checked_handoff, "ok", false) == false {
+                return create_runner_error_result("failed", create_agent_error("handoff_failed", "Typed handoff validation failed.", {"details": dict_get_or(checked_handoff, "error", {})}), steps, {"events": events})
+            }
+            saved_handoff := context_store_value(artifact_store, context_evidence({"parent_output": output_text, "steps": steps}), {"security_classification": "restricted"})
+            if dict_get_or(saved_handoff, "ok", false) == false {
+                return create_runner_error_result("failed", create_agent_error("handoff_failed", "Handoff evidence persistence failed.", {"details": dict_get_or(saved_handoff, "error", {})}), steps, {"events": events})
+            }
+            handoff_evidence_reference = saved_handoff["reference"]
+            handoff_input = context_json({"handoff": typed_handoff, "parent_evidence": handoff_evidence_reference})
+        }
+        handoff_run_request := create_agent_run_request(handoff_input, {
 			"run_id": run_id + "-handoff-" + target_agent_id,
 			"session_id": session_id,
 			"metadata": {
@@ -2943,7 +2963,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 			}
 		})
 
-		target_result := run_agent_impl(runner_map, target_agent, handoff_run_request, {
+		child_options := {
 			"tool_registry": tool_registry,
 			"session_store": session_store,
 			"memory_store": memory_store,
@@ -2957,9 +2977,26 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 			"handoff_depth": next_handoff_depth,
 			"handoff_max_depth": handoff_max_depth,
 			"handoff_visited_targets": next_handoff_visited_targets
-		})
+        }
+        if typed_handoff != null {
+            child_context := {}
+            parent_context := normalize_dict(dict_get_or(options_map, "context", {}))
+            for key in keys(parent_context) {
+                if key != "state" && key != "resume" && key != "expected_dispatch" { child_context[key] := parent_context[key] }
+            }
+            child_context["capabilities"] := typed_handoff["allowed_capabilities"]
+            // Explicit selection is required; absent tool names exposes no tools.
+            child_context["tool_names"] := dict_get_or(child_context, "tool_names", [])
+            child_context["resume"] := false
+            child_options["context"] := child_context
+            child_options["approval_policy"] := tool_approval_policy
+            child_options["approval_provider"] := tool_approval_provider
+            child_options["cancellation_token"] := cancellation_token
+        }
+        target_result := run_agent_safe_impl(runner_map, target_agent, handoff_run_request, child_options)
 
-		target_status := normalize_string(dict_get_or(target_result, "status", "failed"), "failed")
+
+        target_status := normalize_string(dict_get_or(target_result, "status", "failed"), "failed")
 		handoff_result_status := "failed"
 		if target_status == "completed" {
 			handoff_result_status = "completed"
@@ -2975,8 +3012,19 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 				"target_run_id": normalize_string(dict_get_or(target_result, "run_id", ""), "")
 			}
 		})
+        if typed_handoff != null {
+            typed_metadata := normalize_dict(dict_get_or(handoff_result, "metadata", {}))
+            typed_metadata["parent_evidence"] := handoff_evidence_reference
+            child_evidence := context_store_value(artifact_store, context_evidence(target_result), {"security_classification": "restricted"})
+            if dict_get_or(child_evidence, "ok", false) == false {
+                return create_runner_error_result("failed", create_agent_error("handoff_failed", "Child evidence persistence failed.", {"details": dict_get_or(child_evidence, "error", {})}), steps, {"events": events})
+            }
+            typed_metadata["target_evidence"] := child_evidence["reference"]
+            typed_metadata["target_receipts"] := dict_get_or(dict_get_or(target_result, "metadata", {}), "context_dispatch_receipts", [])
+            handoff_result["metadata"] := typed_metadata
+        }
+        handoff_metadata = {
 
-		handoff_metadata = {
 			"requested": true,
 			"executed": true,
 			"request": handoff_request,
@@ -3393,7 +3441,24 @@ func describe_runner_module_impl() {
 
 func run_agent_safe_impl(runner, agent, run_request_input, options) {
 	try {
-		return normalize_dict(run_agent_impl(runner, agent, run_request_input, options))
+        prepared := context_prepare_run(runner, as_run_request(run_request_input), options)
+        if dict_get_or(prepared, "ok", false) == false {
+            return create_runner_error_result("failed", create_agent_error("invalid_request", "Context preparation failed.", {"details": dict_get_or(prepared, "error", {})}), [], {})
+        }
+        result := normalize_dict(run_agent_impl(runner, agent, prepared["request"], prepared["options"]))
+        if dict_get_or(options, "context", null) != null {
+            receipts := context_dispatch_receipts(result, agent, dict_get_or(prepared, "loaded_skills", []))
+            result_metadata := normalize_dict(dict_get_or(result, "metadata", {}))
+            result_metadata["context_dispatch_receipts"] := receipts
+            result_metadata["context_dispatch_verification"] := context_verify_dispatch(receipts, dict_get_or(dict_get_or(options, "context", {}), "expected_dispatch", []))
+            if dict_get_or(result_metadata["context_dispatch_verification"], "ok", false) == false {
+                result["status"] := "failed"
+                result["error"] := create_agent_error("invalid_request", "Required dispatch was not observed.", {"details": {"code": "dispatch_mismatch", "verification": result_metadata["context_dispatch_verification"]}})
+            }
+
+            result["metadata"] := result_metadata
+        }
+        return context_finish_run(runner, prepared["request"], prepared["options"], result)
 	} except err {
 		run_request := as_run_request(run_request_input)
 		stream_enabled := resolve_stream_enabled(normalize_dict(options), run_request, normalize_dict(agent))

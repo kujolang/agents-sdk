@@ -1,0 +1,75 @@
+test_setup {
+    from src.agents.core_types import create_agent, create_agent_run_request
+    from src.agents.ai.adapter import create_ai_sdk_adapter
+    from src.agents.runner import create_agent_runner, run_agent
+    from src.agents.artifacts.store import create_in_memory_artifact_store
+    from src.agents.sessions.store import create_in_memory_session_store
+    from src.agents.context.state import context_load_resume
+    from src.agents.context.manifest import context_fetch
+}
+
+test "typed child consumes references and preserves exact parent evidence" {
+    let store := create_in_memory_artifact_store({})
+    let chat := func(client, messages, options) {
+        if options["marker"] == "child" {
+            let envelope := parse_json(messages[len(messages) - 1]["content"])
+            assert_equal(envelope["handoff"]["objective"], "verify")
+            let evidence := context_fetch(store, envelope["parent_evidence"])
+            assert_equal(evidence["ok"], true)
+            assert_equal(parse_json(evidence["artifact"]["content"])["parent_output"], "private parent evidence")
+            return {"ok": true, "output_text": "verified", "provider": "fixture", "model": "local"}
+        }
+        return {"ok": true, "output_text": "private parent evidence", "provider": "fixture", "model": "local"}
+    }
+    let child := create_agent({"id": "child", "name": "Child", "instructions": "Verify", "model_policy": {"marker": "child"}})
+    let runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": chat}), "handoff_registry": {"child": child}})
+    let parent := create_agent({"id": "parent", "name": "Parent", "model_policy": {"marker": "parent"}})
+    let handoff := {"serialization_version": "kujo.handoff/v1", "task_id": "task", "objective": "verify", "constraints": [], "relevant_files": [], "required_evidence": [], "decisions": [], "unresolved_questions": [], "produced_artifacts": [], "test_commands": [], "result_hashes": [], "allowed_capabilities": [], "next_action": "verify"}
+    let result := run_agent(runner, parent, create_agent_run_request("task", {}), {"artifact_store": store, "context_handoff": handoff, "context": {"capabilities": []}})
+    assert_equal(result["status"], "completed")
+    assert_equal(result["output"]["text"], "verified")
+    assert_equal(result["metadata"]["handoff"]["executed"], true)
+}
+
+test "runner persists compact recovery state and fails before dispatch on stale source" {
+    let store := create_in_memory_artifact_store({})
+    let sessions := create_in_memory_session_store({})
+    let sources := {"main": sha256("source")}
+    let state := {"serialization_version": "kujo.resume/v1", "completed_steps": [], "decisions": [], "source_hashes": sources, "test_outcomes": [], "tool_results": [], "current_failure": "", "retry_count": 0, "remaining_steps": ["verify"], "next_action": "verify"}
+    let runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) { return {"ok": true, "output_text": "done"} }})})
+    let agent := create_agent({"id": "a", "name": "A"})
+    let request := create_agent_run_request("task", {"run_id": "first", "session_id": "resume"})
+    let result := run_agent(runner, agent, request, {"artifact_store": store, "session_store": sessions, "context": {"state": state, "current_source_hashes": sources}})
+    assert_equal(result["status"], "completed")
+    assert_equal(result["metadata"]["context_state_saved"], true)
+    assert_equal(context_load_resume(sessions, "resume", store, sources)["state"]["completed_steps"], ["first"])
+    let resumed := run_agent(runner, agent, request, {"artifact_store": store, "session_store": sessions, "context": {"resume": true, "current_source_hashes": sources}})
+    assert_equal(resumed["status"], "completed")
+    assert_equal(resumed["metadata"]["context_state_saved"], true)
+    let stale := run_agent(runner, agent, request, {"artifact_store": store, "session_store": sessions, "context": {"resume": true, "current_source_hashes": {"main": sha256("changed")}}})
+    assert_equal(stale["status"], "failed")
+    assert_equal(stale["error"]["details"]["code"], "stale_source")
+    assert_equal(len(stale["steps"]), 0)
+}
+
+test "runner dispatch verification fails when configured reviewer did not execute" {
+    let runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) { return {"ok": true, "output_text": "done"} }})})
+    let agent := create_agent({"id": "writer", "name": "Writer", "metadata": {"execution_role": "writer"}})
+    let request := create_agent_run_request("task", {})
+    let result := run_agent(runner, agent, request, {"context": {"expected_dispatch": [{"kind": "role", "component_id": "reviewer", "status": "model_request_completed"}]}})
+    assert_equal(result["status"], "failed")
+    assert_equal(result["error"]["details"]["code"], "dispatch_mismatch")
+    assert_equal(len(result["metadata"]["context_dispatch_receipts"]) > 0, true)
+}
+
+test "scoped runner denies an unselected tool before handler execution" {
+    let registry := {"type": "ToolRegistry", "tools": [{"id": "read", "name": "read", "permissions": ["read"], "input_schema": {}, "handler": func(input, context) { return {"ok": true, "output": "read"} }}, {"id": "write", "name": "write", "permissions": ["write"], "input_schema": {}, "handler": func(input, context) { throw("must never execute") }}], "metadata": {}}
+    let runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+        assert_equal(len(options["tools"]), 1)
+        assert_equal(options["tools"][0]["function"]["name"], "read")
+        return {"ok": true, "output_text": "attempt", "tool_calls": [{"name": "write", "input": {}}]}
+    }})})
+    let result := run_agent(runner, create_agent({"id": "scoped", "name": "Scoped"}), create_agent_run_request("task", {}), {"tool_registry": registry, "context": {"tool_names": ["read"], "capabilities": ["read"]}})
+    assert_equal(result["status"], "failed")
+    assert_equal(result["error"]["kind"], "tool_not_found")
+}

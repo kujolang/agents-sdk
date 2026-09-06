@@ -22,6 +22,8 @@ export func context_scope_tools(registry, selected_names, capabilities) {
         for tool in selected { if tool["name"] == name { ordered = push(ordered, tool) } }
     }
     mut scoped := registry
+    if scoped == null { scoped = {"type": "ToolRegistry", "metadata": {}} }
+    if type(scoped) != "dict" { return context_error("invalid_tool_registry") }
     scoped["tools"] = ordered
     return {"ok": true, "registry": scoped}
 }

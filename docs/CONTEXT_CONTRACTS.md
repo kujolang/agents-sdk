@@ -104,3 +104,80 @@ returning. Exact triggers add optional references; prose, forged headings and
 repository instructions cannot activate triggers. Missing required context is
 an error. Hashes prove integrity against trusted references, not authenticity
 of an attacker-supplied catalog; pin catalog provenance through the manifest.
+
+## Runner opt-in and dispatch evidence
+
+Pass `context` in run options to enable preparation. Supported keys:
+`capabilities`, `tool_names`, `manifest_artifact`, `current_provenance`,
+`selected_skills`, `skill_catalog`, `reference_triggers`, `resume`, `state`,
+`current_source_hashes`, `schema_on_demand`, `supports_schema_on_demand`, and
+`expected_dispatch`. Stores use the existing `artifact_store`/`session_store`
+options. No `context` key preserves the original run path.
+
+A supplied `state` is validated before dispatch and saved after execution with
+updated completion/retry/failure facts and full result evidence. `resume: true`
+loads and validates it before constructing a compact user message. Durable
+state is never treated as system instructions. Persistence failure is visible in
+`metadata.context_state_saved` and `context_state_error`; callers must inspect
+this before promising resumability. Remaining steps and decisions are caller
+owned; the runner does not invent progress.
+
+Pass `context_handoff` to replace parent-output replay with a validated typed
+envelope plus a parent evidence reference. The existing depth/visited-target
+checks, handoff events and target selection remain active. Typed children inherit
+approval/cancellation controls and scoped capability ceilings, but not parent
+resume state or parent dispatch expectations. Parent and child evidence remain
+available through references on handoff metadata. Without `context_handoff`,
+legacy parent-output handoffs remain unchanged.
+
+Full schema expansion is the default. On-demand mode requires the explicit
+`supports_schema_on_demand` adapter contract: the application must implement
+schema fetch and model continuation through `context_tool_schemas`. This runner
+does not invent a provider discovery protocol or claim it is universally
+supported. Use the default complete schemas when no such application exists.
+
+Opt-in results include `context_dispatch_receipts` built from actual paired
+model lifecycle events, successful tool results, verified skill loads and
+completed handoffs. Task roles can use `agent.metadata.execution_role`; the
+existing `agent.role` remains a message-role field. Receipts prove that the
+configured role's agent reached its execution boundary, not that its reasoning
+was correct. `expected_dispatch` entries (`kind`, `component_id`, `status`)
+fail the run with `dispatch_mismatch` when required execution was not observed.
+Denied tools do not produce successful-execution receipts. Child receipts and
+full child evidence are retained on typed handoffs. These are local audit
+receipts, not signed remote attestations; only trust runtime-produced results.
+
+## CI ratchet and evaluation
+
+Run `KUJO_BIN=/path/to/kujo bash scripts/verify_context.sh`, then
+`kujo run scripts/context_token_ratchet.kujo --interpreter`. The committed
+baseline includes instructions, normalized paired payloads, tool schemas/catalogs,
+skill views, handoffs, resume, retry duplication and provider usage fixtures.
+Bytes/characters/heuristic estimates remain separate from provider-specific
+fixture columns. A 5% warning and 10% hard-growth threshold supplement strict
+payload-hash/inventory drift checks. There are no timestamps, random IDs,
+absolute machine paths or logs in the normalized baseline. Diagnostic stderr is
+retained separately from program stdout in evaluation artifacts.
+
+Approved growth is explicit, after verification:
+
+```bash
+kujo run scripts/context_token_ratchet.kujo --interpreter -- \
+  --approve-growth "Explain required growth and reliability evidence" \
+  .tmp/context-evaluation/report.json
+```
+
+Review both baseline and approval JSON diffs. The approval links the new baseline
+hash to verified evaluation evidence; CI never updates baselines automatically.
+Thresholds are initial regression guards, not statistically calibrated production
+budgets. The corpus repeats seven synthetic edit tasks 20 times, compares exact
+current/compact outcomes, and executes current and optimized fixture programs
+under VM and interpreter. Dedicated runner tests cover real handoff, retry,
+resume, tool, approval and dispatch boundaries. Adversarial tests cover missing
+safety, forged state/hashes/headings, control characters and stale sources.
+
+The committed evaluation is reproducible offline contract evidence. It does not
+measure real model quality, live-provider latency/billing, or prove production
+savings. Provider token counts, cost and latency remain null when unavailable.
+Roll out compact paths only after application-specific replay/task acceptance
+checks; keep the default full-context path for applications without that evidence.

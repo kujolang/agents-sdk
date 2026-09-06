@@ -5,7 +5,7 @@ export func context_get(value, key, fallback) {
 }
 
 export func context_json(value) {
-    if is_secret(value) { throw "context_secret" }
+    if is_secret(value) { throw("context_secret") }
     if type(value) == "dict" {
         mut fields := []
         for key in sort(keys(value)) {
@@ -18,7 +18,7 @@ export func context_json(value) {
         for item in value { fields = push(fields, context_json(item)) }
         return "[" + join(fields, ",") + "]"
     }
-    if type(value) != "string" && type(value) != "int" && type(value) != "float" && type(value) != "bool" && value != null { throw "context_not_json" }
+    if type(value) != "string" && type(value) != "int" && type(value) != "float" && type(value) != "bool" && value != null { throw("context_not_json") }
     return to_json(value)
 }
 
@@ -64,18 +64,25 @@ export func context_ledger(messages, schemas, response, options) {
         if role == "user" { kind = "task_spec" }
         if role == "tool" { kind = "tool_result" }
         if role == "assistant" { kind = "assistant_output" }
+        let origin := context_get(context_get(message, "metadata", {}), "source", "")
+        if origin == "retrieval.context" { kind = "retrieved_documents" }
+        if origin == "skill_core" { kind = "selected_skills" }
+        if origin == "skill_reference" || origin == "security_rule" { kind = "loaded_references" }
         let source := "messages/" + to_string(index)
         let overrides := context_get(context_get(options, "attribution", {}), source, {})
         components = push(components, context_component(message, {
             "source": source, "kind": context_get(overrides, "kind", kind),
             "load_reason": context_get(overrides, "load_reason", "model_request"),
             "component_id": source, "parent_id": "request", "load_step": index,
+            "cacheable": context_get(overrides, "cacheable", false),
+            "redaction_classification": context_get(overrides, "redaction_classification", "restricted"),
             "retry_number": retry, "provider": provider, "model": model
         }))
         index = index + 1
     }
     components = push(components, context_component(schemas, {"source": "tools", "kind": "tool_schemas", "component_id": "tools", "parent_id": "request", "retry_number": retry, "provider": provider, "model": model}))
     components = push(components, context_component(context_get(response, "output_text", ""), {"source": "response", "kind": "assistant_output", "component_id": "output", "provider": provider, "model": model, "retry_number": retry}))
+    components = push(components, context_component(context_get(response, "tool_calls", []), {"source": "response/tool_calls", "kind": "assistant_output", "component_id": "output_tools", "provider": provider, "model": model, "retry_number": retry}))
     let usage := context_get(response, "usage", {})
     // Fixture/estimated usage must never be promoted to provider billing.
     let usage_source := context_get(usage, "usage_source", "unavailable")
@@ -96,4 +103,22 @@ export func observe_context(adapter, messages, request_options, response) {
         observer(receipt)
         return true
     } except err { return false }
+}
+
+// Durable evidence retains values but cannot persist executable runtime callbacks.
+// Secret values stay redacted, matching existing JSON/event policy.
+export func context_evidence(value) {
+    if is_secret(value) { return "***" }
+    if type(value) == "dict" {
+        mut result := {}
+        for key in keys(value) { result[key] = context_evidence(value[key]) }
+        return result
+    }
+    if type(value) == "array" {
+        mut result := []
+        for item in value { result = push(result, context_evidence(item)) }
+        return result
+    }
+    if type(value) == "function" { return {"runtime_value": "function"} }
+    return value
 }

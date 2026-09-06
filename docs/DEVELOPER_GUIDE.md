@@ -171,7 +171,7 @@ runner := create_agent_runner({"ai_adapter": harness["model_adapter"]})
 
 ## Validate Locally
 
-Use Kujo 1.2.2 (the CI pin) and install the exact Ability dependency from
+Use Kujo 1.3.1 (the CI pin) and install the exact Ability dependency from
 `kennel.lock` before validating. An older runtime may fail to resolve the
 `ability` package even when its installed directory exists.
 

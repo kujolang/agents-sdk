@@ -1,0 +1,92 @@
+from src.agents.context.ledger import context_get, context_json, context_evidence
+from src.agents.context.manifest import context_error, context_validate_manifest
+from src.agents.context.state import context_load_resume, context_save_resume, context_validate_state
+from src.agents.context.views import context_scope_tools, context_tool_catalog, context_tool_schemas
+from src.agents.context.skills import context_load_skills
+
+// All configuration here comes from trusted run options, never parsed model text.
+export func context_prepare_run(runner, request, options) {
+    mut config := context_get(options, "context", null)
+    if config == null { return {"ok": true, "request": request, "options": options} }
+    if type(config) != "dict" { return context_error("invalid_context_config") }
+    mut prepared_request := request
+    mut prepared_options := options
+    let store := context_get(options, "artifact_store", context_get(runner, "artifact_store", null))
+    let capabilities := context_get(config, "capabilities", [])
+    let manifest := context_get(config, "manifest_artifact", null)
+    if manifest != null {
+        let checked := context_validate_manifest(manifest, context_get(config, "current_provenance", {}), store)
+        if checked["ok"] == false { return checked }
+    }
+    mut messages := context_get(request, "messages", [])
+    if context_get(config, "resume", false) {
+        let resumed := context_load_resume(context_get(options, "session_store", context_get(runner, "session_store", null)), context_get(request, "session_id", ""), store, context_get(config, "current_source_hashes", {}))
+        if resumed["ok"] == false { return resumed }
+        messages = push(messages, {"role": "user", "content": context_json({"resume_state": resumed["state"], "evidence_reference": resumed["evidence_reference"]})})
+        config["state"] = resumed["state"]
+    }
+    let selected_skills := context_get(config, "selected_skills", [])
+    let loaded := context_load_skills(context_get(config, "skill_catalog", {}), selected_skills, context_get(config, "reference_triggers", []), capabilities, store)
+    if loaded["ok"] == false { return loaded }
+    for item in loaded["loaded"] {
+        // Catalog is trusted configuration; repository/retrieved data never selects skills.
+        messages = push(messages, {"role": "system", "content": item["content"], "metadata": {"source": item["kind"], "skill_id": item["skill_id"], "content_hash": item["reference"]["content_hash"]}})
+    }
+    if has_key(config, "tool_names") {
+        let registry := context_get(options, "tool_registry", context_get(runner, "tool_registry", {"type": "ToolRegistry", "tools": [], "metadata": {}}))
+        let scoped := context_scope_tools(registry, config["tool_names"], capabilities)
+        if scoped["ok"] == false { return scoped }
+        prepared_options["tool_registry"] = scoped["registry"]
+        let catalog := context_tool_catalog(scoped["registry"])
+        mut model_options := context_get(options, "model_options", {})
+        if context_get(config, "schema_on_demand", false) {
+            // Only use with an adapter/application that implements schema fetch and model continuation.
+            if context_get(config, "supports_schema_on_demand", false) == false { return context_error("schema_discovery_unsupported") }
+            messages = push(messages, {"role": "user", "content": context_json(catalog)})
+            model_options["tools"] = []
+        } else {
+            mut ids := []
+            for entry in catalog["entries"] { ids = push(ids, entry["schema_id"]) }
+            let expanded := context_tool_schemas(scoped["registry"], ids)
+            if expanded["ok"] == false { return expanded }
+            mut tools := []
+            for schema in expanded["schemas"] {
+                tools = push(tools, {"type": "function", "function": {"name": schema["name"], "description": schema["description"], "parameters": schema["input_schema"]}})
+            }
+            model_options["tools"] = tools
+        }
+        prepared_options["model_options"] = model_options
+    }
+    let state := context_get(config, "state", null)
+    if state != null {
+        let checked := context_validate_state(state, context_get(config, "current_source_hashes", {}), store)
+        if checked["ok"] == false { return checked }
+    }
+    prepared_options["context"] = config
+    prepared_request["messages"] = messages
+    return {"ok": true, "request": prepared_request, "options": prepared_options, "loaded_skills": loaded["loaded"]}
+}
+
+export func context_finish_run(runner, request, options, result) {
+    let config := context_get(options, "context", {})
+    let state := context_get(config, "state", null)
+    if state == null { return result }
+    let store := context_get(options, "artifact_store", context_get(runner, "artifact_store", null))
+    let sessions := context_get(options, "session_store", context_get(runner, "session_store", null))
+    mut next_state := state
+    let status := context_get(result, "status", "failed")
+    next_state["current_failure"] = status
+    if status == "completed" {
+        next_state["current_failure"] = ""
+        next_state["completed_steps"] = push(context_get(state, "completed_steps", []), context_get(request, "run_id", "run"))
+    }
+    let counters := context_get(context_get(result, "metadata", {}), "retry_counters", {})
+    next_state["retry_count"] = context_get(state, "retry_count", 0) + context_get(counters, "model_retries_used", 0)
+    let saved := context_save_resume(sessions, context_get(request, "session_id", ""), store, next_state, context_get(config, "current_source_hashes", {}), context_evidence(result))
+    mut finished := result
+    mut metadata := context_get(result, "metadata", {})
+    metadata["context_state_saved"] = context_get(saved, "ok", false)
+    if context_get(saved, "ok", false) == false { metadata["context_state_error"] = context_get(saved, "error", {"code": "context_persist_failed"}) }
+    finished["metadata"] = metadata
+    return finished
+}

@@ -20,7 +20,7 @@ jobs:
         id: kujo
         uses: kujolang/kujo/.github/actions/setup-kujo@22582e7f0111a1005002579b44f5d03cd2ed1c9c
         with:
-          version: v1.2.2
+          version: v1.3.1
 
       - name: Export Kujo runtime path
         shell: bash
@@ -45,11 +45,18 @@ jobs:
       - name: Verify offline examples and contracts
         run: bash scripts/ci_no_network_enforcement.sh
 
+      - name: Verify context costs and execution evidence
+        run: |
+          bash scripts/verify_context.sh
+          "$KUJO_BIN" run scripts/context_token_ratchet.kujo --interpreter
+
       - name: Preserve offline verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: offline-verification-logs
-          path: .tmp/offline-checks.*/*.log
+          path: |
+            .tmp/offline-checks.*/*.log
+            .tmp/context-evaluation/
           include-hidden-files: true
           retention-days: 7

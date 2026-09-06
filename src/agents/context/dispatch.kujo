@@ -1,0 +1,59 @@
+from src.agents.context.ledger import context_get, context_hash, context_evidence
+
+func receipt(kind, component, evidence, status) {
+    return {"serialization_version": "kujo.dispatch-receipt/v1", "kind": kind, "component_id": component, "status": status, "evidence_hash": context_hash(context_evidence(evidence)), "evidence_source": "local_runtime_boundary"}
+}
+
+export func context_dispatch_receipts(result, agent, loaded_skills) {
+    let metadata := context_get(result, "metadata", {})
+    mut receipts := []
+    mut started := []
+    for event in context_get(metadata, "events", []) {
+        let kind := context_get(event, "kind", "")
+        let step := context_get(event, "step_id", "")
+        if kind == "model_request_started" { started = push(started, step) }
+        if kind == "model_request_completed" || kind == "model_request_failed" {
+            if contains(started, step) {
+                let id := context_get(event, "agent_id", "")
+                let evidence := {"agent_id": id, "step_id": step, "event_kind": kind, "payload": context_get(event, "payload", {})}
+                receipts = push(receipts, receipt("agent", id, evidence, kind))
+                if id == context_get(agent, "id", null) {
+                    receipts = push(receipts, receipt("role", context_get(context_get(agent, "metadata", {}), "execution_role", context_get(agent, "role", "assistant")), evidence, kind))
+                }
+            }
+        }
+        if kind == "handoff_completed" {
+            receipts = push(receipts, receipt("handoff", context_get(context_get(event, "payload", {}), "target_agent_id", ""), context_get(event, "payload", {}), "completed"))
+        }
+    }
+    let model_result := context_get(context_get(result, "output", {}), "model_result", {})
+    if context_get(model_result, "ok", false) {
+        for key in ["provider", "model"] {
+            let value := context_get(model_result, key, "")
+            if type(value) == "string" && value != "" { receipts = push(receipts, receipt(key, value, {"provider": context_get(model_result, "provider", null), "model": context_get(model_result, "model", null)}, "completed")) }
+        }
+    }
+    for call in context_get(metadata, "tool_calls", []) {
+        let execution := context_get(call, "result", {})
+        // An approval denial is evidence of a blocked attempt, not handler execution.
+        if context_get(execution, "ok", false) {
+            receipts = push(receipts, receipt("tool", context_get(call, "tool_name", ""), execution, "completed"))
+        }
+    }
+    for item in loaded_skills {
+        receipts = push(receipts, receipt(item["kind"], item["skill_id"], item["reference"], "loaded"))
+    }
+    return receipts
+}
+
+export func context_verify_dispatch(receipts, expected) {
+    mut missing := []
+    for requirement in expected {
+        mut found := false
+        for record in receipts {
+            if record["kind"] == requirement["kind"] && record["component_id"] == requirement["component_id"] && record["status"] == requirement["status"] { found = true }
+        }
+        if found == false { missing = push(missing, requirement) }
+    }
+    return {"ok": len(missing) == 0, "missing": missing}
+}

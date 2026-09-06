@@ -2,6 +2,7 @@
 
 ## Unreleased — context accounting
 
+- Integrate opt-in context preparation, typed child evidence, verified resume, dispatch receipts and CI token regression checks without changing default payloads.
 - Add explicit progressive skill loading with mandatory safety artifacts, exact triggers and dependency validation.
 - Add deterministic tool catalogs/schema expansion, executable registry scoping, and exact structural repository selection.
 - Add typed handoff validation and compact SessionStore recovery state with full evidence retained in ArtifactStore.

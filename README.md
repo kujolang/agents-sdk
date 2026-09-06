@@ -384,3 +384,10 @@ bash scripts/ci_no_network_enforcement.sh
 ## Retrieval content preferences
 
 [Programming-language retrieval preferences](docs/RETRIEVAL_PREFERENCES.md) describes optional retrieval behavior and compatibility boundaries.
+
+## Context Accounting and Compact Execution
+
+Opt-in content-hashed ledgers, ArtifactStore context manifests, typed handoffs,
+verified resume state, scoped tools, progressive skills, token regression checks
+and execution receipts are documented in [Context Contracts](docs/CONTEXT_CONTRACTS.md).
+These APIs require Kujo 1.3.1. Existing execution defaults remain unchanged.

@@ -1,0 +1,13 @@
+test_setup {
+    from src.agents.context.dispatch import context_dispatch_receipts, context_verify_dispatch
+}
+
+test "dispatch requires execution evidence not configured agent or tool names" {
+    let agent := {"id": "reviewer", "role": "reviewer"}
+    assert_equal(len(context_dispatch_receipts({"metadata": {}}, agent, [])), 0)
+    let events := [{"kind": "model_request_started", "step_id": "model", "agent_id": "reviewer"}, {"kind": "model_request_completed", "step_id": "model", "agent_id": "reviewer", "payload": {}}]
+    let records := context_dispatch_receipts({"metadata": {"events": events, "tool_calls": [{"tool_name": "denied", "result": {"ok": false, "status": "approval_denied"}}, {"tool_name": "read", "result": {"ok": true}}]}}, agent, [])
+    assert_equal(context_verify_dispatch(records, [{"kind": "role", "component_id": "reviewer", "status": "model_request_completed"}, {"kind": "tool", "component_id": "read", "status": "completed"}])["ok"], true)
+    assert_equal(context_verify_dispatch(records, [{"kind": "tool", "component_id": "denied", "status": "completed"}])["ok"], false)
+    assert_equal(context_verify_dispatch(records, [{"kind": "role", "component_id": "verifier", "status": "model_request_completed"}])["ok"], false)
+}
