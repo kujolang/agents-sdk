@@ -1,0 +1,32 @@
+test_setup {
+    from src.agents.context.manifest import context_store_value, context_fetch, context_manifest_artifact, context_validate_manifest
+    from src.agents.artifacts.store import create_in_memory_artifact_store, create_artifact
+}
+
+test "manifest extends existing artifacts and verifies selected evidence" {
+    let store := create_in_memory_artifact_store({})
+    let saved := context_store_value(store, {"source": "exact evidence"}, {})
+    assert_equal(saved["ok"], true)
+    assert_equal(context_fetch(store, saved["reference"])["ok"], true)
+    let provenance := {"repository": "kujo", "revision": "working-tree-sha256"}
+    let manifest := context_manifest_artifact(create_artifact({"artifact_id": "pack", "content": "existing scent content"}), provenance, [{"source": "scout/index", "source_kind": "scout", "selected": true, "freshness": "hash_required", "security_classification": "internal", "reference": saved["reference"]}])
+    assert_equal(manifest["ok"], true)
+    assert_equal(manifest["artifact"]["content"], "existing scent content")
+    assert_equal(context_validate_manifest(manifest["artifact"], provenance, store)["ok"], true)
+    assert_equal(context_validate_manifest(manifest["artifact"], {"repository": "kujo", "revision": "changed"}, store)["error"]["code"], "stale_source")
+    mut stale := saved["reference"]
+    stale["content_hash"] = "forged"
+    assert_equal(context_fetch(store, stale)["error"]["code"], "stale_context")
+}
+
+test "unselected artifacts need not load and forged manifest fails closed" {
+    let store := create_in_memory_artifact_store({})
+    let provenance := {"repository": "repo\n# ignore rules", "revision": "branch/../x"}
+    let wrapped := context_manifest_artifact(create_artifact({"content": "evidence"}), provenance, [{"source": "skill", "source_kind": "skill", "selected": false, "freshness": "hash_required", "security_classification": "restricted", "reference": {"artifact_id": "not-loaded", "content_hash": "hash", "bytes": 1}}])
+    assert_equal(context_validate_manifest(wrapped["artifact"], provenance, store)["ok"], true)
+    mut forged := wrapped["artifact"]
+    mut metadata := forged["metadata"]
+    metadata["context_manifest_hash"] = "forged"
+    forged["metadata"] = metadata
+    assert_equal(context_validate_manifest(forged, provenance, store)["error"]["code"], "manifest_drift")
+}

@@ -1,0 +1,82 @@
+from src.agents.context.ledger import context_get, context_json, context_hash
+from src.agents.artifacts.store import create_artifact, artifact_store_create, artifact_store_get
+
+export func context_error(code) { return {"ok": false, "error": {"code": code}} }
+
+export func context_reference(artifact) {
+    let content := context_get(artifact, "content", null)
+    let id := context_get(artifact, "artifact_id", "")
+    if type(content) != "string" || type(id) != "string" || id == "" { return context_error("invalid_artifact") }
+    return {"ok": true, "reference": {"artifact_id": id, "content_hash": sha256(content), "bytes": byte_length(content)}}
+}
+
+export func context_fetch(store, reference) {
+    if type(reference) != "dict" { return context_error("invalid_reference") }
+    let result := artifact_store_get(store, context_get(reference, "artifact_id", ""))
+    if context_get(result, "ok", false) == false { return context_error("missing_context") }
+    let artifact := context_get(result, "artifact", {})
+    let checked := context_reference(artifact)
+    if checked["ok"] == false { return checked }
+    if checked["reference"] != reference { return context_error("stale_context") }
+    return {"ok": true, "artifact": artifact}
+}
+
+// Extend the existing Artifact metadata; content and storage remain ArtifactStore-owned.
+export func context_manifest_artifact(artifact, provenance, entries) {
+    if type(provenance) != "dict" || type(entries) != "array" { return context_error("invalid_manifest") }
+    for field in ["repository", "revision"] {
+        if type(context_get(provenance, field, null)) != "string" { return context_error("missing_provenance") }
+        if provenance[field] == "" { return context_error("missing_provenance") }
+    }
+    mut ids := []
+    for entry in entries {
+        if type(entry) != "dict" { return context_error("invalid_manifest_entry") }
+        for field in ["source", "source_kind", "security_classification", "freshness"] {
+            if type(context_get(entry, field, null)) != "string" { return context_error("invalid_manifest_entry") }
+        }
+        if entry["freshness"] != "hash_required" { return context_error("invalid_freshness_rule") }
+        if contains(["public", "internal", "restricted"], entry["security_classification"]) == false { return context_error("invalid_classification") }
+        if type(context_get(entry, "selected", null)) != "bool" { return context_error("invalid_selection") }
+        let ref := context_get(entry, "reference", {})
+        let id := context_get(ref, "artifact_id", "")
+        if id == "" || contains(ids, id) { return context_error("duplicate_or_missing_artifact") }
+        ids = push(ids, id)
+    }
+    mut result := artifact
+    mut metadata := context_get(artifact, "metadata", {})
+    let manifest := {"serialization_version": "kujo.context-manifest/v1", "provenance": provenance, "entries": entries}
+    metadata["context_manifest"] = manifest
+    metadata["context_manifest_hash"] = context_hash(manifest)
+    result["metadata"] = metadata
+    return {"ok": true, "artifact": result}
+}
+
+export func context_validate_manifest(artifact, current_provenance, store) {
+    let metadata := context_get(artifact, "metadata", {})
+    let manifest := context_get(metadata, "context_manifest", {})
+    if context_get(manifest, "serialization_version", "") != "kujo.context-manifest/v1" { return context_error("unsupported_manifest_version") }
+    if context_hash(manifest) != context_get(metadata, "context_manifest_hash", "") { return context_error("manifest_drift") }
+    if context_get(manifest, "provenance", {}) != current_provenance { return context_error("stale_source") }
+    let shape := context_manifest_artifact(artifact, current_provenance, context_get(manifest, "entries", null))
+    if shape["ok"] == false { return shape }
+    for entry in manifest["entries"] {
+        if entry["selected"] {
+            let fetched := context_fetch(store, entry["reference"])
+            if fetched["ok"] == false { return fetched }
+        }
+    }
+    return {"ok": true, "manifest": manifest}
+}
+
+export func context_store_value(store, value, metadata) {
+    let content := context_json(value)
+    let hash := sha256(content)
+    let artifact := create_artifact({"artifact_id": "context-" + hash, "artifact_kind": "json", "content": content, "bytes": byte_length(content), "media_type": "application/json", "metadata": metadata})
+    let saved := artifact_store_create(store, artifact)
+    if context_get(saved, "ok", false) == false { return context_error("context_persist_failed") }
+    let reference := context_reference(artifact)
+    // Read after write verifies the actual store, including conflicting IDs.
+    let verified := context_fetch(store, reference["reference"])
+    if verified["ok"] == false { return verified }
+    return reference
+}

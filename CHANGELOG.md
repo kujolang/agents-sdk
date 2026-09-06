@@ -2,6 +2,7 @@
 
 ## Unreleased — context accounting
 
+- Add versioned context manifests as existing Artifact metadata, with hash-verified retrieval and fail-closed source invalidation.
 - Add opt-in metadata-only context cost observation at the AI adapter boundary; provider usage remains distinct from heuristic estimates.
 
 ## Unreleased

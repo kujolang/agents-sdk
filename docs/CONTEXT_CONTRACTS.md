@@ -35,3 +35,22 @@ cache billing and latency need transport/provider evidence; the adapter ledger
 makes no such claim. Runner retry attempts are recorded from existing retry
 options without adding model payload fields.
 
+## Canonical manifest
+
+`context_manifest_artifact` extends an existing Artifact's metadata with
+`context_manifest` and `context_manifest_hash`; it preserves its content.
+Entries reference artifacts by ID, SHA-256 and byte count, with source kind
+(Scout, Scent, Spec, skill, repository or other artifact), provenance,
+selected/available state, classification and `hash_required` freshness.
+Use a commit plus a working-tree fingerprint as the revision when dirty.
+Branch names alone are not source fingerprints. Callers supply current trusted
+provenance; never accept cached provenance as proof of freshness.
+
+`context_validate_manifest` compares current provenance, recomputes the
+manifest hash and fetches every selected reference. Missing, changed or forged
+selected artifacts fail closed. Available but unselected entries do not load.
+`context_store_value` persists canonical JSON through the existing ArtifactStore
+and verifies it by reading it back. `context_fetch` returns exact evidence after
+checking ID/hash/bytes; it does not execute source labels or resolve arbitrary
+filesystem paths. Full evidence remains in the existing store.
+
