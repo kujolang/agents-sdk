@@ -7,7 +7,7 @@ not an ecosystem Git repository: Git walks up to `/Users/robertdevore/2026`, who
 remote identifies a different project. The audit does not add ecosystem files to
 that unrelated parent repository.
 
-Current implementation status: the authorized P0–P2 follow-up is complete across **four repositories: agents-sdk, rag, ai-chat, and dispatch**. See [the rollout checklist and measured evidence](RETRIEVAL_PREFERENCES_ROLLOUT.md). Historical audit observations below are retained as baseline evidence where labeled.
+Current implementation status: the authorized P0–P2 follow-up is merged into main across **four repositories: agents-sdk, rag, ai-chat, and dispatch**. AI Chat is updated locally; permanent RAG configuration and its existing overdue security-review gate remain open. See [the rollout checklist and measured evidence](RETRIEVAL_PREFERENCES_ROLLOUT.md). Historical audit observations below are retained as baseline evidence where labeled.
 
 ## 1. Executive Summary
 

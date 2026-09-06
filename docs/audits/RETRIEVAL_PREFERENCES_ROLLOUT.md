@@ -1,6 +1,6 @@
 # Retrieval preferences: completed P0–P2 rollout
 
-Verified 2026-09-06. Scope: four repositories. Branch in each repository: `codex/retrieval-preferences-complete`. Changes are committed for review; they are not merged into main or deployed. The original shared checkouts contain other work and were preserved.
+Verified 2026-09-06. Scope: four repositories. Branch in each repository: `codex/retrieval-preferences-complete`. All four implementation branches are now merged into `origin/main` and the local main checkouts. AI Chat was restarted through its existing launchd service on port 4174 and its new preference UI is verified. A persistent RAG endpoint/corpus has not been configured; deployment target selection remains pending. Unrelated shared-checkout work and the separate AI Chat soak were preserved.
 
 ## Repository and implementation checklist
 
@@ -73,6 +73,13 @@ Detailed local logs: `/tmp/kujo-retrieval-rollout/agents-final-gate.log`, `rag-f
 
 ## Review and rollout
 
-The requested implementation checklist is complete. Review and merge the four branches together, then enable the recipient and host settings for the intended deployment. RAG must reingest the annotated corpus before language selection takes effect. No deployment or main-branch merge was performed in this implementation session.
+The requested implementation checklist is complete. The four branches were merged on 2026-09-06. AI Chat merge `feaf11a` preserves the newer execution-resume work; the combined suite passed 383 tests with one platform skip, and the all-host HTTP pilot passed again. Its live database was backed up before the existing launchd service was restarted. Health and the deployed selector/normalization assets passed checks. Agents SDK and Dispatch are library/CLI repositories with no separate persistent service to restart. RAG still needs the intended service target and corpus before feature enablement and reingestion.
 
 The earlier empty-retrieval SignalBox finding is resolved by `a66ae54`; no new unresolved finding warrants a capture. Other dimensions remain explicit product decisions, not unfinished implementation requirements.
+
+### Merge/deployment verification and outstanding environment decisions
+
+- Main implementation heads: Agents SDK `2677c18` (followed by this status record), RAG `ef0d640`, AI Chat `feaf11a`, Dispatch `83eea7d`. Shared checkout updates used fast-forward merges, without stashing or deleting unrelated work.
+- AI Chat live service: `com.kujo.ai-chat`, loopback port 4174. New UI is deployed; `documentation_query` remains unavailable until `AI_CHAT_RAG_URL` is configured. Existing credentials and settings were retained. Backup: `ai-chat/data/backups/retrieval-rollout/ai-chat-2026-09-06T19-59-37-453Z.db` (private ignored runtime data).
+- RAG hosted run [34056498353](https://github.com/kujolang/rag/actions/runs/34056498353) passed all 73 tests and the runtime/platform/security-boundary jobs, but release-gates stopped at the unchanged threat-model cadence check: `review_not_overdue=false`. The plan and checker are byte-identical to baseline `2005da7`; no review timestamp was advanced. Existing SignalBox Capture `cap_7e639398-80e8-43a4-b1b1-7fa5bc30ab12` already records this blocker; duplicate skipped. A current evidence-backed review is required before claiming release readiness.
+- No permanent RAG production service was discovered. Its Cloudflare staging workflow is explicitly a temporary security test, not a hosting deployment. The intended endpoint and corpus were requested from the user; no cloud resources or arbitrary corpus were selected.
