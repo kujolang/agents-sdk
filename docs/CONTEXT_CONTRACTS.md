@@ -54,3 +54,21 @@ and verifies it by reading it back. `context_fetch` returns exact evidence after
 checking ID/hash/bytes; it does not execute source labels or resolve arbitrary
 filesystem paths. Full evidence remains in the existing store.
 
+## Typed handoff and structured resume
+
+`context_validate_handoff` checks the complete `kujo.handoff/v1` contract:
+task ID, objective, constraints, relevant files, required evidence, decisions,
+unresolved questions, produced artifacts, test commands, result hashes, allowed
+capabilities and next action. Strings are bounded; large evidence is represented
+by verified ArtifactStore references. Capabilities must be a subset of a trusted
+caller-supplied ceiling. This validation is not a grant of host permissions.
+
+`context_save_resume` extends SessionStore run state with `context_resume`
+and `context_evidence`, retaining full evidence separately in ArtifactStore.
+`context_load_resume` validates every referenced outcome/result and compares
+all current source hashes before returning compact state. State includes completed
+steps, decisions, source hashes, test outcome references, tool result references,
+current failure, retry count, remaining steps and next action. It never silently
+reuses stale state. A caller must reload/replan on `stale_source` or
+`stale_context`. Existing unversioned session state remains readable through
+the original SessionStore API; it cannot impersonate verified compact state.

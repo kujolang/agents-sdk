@@ -2,6 +2,7 @@
 
 ## Unreleased — context accounting
 
+- Add typed handoff validation and compact SessionStore recovery state with full evidence retained in ArtifactStore.
 - Add versioned context manifests as existing Artifact metadata, with hash-verified retrieval and fail-closed source invalidation.
 - Add opt-in metadata-only context cost observation at the AI adapter boundary; provider usage remains distinct from heuristic estimates.
 

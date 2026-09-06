@@ -1,0 +1,87 @@
+from src.agents.context.ledger import context_get, context_json
+from src.agents.context.manifest import context_error, context_fetch, context_store_value
+from src.agents.sessions.store import session_store_save_run_state, session_store_get_run_state
+
+func bounded_text(value) { return type(value) == "string" && count_chars(value) <= 2048 }
+func string_list(value) {
+    if type(value) != "array" { return false }
+    if len(value) > 128 { return false }
+    for item in value { if bounded_text(item) == false { return false } }
+    return true
+}
+
+export func context_validate_handoff(envelope, capabilities, store) {
+    if type(envelope) != "dict" || type(capabilities) != "array" { return context_error("invalid_handoff") }
+    if context_get(envelope, "serialization_version", "") != "kujo.handoff/v1" { return context_error("unsupported_handoff_version") }
+    let fields := ["serialization_version", "task_id", "objective", "constraints", "relevant_files", "required_evidence", "decisions", "unresolved_questions", "produced_artifacts", "test_commands", "result_hashes", "allowed_capabilities", "next_action"]
+    if sort(keys(envelope)) != sort(fields) { return context_error("invalid_handoff_fields") }
+    for field in ["task_id", "objective", "next_action"] {
+        if bounded_text(envelope[field]) == false { return context_error("invalid_handoff_text") }
+        if trim(envelope[field]) == "" { return context_error("missing_handoff_context") }
+    }
+    for field in ["constraints", "relevant_files", "decisions", "unresolved_questions", "test_commands", "result_hashes", "allowed_capabilities"] {
+        if string_list(envelope[field]) == false { return context_error("invalid_handoff_list") }
+    }
+    for capability in envelope["allowed_capabilities"] {
+        if contains(capabilities, capability) == false { return context_error("capability_escalation") }
+    }
+    for field in ["required_evidence", "produced_artifacts"] {
+        if type(envelope[field]) != "array" { return context_error("invalid_evidence") }
+        for reference in envelope[field] {
+            // Verify presence/hash now, but only references enter the model envelope.
+            let result := context_fetch(store, reference)
+            if result["ok"] == false { return result }
+        }
+    }
+    if byte_length(context_json(envelope)) > 32768 { return context_error("handoff_too_large") }
+    return {"ok": true, "envelope": envelope}
+}
+
+export func context_validate_state(state, current_sources, store) {
+    if type(state) != "dict" { return context_error("invalid_resume_state") }
+    if context_get(state, "serialization_version", "") != "kujo.resume/v1" { return context_error("unsupported_resume_version") }
+    let fields := ["serialization_version", "completed_steps", "decisions", "source_hashes", "test_outcomes", "tool_results", "current_failure", "retry_count", "remaining_steps", "next_action"]
+    if sort(keys(state)) != sort(fields) { return context_error("invalid_resume_fields") }
+    if type(current_sources) != "dict" || type(state["source_hashes"]) != "dict" { return context_error("invalid_source_hashes") }
+    if state["source_hashes"] != current_sources { return context_error("stale_source") }
+    for path in keys(current_sources) {
+        if type(current_sources[path]) != "string" || len(current_sources[path]) != 64 { return context_error("invalid_source_hash") }
+    }
+    for field in ["completed_steps", "decisions", "remaining_steps"] {
+        if string_list(state[field]) == false { return context_error("invalid_resume_list") }
+    }
+    if bounded_text(state["current_failure"]) == false || bounded_text(state["next_action"]) == false { return context_error("invalid_resume_text") }
+    if type(state["retry_count"]) != "int" || state["retry_count"] < 0 { return context_error("invalid_retry_count") }
+    for field in ["tool_results", "test_outcomes"] {
+        if type(state[field]) != "array" { return context_error("invalid_resume_evidence") }
+        for reference in state[field] {
+            let fetched := context_fetch(store, reference)
+            if fetched["ok"] == false { return fetched }
+        }
+    }
+    if byte_length(context_json(state)) > 32768 { return context_error("resume_too_large") }
+    return {"ok": true, "state": state}
+}
+
+export func context_save_resume(session_store, session_id, artifact_store, state, current_sources, full_evidence) {
+    let checked := context_validate_state(state, current_sources, artifact_store)
+    if checked["ok"] == false { return checked }
+    let evidence := context_store_value(artifact_store, full_evidence, {"security_classification": "restricted"})
+    if evidence["ok"] == false { return evidence }
+    let previous := session_store_get_run_state(session_store, session_id, {})
+    mut run_state := context_get(previous, "run_state", {})
+    run_state["context_resume"] = state
+    run_state["context_evidence"] = evidence["reference"]
+    return session_store_save_run_state(session_store, session_id, run_state, {"source": "context_resume"})
+}
+
+export func context_load_resume(session_store, session_id, artifact_store, current_sources) {
+    let stored := session_store_get_run_state(session_store, session_id, {})
+    if context_get(stored, "ok", false) == false { return context_error("missing_resume") }
+    let run_state := context_get(stored, "run_state", {})
+    let checked := context_validate_state(context_get(run_state, "context_resume", {}), current_sources, artifact_store)
+    if checked["ok"] == false { return checked }
+    let evidence := context_fetch(artifact_store, context_get(run_state, "context_evidence", {}))
+    if evidence["ok"] == false { return evidence }
+    return {"ok": true, "state": checked["state"], "evidence_reference": run_state["context_evidence"]}
+}
