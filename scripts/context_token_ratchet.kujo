@@ -1,0 +1,26 @@
+from tests.context_corpus import context_corpus_payloads
+from src.agents.context.ratchet import context_budget_snapshot, context_check_budget
+from src.agents.context.ledger import context_json
+
+let corpus := context_corpus_payloads()
+let snapshot := context_budget_snapshot(corpus["payloads"])
+let path := "tests/fixtures/context/token-baseline.json"
+let cli_args := args()
+if len(cli_args) > 0 && cli_args[0] == "--approve-growth" {
+    if len(cli_args) != 3 || trim(cli_args[1]) == "" { print("usage: --approve-growth REASON VERIFIED_EVALUATION_JSON"); exit(2) }
+    let evidence := parse_json(read_file(cli_args[2]))
+    if evidence["serialization_version"] != "kujo.context-evaluation/v1" || evidence["ok"] != true { print("invalid evaluation evidence"); exit(1) }
+    write_file_atomic(path, to_json_pretty(snapshot) + "\n", true)
+    write_file_atomic("tests/fixtures/context/growth-approval.json", context_json({"serialization_version": "kujo.context-growth-approval/v1", "reason": cli_args[1], "baseline_hash": sha256(context_json(snapshot)), "evaluation_hash": sha256(context_json(evidence))}) + "\n", true)
+    write_file_atomic("tests/fixtures/context/evaluation.json", to_json_pretty(evidence) + "\n", true)
+    print("Approved baseline written; review baseline, approval and evaluation before committing.")
+} else {
+    if len(cli_args) > 0 { print("unknown arguments"); exit(2) }
+    let baseline := parse_json(read_file(path))
+    let approval := parse_json(read_file("tests/fixtures/context/growth-approval.json"))
+    let evidence := parse_json(read_file("tests/fixtures/context/evaluation.json"))
+    if approval["baseline_hash"] != sha256(context_json(baseline)) || approval["evaluation_hash"] != sha256(context_json(evidence)) { print("unapproved baseline or evaluation drift"); exit(1) }
+    let result := context_check_budget(baseline, snapshot, 5, 10)
+    print(context_json(result))
+    if result["ok"] == false { exit(1) }
+}

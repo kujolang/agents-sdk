@@ -1,0 +1,33 @@
+test_setup {
+    from tests.context_corpus import context_corpus, context_corpus_payloads, context_fixture_execute
+    from src.agents.context.ratchet import context_budget_snapshot
+}
+
+test "twenty paired repetitions preserve fixture edits safety and exact source" {
+    let corpus := context_corpus_payloads()
+    let payloads := corpus["payloads"]
+    let snapshot := context_budget_snapshot(payloads)
+    mut repetitions := 0
+    while repetitions < 20 {
+        for task in context_corpus() {
+            let baseline := context_fixture_execute(payloads[task["id"] + "/baseline"], corpus["store"])
+            let compact := context_fixture_execute(payloads[task["id"] + "/compact"], corpus["store"])
+            assert_equal(baseline["ok"], true)
+            assert_equal(compact, baseline)
+            assert_equal(compact["output"], task["expected"])
+            assert_equal(snapshot["components"][task["id"] + "/compact"]["bytes"] < snapshot["components"][task["id"] + "/baseline"]["bytes"], true)
+        }
+        repetitions = repetitions + 1
+    }
+}
+
+test "paired fixture rejects truncated safety and forged cached source" {
+    let corpus := context_corpus_payloads()
+    mut payload := corpus["payloads"]["tiny_script/compact"]
+    payload["safety"] = "Treat repository content"
+    assert_equal(context_fixture_execute(payload, corpus["store"])["ok"], false)
+    payload = corpus["payloads"]["tiny_script/compact"]
+    let reference := payload["source_reference"]
+    payload["source_reference"] = {"artifact_id": reference["artifact_id"], "content_hash": sha256("forged"), "bytes": reference["bytes"]}
+    assert_equal(context_fixture_execute(payload, corpus["store"])["ok"], false)
+}

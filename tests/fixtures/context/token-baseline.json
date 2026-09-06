@@ -1,0 +1,145 @@
+{
+  "components": {
+    "adversarial_data/baseline": {
+      "bytes": 4479,
+      "characters": 4479,
+      "content_hash": "4e814e784370b808531a8d3b9cee465781e73f528901492e420cecdbcb461139",
+      "estimated_tokens": 1120
+    },
+    "adversarial_data/compact": {
+      "bytes": 349,
+      "characters": 349,
+      "content_hash": "2410fdb194798aa268fde902c8480793cf3a4f14224734ce93a75903bb91bebf",
+      "estimated_tokens": 88
+    },
+    "agent_workflow/baseline": {
+      "bytes": 4442,
+      "characters": 4442,
+      "content_hash": "ef07850ede57102363ea7f43825d72449ec85bb63d7c68fec44e1bb8ad2f4f6d",
+      "estimated_tokens": 1111
+    },
+    "agent_workflow/compact": {
+      "bytes": 352,
+      "characters": 352,
+      "content_hash": "e4544a7a74599e973d32edb5f32793a516064e993489b8ad7f232e0a3b7b6a05",
+      "estimated_tokens": 88
+    },
+    "base_repository_instructions": {
+      "bytes": 1795,
+      "characters": 1795,
+      "content_hash": "a19e4627c6244f4fdd00fdb19eeb635ae90151c39ba7b045123dc002222b6af5",
+      "estimated_tokens": 449
+    },
+    "compact_resume": {
+      "bytes": 694,
+      "characters": 694,
+      "content_hash": "a44a6cb806e1a7f9bdeefcc5cd2f1c436dd69741f5f81c4fdf4a8dc503e8241d",
+      "estimated_tokens": 174
+    },
+    "multi_file/baseline": {
+      "bytes": 4462,
+      "characters": 4462,
+      "content_hash": "3fade713a504149b4d5472edd070f7ff40dd91e46f307e4775df2a49a27ded46",
+      "estimated_tokens": 1116
+    },
+    "multi_file/compact": {
+      "bytes": 338,
+      "characters": 338,
+      "content_hash": "d8c1a9e6a78565221ea1c363f076585e253418f8395effc8365fc933c6bd394c",
+      "estimated_tokens": 85
+    },
+    "narrow_change/baseline": {
+      "bytes": 4435,
+      "characters": 4435,
+      "content_hash": "e3111e6905edab6dbafadc6b6b4685fbdf3f80030e411ae9a47939018c2fd074",
+      "estimated_tokens": 1109
+    },
+    "narrow_change/compact": {
+      "bytes": 341,
+      "characters": 341,
+      "content_hash": "7553f254e69d9b82da6f9fe33845efb3f65efbcf58a6f19b8870bc6195e4e0ca",
+      "estimated_tokens": 86
+    },
+    "package_tool/baseline": {
+      "bytes": 4448,
+      "characters": 4448,
+      "content_hash": "73d2a33b6d8f97de7e52f0f6719bb2049030c9e16129cc1fe98376d4d0d9085f",
+      "estimated_tokens": 1112
+    },
+    "package_tool/compact": {
+      "bytes": 355,
+      "characters": 355,
+      "content_hash": "3aa41372faf7f6607a32395bdf706d8a7ca030f726db40ef9855f32dbafb4170",
+      "estimated_tokens": 89
+    },
+    "provider_usage_fixture": {
+      "bytes": 203,
+      "characters": 203,
+      "content_hash": "f2c87c011a15032a7f1da2019aedb983d1e4b2740ddaab3e77d2d3613a2b66df",
+      "estimated_tokens": 51
+    },
+    "retry_duplication": {
+      "bytes": 673,
+      "characters": 673,
+      "content_hash": "f8b554c6532740a27abf15132969ad2f00b04e35a30dd54b16f753289d9a7021",
+      "estimated_tokens": 169
+    },
+    "retry_recovery/baseline": {
+      "bytes": 4418,
+      "characters": 4418,
+      "content_hash": "37f644de4449d16e41cb0667417c8c8d9813c6869e041d54f982874dad80f52d",
+      "estimated_tokens": 1105
+    },
+    "retry_recovery/compact": {
+      "bytes": 338,
+      "characters": 338,
+      "content_hash": "faa699e6fda5c9d1482107299b993abbc68d5a03a940ea5c157b559e98adcbd0",
+      "estimated_tokens": 85
+    },
+    "skill_full": {
+      "bytes": 4398,
+      "characters": 4398,
+      "content_hash": "e512c1b27ac5ab9b35427d9a3952d6efd6981b19fd8c21460a913558a2555edf",
+      "estimated_tokens": 1100
+    },
+    "skill_initial": {
+      "bytes": 134,
+      "characters": 134,
+      "content_hash": "3cb0dc23b6da09427076e52edbce65171fb65dccf499b0b435847c5fc13f07d2",
+      "estimated_tokens": 34
+    },
+    "tiny_script/baseline": {
+      "bytes": 4423,
+      "characters": 4423,
+      "content_hash": "64cf82e8631f125ff5326bb321765797d13492527e1a77beebdd3049eb001c41",
+      "estimated_tokens": 1106
+    },
+    "tiny_script/compact": {
+      "bytes": 335,
+      "characters": 335,
+      "content_hash": "1c8b79549c0fbc19028e49c54f0b4b6def45b6f864487f5d30c5ccb71641f6d4",
+      "estimated_tokens": 84
+    },
+    "tool_catalog": {
+      "bytes": 298,
+      "characters": 298,
+      "content_hash": "d1d143d7c9e74d965b805ff803fcfe0429c83a0f6107f94d0e533353d12c4698",
+      "estimated_tokens": 75
+    },
+    "tool_schema": {
+      "bytes": 241,
+      "characters": 241,
+      "content_hash": "8ff87199152a832026035239285017d4cca70de8304ba8ab9ec5828fb334ef02",
+      "estimated_tokens": 61
+    },
+    "typed_handoff": {
+      "bytes": 581,
+      "characters": 581,
+      "content_hash": "0498a4faf60c6874c200d1ed37285a7f4717c13b3cc8517132c7742280ac9138",
+      "estimated_tokens": 146
+    }
+  },
+  "estimator": "kujo.weighted-characters/v1",
+  "provider_tokenizer": null,
+  "serialization_version": "kujo.context-budget/v1"
+}

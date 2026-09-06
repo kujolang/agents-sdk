@@ -1,0 +1,27 @@
+from tests.context_corpus import context_corpus, context_corpus_payloads, context_fixture_execute
+from src.agents.context.ledger import context_json, context_component
+
+let corpus := context_corpus_payloads()
+let cli_args := args()
+let mode := cli_args[0]
+mut scenarios := []
+for task in context_corpus() {
+    let baseline := corpus["payloads"][task["id"] + "/baseline"]
+    let compact := corpus["payloads"][task["id"] + "/compact"]
+    let current_result := context_fixture_execute(baseline, corpus["store"])
+    let optimized_result := context_fixture_execute(compact, corpus["store"])
+    if current_result != optimized_result || optimized_result["output"] != task["expected"] { print("fixture mismatch"); exit(1) }
+    if mode == "--sources" {
+        write_file_atomic(".tmp/context-evaluation/" + task["id"] + "-current.kujo", task["source"], true)
+        write_file_atomic(".tmp/context-evaluation/" + task["id"] + "-optimized.kujo", optimized_result["output"], true)
+    }
+    let current_cost := context_component(baseline, {})
+    let optimized_cost := context_component(compact, {})
+    let output_cost := context_component(optimized_result["output"], {})
+    scenarios = push(scenarios, {"id": task["id"], "fixture_task_success": true, "current_input_estimate": current_cost["estimated_tokens"], "optimized_input_estimate": optimized_cost["estimated_tokens"], "output_estimate": output_cost["estimated_tokens"], "current_total_estimate": current_cost["estimated_tokens"] + output_cost["estimated_tokens"], "optimized_total_estimate": optimized_cost["estimated_tokens"] + output_cost["estimated_tokens"], "provider_input_tokens": null, "provider_output_tokens": null, "provider_total_tokens": null, "cost": null, "latency_ms": null})
+}
+if mode == "--report" {
+    // The shell gate invokes this only after actual contract and VM/interpreter execution.
+    print(context_json({"serialization_version": "kujo.context-evaluation/v1", "ok": true, "scope": "deterministic synthetic contract corpus; not live model task-quality evidence", "paired_repetitions": 20, "scenarios": scenarios, "compile_and_runtime_gate": "scripts/verify_context.sh", "security_dispatch_retry_gate": "tests/context_*_tests.kujo", "live_provider_measurements": false}))
+}
+if mode != "--sources" && mode != "--report" { exit(2) }

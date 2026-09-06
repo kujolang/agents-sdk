@@ -1,0 +1,14 @@
+test_setup {
+    from src.agents.context.ratchet import context_budget_snapshot, context_check_budget
+}
+
+test "ratchet detects growth drift and inventory changes" {
+    let baseline := context_budget_snapshot({"task": "small"})
+    assert_equal(context_check_budget(baseline, baseline, 5, 10)["ok"], true)
+    let grown := context_budget_snapshot({"task": "much larger prompt with duplicated instructions"})
+    let check := context_check_budget(baseline, grown, 5, 10)
+    assert_equal(check["ok"], false)
+    assert_equal(len(check["warnings"]) > 0, true)
+    assert_equal(context_check_budget(baseline, context_budget_snapshot({"new": "small"}), 5, 10)["ok"], false)
+    assert_equal(context_check_budget(baseline, context_budget_snapshot({"task": "other"}), 5, 10)["ok"], false)
+}

@@ -1,0 +1,1 @@
+{"baseline_hash":"c13626b82cf2ea2acf961efddce908b51e5b808a25ec0f24eb226069aad34964","evaluation_hash":"62e740fc380147f6e59f2f3d647dbbc2f72ae1e5a20b819ae38cc5eec66eb13f","reason":"Initial verified context baseline: paired fixtures, capability and stale-context checks, VM/interpreter execution","serialization_version":"kujo.context-growth-approval/v1"}

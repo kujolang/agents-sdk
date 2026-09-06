@@ -1,0 +1,34 @@
+from src.agents.context.ledger import context_get, context_hash, context_component
+from src.agents.context.manifest import context_error
+
+export func context_budget_snapshot(payloads) {
+    mut components := {}
+    for name in sort(keys(payloads)) {
+        let component := context_component(payloads[name], {"source": name})
+        components[name] = {"bytes": component["bytes"], "characters": component["characters"], "estimated_tokens": component["estimated_tokens"], "content_hash": component["content_hash"]}
+    }
+    return {"serialization_version": "kujo.context-budget/v1", "estimator": "kujo.weighted-characters/v1", "provider_tokenizer": null, "components": components}
+}
+
+export func context_check_budget(baseline, current, warning_percent, hard_percent) {
+    if context_get(baseline, "serialization_version", "") != "kujo.context-budget/v1" || context_get(current, "serialization_version", "") != "kujo.context-budget/v1" { return context_error("unsupported_budget_version") }
+    if type(warning_percent) != "int" || type(hard_percent) != "int" || warning_percent < 0 || hard_percent < warning_percent { return context_error("invalid_budget_threshold") }
+    let previous := context_get(baseline, "components", {})
+    let observed := context_get(current, "components", {})
+    mut warnings := []
+    mut regressions := []
+    if sort(keys(previous)) != sort(keys(observed)) { regressions = push(regressions, {"code": "component_inventory_changed"}) }
+    for name in sort(keys(observed)) {
+        if has_key(previous, name) {
+            for metric in ["bytes", "characters", "estimated_tokens"] {
+                let old := context_get(previous[name], metric, -1)
+                let value := context_get(observed[name], metric, -1)
+                if type(old) != "int" || type(value) != "int" || old < 0 || value < 0 { return context_error("invalid_budget_measurement") }
+                if value * 100 > old * (100 + hard_percent) { regressions = push(regressions, {"component": name, "metric": metric, "code": "context_growth"}) }
+                if value * 100 > old * (100 + warning_percent) { warnings = push(warnings, {"component": name, "metric": metric, "code": "context_growth"}) }
+            }
+            if observed[name]["content_hash"] != previous[name]["content_hash"] { regressions = push(regressions, {"component": name, "code": "normalized_payload_drift"}) }
+        }
+    }
+    return {"ok": len(regressions) == 0, "serialization_version": "kujo.context-ratchet/v1", "warnings": warnings, "regressions": regressions}
+}
