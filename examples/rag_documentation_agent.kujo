@@ -17,10 +17,17 @@ provider := create_kujo_rag_provider({
 metadata := {}
 language := env_or("RAG_EXAMPLE_LANGUAGE", "")
 if language != "" { metadata["retrieval_preferences"] := {"programming_language": language} }
-runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+target := create_agent({"id": "docs", "instructions": "Documentation target", "metadata": {"retrieval_preferences": {"programming_language": "javascript"}}, "policy": {"retrieval": {"enabled": true}}})
+pilot_handoffs := {}
+if env_or("RAG_EXAMPLE_HANDOFF", "0") == "1" { pilot_handoffs = {"docs": target} }
+runner := create_agent_runner({"handoff_registry": pilot_handoffs, "ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
  print(to_json({"model_input": messages}))
  return {"ok": true, "status_code": 200, "output_text": "Documentation retrieved."}
 }})})
-result := run_agent(runner, create_agent({"policy": {"retrieval": {"enabled": true}}}), create_agent_run_request("How do I query the RAG API?", {"metadata": metadata}), {"retrieval_provider": provider})
+source := create_agent({"policy": {"retrieval": {"enabled": true}}})
+if env_or("RAG_EXAMPLE_HANDOFF", "0") == "1" {
+ source = create_agent({"instructions": "Handoff source", "policy": {"retrieval": {"enabled": false}, "target_agent_id": "docs", "handoff": {"target_agent_id": "docs"}}})
+}
+result := run_agent(runner, source, create_agent_run_request("How do I query the RAG API?", {"metadata": metadata}), {"retrieval_provider": provider})
 print(to_json({"status": result["status"], "retrieval": result["metadata"]["retrieval"]}))
 if result["metadata"]["retrieval"]["reason"] != "applied" { exit(1) }
