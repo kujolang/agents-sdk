@@ -1,0 +1,79 @@
+from src.agents.retrieval.provider import create_retrieval_provider_interface
+from src.agents.core_types import resolve_retrieval_preferences
+
+func rag_get(value, key, fallback) {
+ if type(value) != "dict" { return fallback }
+ if has_key(value, "_self") { value = value["_self"] }
+ if has_key(value, key) { return value[key] }
+ return fallback
+}
+
+func rag_failure(kind, message) {
+ return {"ok": false, "error": {"kind": kind, "message": message}}
+}
+
+func retrieve_rag(provider, query, options) {
+ settings := rag_get(provider, "metadata", {})
+ transport := rag_get(settings, "transport", null)
+ if type(transport) != "function" { return rag_failure("not_implemented", "A RAG transport callback is required.") }
+ payload := {"query": rag_get(query, "query_text", "")}
+ namespace := rag_get(settings, "namespace", "")
+ if namespace != "" { payload["namespace"] := namespace }
+ if rag_get(settings, "supports_preferences", false) {
+  preferences := resolve_retrieval_preferences({}, {"metadata": rag_get(query, "metadata", {})})
+  if len(keys(preferences)) > 0 { payload["retrieval_preferences"] := preferences }
+ }
+ response := null
+ try {
+  // The callback owns a configured endpoint, authentication, redirect policy,
+  // timeout and byte bounds. This adapter never probes or retries the service.
+  response = transport({"method": "POST", "path": "/query", "body": payload}, options)
+ } except error {
+  return rag_failure("transport_error", "RAG transport failed.")
+ }
+ status := rag_get(response, "status_code", 0)
+ if type(status) != "int" || status < 200 || status > 299 { return rag_failure("http_error", "RAG returned an unsuccessful HTTP status.") }
+ envelope := rag_get(response, "body", {})
+ if rag_get(envelope, "ok", false) != true { return rag_failure("service_error", "RAG query failed.") }
+ data := rag_get(envelope, "data", {})
+ citations := rag_get(data, "citations", null)
+ if type(citations) != "array" { return rag_failure("invalid_response", "RAG response requires a citations array.") }
+ documents := []
+ references := []
+ for citation in citations {
+  id := rag_get(citation, "chunk_id", "")
+  path := rag_get(citation, "path", "")
+  content := rag_get(citation, "text", null)
+  if type(content) != "string" || id == "" { return rag_failure("invalid_response", "RAG citation is missing text or identity.") }
+  metadata := {"path": path, "line_start": rag_get(citation, "line_start", 1), "line_end": rag_get(citation, "line_end", 1)}
+  documents = push(documents, {"document_id": id, "content": content, "source": path, "score": rag_get(citation, "score", 0), "metadata": metadata})
+  references = push(references, {"citation_id": "rag-" + id, "document_id": id, "span": "L" + to_string(metadata["line_start"]) + "-L" + to_string(metadata["line_end"]), "metadata": metadata})
+ }
+ return {"ok": true, "context": {"documents": documents, "citations": references}, "metadata": {"provider": "kujo-rag", "cache": rag_get(data, "cache", {})}}
+}
+
+export create_kujo_rag_provider := func(options) {
+ return create_retrieval_provider_interface({"name": "KujoRAG", "retrieve_fn": func(provider, query, retrieve_options) { return retrieve_rag(provider, query, retrieve_options) }, "metadata": options})
+}
+
+# Endpoint and credentials are host configuration, never model-supplied input.
+export create_kujo_rag_http_transport := func(base_url, transport_options) {
+ return func(request, options) {
+  if type(base_url) != "string" || (starts_with(base_url, "http://") == false && starts_with(base_url, "https://") == false) {
+   return {"status_code": 0}
+  }
+  endpoint := base_url
+  if ends_with(endpoint, "/") { endpoint = substring(endpoint, 0, len(endpoint) - 1) }
+  headers := {"Content-Type": "application/json", "Accept": "application/json"}
+  token := rag_get(transport_options, "bearer_token", "")
+  if type(token) == "string" && token != "" { headers["Authorization"] := "Bearer " + token }
+  wire := http_request(endpoint + "/query", {"method": "POST", "headers": headers, "body": to_json(request["body"]), "timeout": rag_get(transport_options, "timeout_seconds", 10), "max_response_bytes": rag_get(transport_options, "max_response_bytes", 1048576), "redirects": "none", "pin_dns": true})
+  match wire {
+   case Ok(response): {
+    decoded := parse_json(rag_get(response, "_body", rag_get(response, "body", "")))
+    return {"status_code": rag_get(response, "_status", rag_get(response, "status", 0)), "body": decoded}
+   }
+   case Err(error): { return {"status_code": 0} }
+  }
+ }
+}

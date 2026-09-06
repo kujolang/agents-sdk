@@ -1,0 +1,41 @@
+test_setup {
+ from src.agents.retrieval.rag_adapter import create_kujo_rag_provider
+ from src.agents.retrieval.provider import retrieval_provider_retrieve
+}
+
+test "RAG adapter uses declared body preferences and preserves citation provenance" {
+ provider := create_kujo_rag_provider({"namespace": "team", "supports_preferences": true, "transport": func(request, options) {
+  assert_equal(request["method"], "POST")
+  assert_equal(request["path"], "/query")
+  assert_equal(request["body"], {"query": "example", "namespace": "team", "retrieval_preferences": {"programming_language": "python"}})
+  return {"status_code": 200, "body": {"ok": true, "data": {"citations": [{"chunk_id": "example", "path": "docs/client.md", "text": "Python plus shared guidance", "line_start": 3, "line_end": 12}], "cache": {"hit": false}}}}
+ }})
+ result := retrieval_provider_retrieve(provider, {"query_text": "example", "metadata": {"retrieval_preferences": {"programming_language": " Python "}}}, {})
+ assert_equal(result["ok"], true)
+ assert_equal(result["documents"][0]["content"], "Python plus shared guidance")
+ assert_equal(result["citations"][0]["span"], "L3-L12")
+ assert_equal(result["citations"][0]["metadata"]["path"], "docs/client.md")
+}
+
+test "older RAG and absence omit preferences without extra request fields" {
+ for supports in [false, true] {
+  provider := create_kujo_rag_provider({"supports_preferences": supports, "transport": func(request, options) {
+   assert_equal(request["body"], {"query": "example"})
+   return {"status_code": 200, "body": {"ok": true, "data": {"citations": []}}}
+  }})
+  metadata := {}
+  if supports == false { metadata = {"retrieval_preferences": {"programming_language": "rust"}} }
+  result := retrieval_provider_retrieve(provider, {"query_text": "example", "metadata": metadata}, {})
+  assert_equal(result["ok"], true)
+  assert_equal(result["documents"], [])
+ }
+}
+
+test "RAG adapter rejects invalid and unsuccessful responses" {
+ for response in [{"status_code": 403}, {"status_code": 200, "body": {"ok": false}}, {"status_code": 200, "body": {"ok": true, "data": {}}}] {
+  provider := create_kujo_rag_provider({"transport": func(request, options) { return response }})
+  result := retrieval_provider_retrieve(provider, {"query_text": "example"}, {})
+  assert_equal(result["ok"], false)
+  assert_equal(type(result["error"]), "dict")
+ }
+}

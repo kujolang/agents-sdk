@@ -88,3 +88,25 @@ to prevent the interpreter from replacing the outer result options.
 
 `tests/retrieval_single_call_tests.kujo` checks actual callback receipts and
 content preservation, including wrapped legacy envelopes and multiple documents.
+
+## Supported Kujo RAG adapter
+
+`src.agents.retrieval.rag_adapter` exports `create_kujo_rag_provider` and `create_kujo_rag_http_transport`. This is an explicit Kujo RAG `/query` adapter, separate from the core propagation contract.
+
+```kujo
+from src.agents.retrieval.rag_adapter import create_kujo_rag_provider, create_kujo_rag_http_transport
+
+provider := create_kujo_rag_provider({
+    "namespace": "default",
+    "supports_preferences": true,
+    "transport": create_kujo_rag_http_transport("http://127.0.0.1:8787", {})
+})
+```
+
+Only set `supports_preferences` for a recipient implementing the RAG request field. Its default is false; older recipients receive an ordinary query. The transport callback receives a POST `/query` descriptor and returns `{status_code, body}` with the decoded RAG envelope. A custom callback owns endpoint selection, authentication, timeout, redirect, and byte limits.
+
+The provided HTTP transport takes a host-configured base URL and optional `bearer_token`, `timeout_seconds` (default 10), and `max_response_bytes` (default 1 MiB). It pins DNS under runtime network policy, follows no redirects, and makes one call without probing or retrying. It sends no code-language headers. Keep the endpoint and credentials outside model arguments.
+
+Successful citations become retrieved documents with their original text, paths, and source line ranges. Empty citations remain empty; non-success HTTP responses, invalid envelopes, and transport exceptions remain failures. Provider errors do not expose response bodies or authentication values.
+
+`examples/rag_documentation_agent.kujo` is an **opt-in live retrieval** example. Start the RAG documentation pilot, then run it with `RAG_URL` and optional `RAG_EXAMPLE_LANGUAGE=python`. The model callback is local and prints the actual messages presented to it; no model inference is billed. This live example is intentionally excluded from the offline smoke aggregator. RAG's `scripts/verify_retrieval_preferences.py` checks this real transport and records exact tokenizer counts for captured model-input content.

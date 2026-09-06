@@ -72,3 +72,7 @@ Examples:
 - Hosted policy control planes should write policy payloads consumed by approval/guardrail interfaces.
 - Hosted run managers should orchestrate `run_agent` boundaries externally, not modify runner internals.
 - Hosted observability should ingest trace/event outputs from sink contracts rather than bypassing contracts.
+
+### Kujo RAG documentation
+
+The optional `src/agents/retrieval/rag_adapter.kujo` maps the documented RAG `/query` envelope into retrieval documents and citations. Host-owned transport configuration is separate from task-owned preferences. `supports_preferences` explicitly enables the Kujo body parameter; unsupported recipients receive their existing body shape. See `docs/RETRIEVAL_PREFERENCES.md` and the opt-in live example for timeout, byte, redirect, and error behavior.
