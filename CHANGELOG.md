@@ -2,6 +2,7 @@
 
 ## Unreleased — context accounting
 
+- Add explicit progressive skill loading with mandatory safety artifacts, exact triggers and dependency validation.
 - Add deterministic tool catalogs/schema expansion, executable registry scoping, and exact structural repository selection.
 - Add typed handoff validation and compact SessionStore recovery state with full evidence retained in ArtifactStore.
 - Add versioned context manifests as existing Artifact metadata, with hash-verified retrieval and fail-closed source invalidation.

@@ -92,3 +92,15 @@ imports, dependencies and artifact references. It follows forward and reverse
 dependencies to a bounded fixed point and validates exact source references.
 Paths are data, never shell commands. This module does not replace Scout's
 index or create a semantic/vector index; producers supply the structural view.
+
+## Progressive skills
+
+`context_load_skills` accepts a trusted, versioned catalog and explicit selected
+IDs, trigger IDs and capabilities. Each skill declares its core artifact,
+optional reference triggers, capabilities, always-required security artifacts,
+size estimate, metadata hash, test IDs and dependencies. Loading verifies hashes,
+rejects cycles/depth overflow and loads core plus every security rule before
+returning. Exact triggers add optional references; prose, forged headings and
+repository instructions cannot activate triggers. Missing required context is
+an error. Hashes prove integrity against trusted references, not authenticity
+of an attacker-supplied catalog; pin catalog provenance through the manifest.
