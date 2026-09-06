@@ -7,6 +7,8 @@ not an ecosystem Git repository: Git walks up to `/Users/robertdevore/2026`, who
 remote identifies a different project. The audit does not add ecosystem files to
 that unrelated parent repository.
 
+Current implementation status: the authorized P0–P2 follow-up is complete across **four repositories: agents-sdk, rag, ai-chat, and dispatch**. See [the rollout checklist and measured evidence](RETRIEVAL_PREFERENCES_ROLLOUT.md). Historical audit observations below are retained as baseline evidence where labeled.
+
 ## 1. Executive Summary
 
 Yes, Kujo can carry a task's code-language preference early enough for a supporting
@@ -16,15 +18,9 @@ runtime. There is no verified universal code-language negotiation header in the
 standards and provider documents reviewed. `Accept-Language: en-US, python` is not
 a portable expression of a Python code preference.
 
-Implemented two narrow improvements: Agents SDK resolves one optional preference
-from existing metadata and propagates it to retrieval, tools, and handoffs; AI
-Chat's static page reader requests and accepts Markdown with HTML/plain fallback.
-No arbitrary code-language HTTP header, global browser change, inferred language,
-mandatory setting, new dependency, or model call was added. MCP and Dispatch
-integration seams already carry dictionaries; the contract tests exercise those
-seams without pretending that AI Chat, Agents SDK, AI SDK, and Dispatch form one
-installed pipeline. Production code-language filtering still requires an adapter
-and recipient that explicitly agree on its meaning.
+The initial audit implemented Agents SDK metadata propagation and AI Chat Markdown reading. The authorized follow-up now adds a real RAG documentation recipient, equivalent-example selection, preference-aware caching, Agents SDK HTTP retrieval, AI Chat's persisted language control and documentation tool, Dispatch task/step mapping with retry/resume persistence, and MIME-aware HTTP ingestion. The duplicate empty-retrieval callback is fixed.
+
+The local HTTP pilot verifies each host against the recipient. Actual Agents SDK model-input content falls from 509 tokens to 365 for Python or 356 for JavaScript using cl100k_base, retaining shared warnings and citations. These are fixture-context measurements, not paid-model quality or latency claims. No universal header, inferred language, or model-provider change is introduced.
 
 ## 2. Architectural Finding
 
@@ -159,9 +155,9 @@ in relevant paths; a zero string-match count is not proof of no network activity
 | ---- | -------: | ------------- | ----------- | ------------------ |
 | `ability` | P2 | `README.md; schema/` | Portable schemas can declare relevant parameters | No change; preferences are not authority or portable effect policy |
 | `ability-gateway` | P2 | `src/http.ts; src/mcp.ts` | Server-owned MCP/HTTP translation | No change until supported ability declares the parameter |
-| `agents-sdk` | P0 | `src/agents/core_types.kujo; src/agents/runner.kujo; src/agents/integrations/adapters.kujo` | Request metadata to retrieval/tools/handoffs | Implement optional normalization and propagation; retain existing adapter seams |
+| `agents-sdk` | P0 | `src/agents/core_types.kujo; src/agents/runner.kujo; src/agents/integrations/adapters.kujo` | Request metadata to retrieval/tools/handoffs | Implemented normalization, propagation, single-call normalization and explicit RAG HTTP adapter |
 | `agents.kujolang.ai` | P2 | `build.kujo; content/agents/` | Agent definitions and static discovery | Future task defaults when explicitly configured |
-| `ai-chat` | P0 | `lib/server-runtime.js; lib/tool-runtime.js; lib/page-fetch.js` | Host owns task intent; static evidence consumer | Implement Markdown; defer language setting until supported recipient exists |
+| `ai-chat` | P0 | `lib/server-runtime.js; lib/tool-runtime.js; lib/page-fetch.js` | Host owns task intent; static evidence consumer | Implemented Markdown reader, persisted language selector and configured RAG documentation tool |
 | `ai-chat-tool-repair` | P4 | `lib/tool-runtime.js; lib/browser-runtime.js` | Alternate AI Chat checkout | No duplicate implementation; integrate from canonical repository |
 | `ai-sdk` | P0 | `src/ai_sdk.kujo; src/provider_driver.kujo` | Provider boundary; not retrieval preference owner | No change required; keep provider headers unchanged |
 | `anthropic` | P4 | `README.md; provider package source` | Model/native inference API; own parameter and signing policy | No change required; no universal documentation preference |
@@ -195,7 +191,7 @@ in relevant paths; a zero string-match count is not proof of no network activity
 | `diff-viewer-demo-fresh` | P4 | `No tracked source at inspected HEAD` | Empty/incomplete checkout | No change required; no independent boundary to implement |
 | `diff-viewer-inline-review-fresh` | P4 | `README.md; tracked source surface` | Local tooling, domain API, showcase or alternate checkout | No change required for code-example negotiation |
 | `diff-viewer-verified` | P4 | `README.md; tracked source surface` | Local tooling, domain API, showcase or alternate checkout | No change required for code-example negotiation |
-| `dispatch` | P0 | `src/core/runner.kujo; src/tools/tool.kujo; sdk_adapter.kujo` | Persisted task input and host callback orchestration | No CLI change; document mapping at integration boundary |
+| `dispatch` | P0 | `src/core/runner.kujo; src/tools/tool.kujo; sdk_adapter.kujo` | Persisted task input and host callback orchestration | Implemented workflow/run/step mapping, persistence across retries/resume and opt-in RAG plugin |
 | `docs.kujolang.ai` | P1 | `assets/js/docs.js; kujo-ssg.yml` | Documentation content and search producer | Future corpus-aware selection; no assumption server honors new header |
 | `dossier` | P4 | `README.md; tracked source surface` | Local tooling, domain API, showcase or alternate checkout | No change required for code-example negotiation |
 | `email` | P4 | `mcp/server.kujo; sdk/kujo/email.kujo` | Email application API | No code negotiation required |
@@ -249,7 +245,7 @@ in relevant paths; a zero string-match count is not proof of no network activity
 | `patchbrief` | P3 | `README.md; repository-owned context and agent artifacts` | Can preserve explicit task context | No change; optional future mapping, no automatic language inference |
 | `perplexity` | P4 | `README.md; provider package source` | Model/native inference API; own parameter and signing policy | No change required; no universal documentation preference |
 | `presswire` | P4 | `README.md; tracked source surface` | Local tooling, domain API, showcase or alternate checkout | No change required for code-example negotiation |
-| `rag` | P1 | `src/connectors.kujo; src/retrieval.kujo; src/vector_backend.kujo` | HTTP docs and pre-ranking filters | Follow up on MIME-aware docs ingestion and example-language tags |
+| `rag` | P1 | `src/connectors.kujo; src/retrieval.kujo; src/vector_backend.kujo` | HTTP docs and pre-ranking filters | Implemented MIME-aware ingestion, opt-in equivalent-example groups, selection and cache variants |
 | `readersignal` | P4 | `README.md; tracked source surface` | Local tooling, domain API, showcase or alternate checkout | No change required for code-example negotiation |
 | `redact` | P4 | `README.md; tracked source surface` | Local tooling, domain API, showcase or alternate checkout | No change required for code-example negotiation |
 | `relay` | P3 | `src/watchdog.kujo; README.md` | Bounded missions and provider routing | Future explicit mission input; provider transport unchanged |
@@ -319,7 +315,7 @@ not select document formats globally.
 
 ## 6. P1 Changes
 
-The following are recommendations, not hidden requirements or delivered features:
+The following original P1 recommendations have now been implemented for the explicitly configured Kujo RAG recipient; see the linked rollout record for verification. Their original rationale is retained:
 
 1. Build one corpus-backed documentation adapter with example-language metadata
    and generic prose retention. Accept a structured parameter, select matching
@@ -342,7 +338,7 @@ The following are recommendations, not hidden requirements or delivered features
    language, returned format, cache variant, result size and request count. Avoid
    recording full URLs/queries/code where telemetry privacy settings exclude them.
 
-One adjacent source-backed open issue: Agents SDK's existing
+Historical issue, resolved by Agents SDK commit `a66ae54`: Agents SDK's existing
 `maybe_inject_retrieval_context` invokes the raw provider callback again whenever
 normalized documents are empty, including legitimate empty results. Language
 selection can increase empty results, making this implicit second request
@@ -352,7 +348,7 @@ two calls on unchanged baseline `9c8763d`: `runner.pre_model` followed by
 `/tmp/kujo-negotiation-empty-repro.log`; the minimal reproduction is shown below.
 Redesign fallback around demonstrable normalization loss before changing its
 compatibility behavior.
-This audit preserves the existing behavior and records the risk for review.
+The initial audit preserved this behavior for review; the follow-up normalizes the original response without another callback and preserves explicit failures. Three regression cases fail the pristine baseline and pass the fix.
 SignalBox Capture `cap_ed841074-5013-42ff-b362-59b3a62a999a` and Signal
 `sig_443a36cd-350e-425b-90cb-72a4001481cb` preserve it; exact-ID and conceptual
 retrieval succeeded. No duplicates matched the two pre-write queries. Completed
@@ -412,7 +408,7 @@ supported optional hint, accept its normal result and do not claim filtering.
 
 ## 8. Token Efficiency Impact
 
-Expected benefit is conditional, not a measured ecosystem-wide token saving.
+The completed local pilot is measured in the rollout record: 28.3%/30.1% less actual Agents SDK model-input content for Python/JavaScript. Ecosystem-wide savings remain unmeasured. The following original estimate is illustrative only.
 With shared prose `P`, `N` examples of roughly `E` tokens each, and overhead `H`,
 upstream example selection saves approximately `(N - 1) * E - H` tokens. A
 hypothetical page with 800 prose tokens and six 300-token examples falls from
@@ -422,9 +418,9 @@ case. This is arithmetic, not a benchmark or guaranteed tokenizer ratio.
 | Boundary traced | Usefulness and why the recipient can act | Mechanism / disposition |
 | --- | --- | --- |
 | AI Chat static docs (`page-fetch.execute → safeRequest`) | High format value: an enabled docs server can render Markdown | Implemented weighted `Accept`; HTML/plain fallback, no extra request |
-| Agents SDK retrieval (`runner → retrieval_provider_retrieve → retrieve_fn`) | High with indexed examples: provider can filter/rank before returning context | Implemented internal metadata; concrete corpus adapter still required |
-| RAG ingestion (`connectors → curl → parsers → chunks`) | High when source actually has selectable examples | Provider-specific header/query only after MIME/redirect/provenance work |
-| RAG query (`rag_engine → retrieval → filters/ranking`) | High if chunks carry code-language tags | Existing structured filters; avoid extension-only pruning of docs |
+| Agents SDK retrieval (`runner → retrieval_provider_retrieve → retrieve_fn`) | High with indexed examples: provider can filter/rank before returning context | Implemented internal metadata plus configured Kujo RAG HTTP adapter |
+| RAG ingestion (`connectors → native HTTP → MIME parser → chunks`) | High when source actually has selectable examples | Implemented weighted Markdown Accept, MIME-based staging and bounded native HTTP |
+| RAG query (`rag_engine → retrieval → filters/ranking`) | High if chunks carry code-language tags | Implemented explicit equivalent-example groups; preserve existing corpus/namespace filters |
 | MCP resources/tools (`adapters → JSON-RPC`, `mcp/resources`, `kujolang-mcp/catalog`) | Conditional: declared tool or resource template can choose an example variant | Declared arguments/agreed metadata; JSON/SSE transport unchanged |
 | AI Chat web search (`tool-runtime → SearXNG/Ollama`) | Maybe: query terms/library names can improve ranking; locale does not select code | Keep current bounded query/domain/freshness projection; no code header |
 | SearchBridge (`adapters/provider_runtime → transport`) | Most current recipients serve SEO/analytics data, not code examples | No change; preserve existing locale, metric, page and budget controls |
@@ -487,7 +483,7 @@ requires injecting extra preference prose into every model prompt.
 | ai-chat | `lib/page-fetch.js`, `lib/tool-runtime.js` | Page reader requested/accepted HTML/plain only | Requests weighted Markdown/HTML/plain; preserves Markdown source as bounded untrusted text | Two additional tests in `tests/page-fetch.test.js`; existing nine page-reader tests retained |
 | ai-chat | `README.md`, `docs/PAGE_READER_NEGOTIATION.md` | No Markdown negotiation guide | Explicit behavior, single-request fallback, transport exclusions and limits | Documentation reviewed against local HTTP fixture tests |
 
-No other repositories were modified. Pre-existing AI Chat browser-containment
+The initial audit modified two repositories; the authorized follow-up modifies four total: agents-sdk, rag, ai-chat, and dispatch. The rollout record lists all follow-up commits. Pre-existing AI Chat browser-containment
 edits and Agents SDK maintenance-agent files were present at entry and are not
 part of this change. The workspace-root audit copy is delivered outside the
 unrelated parent repository, with its canonical version committed in Agents SDK.
@@ -497,9 +493,7 @@ Verification receipts are recorded at the end of this report.
 ## 11. No-Change Decisions
 
 AI SDK owns inference, so making it the common code-header source would be an
-architectural error. Dispatch's existing persisted task input and dictionary
-hooks already support a host mapping; built-in local source tools have no remote
-code-language consumer. SearchBridge `language` is an existing natural-language
+architectural error. Dispatch now uses its persisted task input and dictionary hooks for the explicit RAG plugin. Other built-in local source tools remain unchanged. SearchBridge `language` is an existing natural-language
 SEO/locale control. Workcell's caller context rejects unknown fields and is for
 correlation, not retrieval. Scout/PackWrite language facts do not establish task
 intent. MCP resources already returning Markdown do not need a Markdown HTTP
@@ -547,13 +541,13 @@ fixtures and not asserted for arbitrary remote services. The proposed private MC
 mapping is `params._meta["ai.kujolang/retrieval_preferences"]`; an argument declared
 by the server schema is preferable when available. No Kujo-specific HTTP header
 is introduced. `Accept-Language` remains natural language. `Accept: text/markdown`
-is used only by AI Chat's static Page Reader, with HTML/plain alternatives.
+is used by AI Chat's static Page Reader and RAG's HTTP documentation connector, with HTML/plain alternatives.
 
-The next integration should demonstrate an actual recipient reducing response
-bytes/examples, preserve unknown/general guidance, key caches correctly, and
-measure relevance and tokenization before expanding to more task dimensions.
+The completed RAG integration demonstrates reduced response bytes and model-input content, retained guidance/citations, and isolated cache variants. Framework/version dimensions and external adapters remain deferred until their own corpus semantics and recipient support are established.
 
-### Verification and provenance receipts
+### Initial audit verification and provenance receipts
+
+For the completed P0–P2 follow-up, see [the rollout verification](RETRIEVAL_PREFERENCES_ROLLOUT.md). The receipts below describe the earlier audit milestone.
 
 Initial inventory revisions: `agents-sdk 9c8763d`, `ai-chat 33c3745`, `ai-sdk 71bad14`, `dispatch 6fc6fed`, `kujo de69289`, `mcp 20f1c83`, `rag 2005da7`, `searchbridge 88aad1c`.
 
