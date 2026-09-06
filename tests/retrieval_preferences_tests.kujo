@@ -1,0 +1,98 @@
+test_setup {
+ from src.agents.core_types import create_agent, create_agent_run_request, resolve_retrieval_preferences
+ from src.agents.runner import create_agent_runner, run_agent
+ from src.agents.ai.adapter import create_ai_sdk_adapter
+ from src.agents.tools.registry import create_tool_registry, register_tool
+ from src.agents.retrieval.provider import create_retrieval_provider_interface
+ from src.agents.integrations.adapters import create_dispatch_integration_hooks, dispatch_run_agent_step, create_mcp_2026_call_tool_request
+}
+
+test "task override normalization extensibility and explicit suppression" {
+ agent := create_agent({"metadata": {"retrieval_preferences": {"programming_language": "TypeScript"}}})
+ assert_equal(resolve_retrieval_preferences(agent, {})["programming_language"], "typescript")
+ for pair in [[" Python ", "python"], ["Rust", "rust"], ["c++", "cpp"], ["c#", "csharp"], ["new_language-2", "new_language-2"]] {
+  request := create_agent_run_request("task", {"metadata": {"retrieval_preferences": {"programming_language": pair[0]}}})
+  assert_equal(resolve_retrieval_preferences(agent, request)["programming_language"], pair[1])
+ }
+ for value in [null, "", 42, "rust\r\nX-Test: yes", "en-US, python", "../rust", "1rust", "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm"] {
+  assert_equal(resolve_retrieval_preferences(agent, {"metadata": {"retrieval_preferences": {"programming_language": value}}}), {})
+ }
+ assert_equal(resolve_retrieval_preferences(agent, {"metadata": {"retrieval_preferences": {}}}), {})
+ assert_equal(resolve_retrieval_preferences({}, {}), {})
+}
+
+test "harness Dispatch hook runner retrieval and supported MCP adapter preserve preference" {
+ provider := create_retrieval_provider_interface({"retrieve_fn": func(provider, query, options) {
+  assert_equal(query["metadata"]["retrieval_preferences"]["programming_language"], "python")
+  assert_equal(query["metadata"]["corpus"], "docs")
+  return {"ok": true, "context": {"documents": [{"document_id": "python-doc", "content": "Python-only example", "score": 1}]}}
+ }})
+ registration := register_tool(create_tool_registry({}), {"id": "tool-docs", "name": "docs", "input_schema": {"type": "object", "properties": {}}, "handler": func(input, context) {
+  preferences := context["metadata"]["retrieval_preferences"]
+  assert_equal(preferences["programming_language"], "python")
+  // Fixture server explicitly supports this private key; arbitrary servers do not.
+  descriptor := create_mcp_2026_call_tool_request("docs", input, {"meta": {"ai.kujolang/retrieval_preferences": preferences}})
+  assert_equal(descriptor["request"]["params"]["_meta"]["ai.kujolang/retrieval_preferences"]["programming_language"], "python")
+  assert_equal(has_key(descriptor["headers"], "Accept-Language"), 0)
+  return {"ok": true, "output": descriptor}
+ }})
+ adapter := create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+  assert_equal(has_key(options, "retrieval_preferences"), 0)
+  assert_equal(has_key(options, "headers"), 0)
+  assert_equal(contains(to_json(messages), "Python-only example"), 1)
+  return {"ok": true, "output_text": "done", "tool_calls": [{"name": "docs", "input": {}}], "status_code": 200}
+ }})
+ agent := create_agent({"metadata": {"retrieval_preferences": {"programming_language": "typescript"}}, "policy": {"retrieval": {"enabled": true, "metadata": {"corpus": "docs", "retrieval_preferences": {"programming_language": "go"}}}}})
+ hooks := create_dispatch_integration_hooks({"run_agent_step_fn": func(step, options) {
+  return run_agent(options["runner"], options["agent"], step, {"retrieval_provider": options["retrieval_provider"], "tool_registry": options["tool_registry"]})
+ }})
+ request := create_agent_run_request("Use Python", {"metadata": {"retrieval_preferences": {"programming_language": " Python "}}})
+ result := dispatch_run_agent_step(hooks, request, {"runner": create_agent_runner({"ai_adapter": adapter}), "agent": agent, "retrieval_provider": provider, "tool_registry": registration["registry"]})
+ assert_equal(result["status"], "completed")
+ assert_equal(result["metadata"]["tool_calls"][0]["result"]["ok"], true)
+ assert_equal(request["metadata"]["retrieval_preferences"]["programming_language"], " Python ")
+}
+
+test "unsupported tools preserve ordinary execution with and without preference" {
+ registration := register_tool(create_tool_registry({}), {"id": "tool-plain", "name": "plain", "input_schema": {"type": "object", "properties": {}}, "handler": func(input, context) {
+  return {"ok": true, "output": {"text": "unchanged"}}
+ }})
+ runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+  return {"ok": true, "output_text": "done", "status_code": 200, "tool_calls": [{"name": "plain", "input": {}}]}
+ }})})
+ for metadata in [{}, {"retrieval_preferences": {"programming_language": "rust"}}] {
+  result := run_agent(runner, create_agent({}), create_agent_run_request("task", {"metadata": metadata}), {"tool_registry": registration["registry"]})
+  assert_equal(result["status"], "completed")
+  assert_equal(result["metadata"]["tool_calls"][0]["result"]["output"]["text"], "unchanged")
+ }
+}
+
+test "handoff preserves explicit task language against target defaults" {
+ registration := register_tool(create_tool_registry({}), {"id": "observe", "name": "observe", "handler": func(input, context) {
+  assert_equal(context["metadata"]["retrieval_preferences"]["programming_language"], "rust")
+  return {"ok": true, "output": "observed"}
+ }})
+ target := create_agent({"id": "target", "instructions": "Target", "metadata": {"retrieval_preferences": {"programming_language": "python"}}})
+ source := create_agent({"id": "source", "instructions": "Source", "policy": {"target_agent_id": "target", "handoff": {"target_agent_id": "target"}}})
+ runner := create_agent_runner({"handoff_registry": {"target": target}, "ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+  if messages[0]["content"] == "Target" { return {"ok": true, "status_code": 200, "output_text": "target done", "tool_calls": [{"name": "observe", "input": {}}]} }
+  return {"ok": true, "status_code": 200, "output_text": "source done"}
+ }})})
+ result := run_agent(runner, source, create_agent_run_request("task", {"metadata": {"retrieval_preferences": {"programming_language": "rust"}}}), {"tool_registry": registration["registry"]})
+ assert_equal(result["status"], "completed")
+ assert_equal(result["output"]["text"], "target done")
+}
+
+test "unset preference adds no signal to tool metadata or MCP request" {
+ registration := register_tool(create_tool_registry({}), {"id": "observe", "name": "observe", "handler": func(input, context) {
+  assert_equal(context["metadata"], {})
+  descriptor := create_mcp_2026_call_tool_request("docs", input, {})
+  assert_equal(has_key(descriptor["request"]["params"]["_meta"], "ai.kujolang/retrieval_preferences"), 0)
+  return {"ok": true, "output": "unchanged"}
+ }})
+ runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+  return {"ok": true, "status_code": 200, "output_text": "done", "tool_calls": [{"name": "observe", "input": {}}]}
+ }})})
+ result := run_agent(runner, create_agent({}), create_agent_run_request("task", {}), {"tool_registry": registration["registry"]})
+ assert_equal(result["status"], "completed")
+}

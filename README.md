@@ -380,3 +380,7 @@ kujo test-run tests/runner_result_event_contract_tests.kujo -v
 kujo test-run tests/example_smoke_tests.kujo -v
 bash scripts/ci_no_network_enforcement.sh
 ```
+
+## Retrieval content preferences
+
+[Programming-language retrieval preferences](docs/RETRIEVAL_PREFERENCES.md) describes optional retrieval behavior and compatibility boundaries.

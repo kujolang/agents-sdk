@@ -354,6 +354,30 @@ func create_agent_run_request_impl(input_text, options) {
 	}
 }
 
+// Kujo-specific retrieval hints, never model-provider headers or inferred locale.
+// An explicitly supplied namespace (including empty/invalid) suppresses defaults.
+func resolve_retrieval_preferences_impl(agent, run_request) {
+	metadata := normalize_dict(dict_get_or(agent, "metadata", {}))
+	request_metadata := normalize_dict(dict_get_or(run_request, "metadata", {}))
+	if has_key(request_metadata, "retrieval_preferences") {
+		metadata = request_metadata
+	}
+	preferences := normalize_dict(dict_get_or(metadata, "retrieval_preferences", {}))
+	language := dict_get_or(preferences, "programming_language", "")
+	if type(language) != "string" { return {} }
+	language = to_lower(trim(language))
+	if language == "c++" { language = "cpp" }
+	if language == "c#" { language = "csharp" }
+	if len(language) == 0 || len(language) > 64 { return {} }
+	alphabet := "abcdefghijklmnopqrstuvwxyz"
+	if contains(alphabet, substring(language, 0, 1)) == 0 { return {} }
+	allowed := alphabet + "0123456789_-"
+	for i in range(len(language)) {
+		if contains(allowed, substring(language, i, i + 1)) == 0 { return {} }
+	}
+	return {"programming_language": language}
+}
+
 func create_agent_context_impl(agent, run_request, runtime_options) {
 	runtime_map := normalize_dict(runtime_options)
 	return {
@@ -406,6 +430,7 @@ func describe_core_types_module_impl() {
 			"create_agent_step",
 			"create_agent_run_request",
 			"create_agent_context",
+			"resolve_retrieval_preferences",
 			"create_agent_run_result"
 		]
 	}
@@ -422,6 +447,7 @@ export agent_execution_compatible := agent_execution_compatible_impl
 export create_agent_message := create_agent_message_impl
 export create_agent_step := create_agent_step_impl
 export create_agent_run_request := create_agent_run_request_impl
+export resolve_retrieval_preferences := resolve_retrieval_preferences_impl
 export create_agent_context := create_agent_context_impl
 export create_agent_run_result := create_agent_run_result_impl
 export describe_core_types_module := describe_core_types_module_impl

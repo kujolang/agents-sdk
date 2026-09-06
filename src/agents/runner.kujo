@@ -1,4 +1,4 @@
-from src.agents.core_types import create_agent_run_request, create_agent_context, create_agent_message
+from src.agents.core_types import create_agent_run_request, create_agent_context, create_agent_message, resolve_retrieval_preferences
 from src.agents.core_types import create_agent_step, create_agent_run_result, validate_agent_config
 from src.agents.events import create_agent_event
 from src.agents.errors import create_agent_error
@@ -1411,11 +1411,17 @@ func maybe_inject_retrieval_context(messages_input, retrieval_provider, retrieva
 		}
 	}
 
+	query_metadata := normalize_dict(dict_get_or(retrieval_config, "metadata", {}))
+	preferences := normalize_dict(dict_get_or(dict_get_or(run_request, "metadata", {}), "retrieval_preferences", {}))
+	// Preserve unrelated provider metadata, but do not reconstruct task preferences.
+	if has_key(query_metadata, "retrieval_preferences") || len(keys(preferences)) > 0 {
+		query_metadata["retrieval_preferences"] := preferences
+	}
 	retrieval_result := retrieval_provider_retrieve(retrieval_provider, {
 		"query_text": query_text,
 		"top_k": max_documents,
 		"scope": normalize_dict(dict_get_or(retrieval_config, "scope", {})),
-		"metadata": normalize_dict(dict_get_or(retrieval_config, "metadata", {}))
+		"metadata": query_metadata
 	}, {
 		"source": "runner.pre_model"
 	})
@@ -1431,7 +1437,7 @@ func maybe_inject_retrieval_context(messages_input, retrieval_provider, retrieva
 				"query_text": query_text,
 				"top_k": max_documents,
 				"scope": normalize_dict(dict_get_or(retrieval_config, "scope", {})),
-				"metadata": normalize_dict(dict_get_or(retrieval_config, "metadata", {}))
+				"metadata": query_metadata
 			}, {
 				"source": "runner.pre_model.raw_fallback"
 			})
@@ -1808,6 +1814,15 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 		return create_runner_error_result("failed", error_payload, [], {})
 	}
 
+	retrieval_preferences := resolve_retrieval_preferences(agent_map, run_request)
+	preference_metadata := {}
+	if len(keys(retrieval_preferences)) > 0 {
+		preference_metadata["retrieval_preferences"] := retrieval_preferences
+	}
+	// Resolve once; retrieval and tools consume the same bounded value.
+	resolved_request_metadata := normalize_dict(dict_get_or(run_request, "metadata", {}))
+	resolved_request_metadata["retrieval_preferences"] := retrieval_preferences
+	run_request["metadata"] := resolved_request_metadata
 	context := create_agent_context(agent_map, run_request, options_map)
 	run_id := normalize_string(dict_get_or(run_request, "run_id", ""), "")
 	session_id := normalize_string(dict_get_or(run_request, "session_id", ""), "")
@@ -2506,6 +2521,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 
 		tool_call_stage = "create_tool_execution_context"
 		tool_execution_context := create_tool_execution_context({
+			"metadata": preference_metadata,
 			"run_id": run_id,
 			"session_id": session_id,
 			"agent_id": agent_id,
@@ -2957,6 +2973,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 			"run_id": run_id + "-handoff-" + target_agent_id,
 			"session_id": session_id,
 			"metadata": {
+				"retrieval_preferences": retrieval_preferences,
 				"handoff_parent_run_id": run_id,
 				"handoff_request_id": normalize_string(dict_get_or(handoff_request, "request_id", ""), ""),
 				"handoff_depth": next_handoff_depth,
