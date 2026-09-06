@@ -30,6 +30,13 @@ repository = "https://github.com/kujolang/agents-sdk"
 version = "1.0.0"
 
 [package.exports]
+context_ledger = "src/agents/context/ledger.kujo"
+context_manifest = "src/agents/context/manifest.kujo"
+context_state = "src/agents/context/state.kujo"
+context_views = "src/agents/context/views.kujo"
+context_skills = "src/agents/context/skills.kujo"
+context_ratchet = "src/agents/context/ratchet.kujo"
+context_dispatch = "src/agents/context/dispatch.kujo"
 agents = "src/agents/index.kujo"
 ai_adapter = "src/agents/ai/adapter.kujo"
 core_types = "src/agents/core_types.kujo"

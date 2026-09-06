@@ -1,3 +1,4 @@
+from src.agents.security.approval import create_redaction_policy
 // Metadata-only observation. Never serialize raw credentials or model content to a sink.
 export func context_get(value, key, fallback) {
     if type(value) == "dict" { if has_key(value, key) { return value[key] } }
@@ -107,18 +108,28 @@ export func observe_context(adapter, messages, request_options, response) {
 
 // Durable evidence retains values but cannot persist executable runtime callbacks.
 // Secret values stay redacted, matching existing JSON/event policy.
-export func context_evidence(value) {
+func evidence_value(value, policy) {
     if is_secret(value) { return "***" }
     if type(value) == "dict" {
         mut result := {}
-        for key in keys(value) { result[key] = context_evidence(value[key]) }
+        for key in keys(value) {
+            if contains(policy["masked_keys"], key) { result[key] = policy["replacement"] }
+            else { result[key] = evidence_value(value[key], policy) }
+        }
         return result
     }
     if type(value) == "array" {
         mut result := []
-        for item in value { result = push(result, context_evidence(item)) }
+        for item in value { result = push(result, evidence_value(item, policy)) }
         return result
+    }
+    if type(value) == "string" {
+        for term in policy["blocked_value_terms"] { if index_of(value, term) >= 0 { return policy["replacement"] } }
     }
     if type(value) == "function" { return {"runtime_value": "function"} }
     return value
+}
+
+export func context_evidence(value) {
+    return evidence_value(value, create_redaction_policy({}))
 }

@@ -126,7 +126,7 @@ Pass `context_handoff` to replace parent-output replay with a validated typed
 envelope plus a parent evidence reference. The existing depth/visited-target
 checks, handoff events and target selection remain active. Typed children inherit
 approval/cancellation controls and scoped capability ceilings, but not parent
-resume state or parent dispatch expectations. Parent and child evidence remain
+resume state or parent dispatch expectations. Durable runtime evidence uses the existing default credential redaction policy;\nsecret values stay masked and executable callbacks become type markers.\nParent and child evidence remain
 available through references on handoff metadata. Without `context_handoff`,
 legacy parent-output handoffs remain unchanged.
 

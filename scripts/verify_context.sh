@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 KUJO_BIN="${KUJO_BIN:-kujo}"
 mkdir -p .tmp/context-evaluation
+"$KUJO_BIN" run examples/context_agent.kujo --interpreter --untrusted --allow-fs-read --allow-clock > .tmp/context-evaluation/example.log 2>&1
 for test_file in tests/context_*_tests.kujo; do
   "$KUJO_BIN" test-run "$test_file" --untrusted --allow-fs-read --allow-fs-write --allow-fs-delete --allow-clock > ".tmp/context-evaluation/${test_file##*/}.log" 2>&1 || {
     cat ".tmp/context-evaluation/${test_file##*/}.log"

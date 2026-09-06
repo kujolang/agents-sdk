@@ -2,6 +2,7 @@
 
 ## Unreleased — context accounting
 
+- Verify real observer delivery after hook composition, retain non-sensitive durable evidence under the existing redaction policy, and export the context APIs with an offline example.
 - Integrate opt-in context preparation, typed child evidence, verified resume, dispatch receipts and CI token regression checks without changing default payloads.
 - Add explicit progressive skill loading with mandatory safety artifacts, exact triggers and dependency validation.
 - Add deterministic tool catalogs/schema expansion, executable registry scoping, and exact structural repository selection.

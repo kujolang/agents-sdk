@@ -1,5 +1,5 @@
 test_setup {
-    from src.agents.context.ledger import context_json, context_hash, context_component, context_ledger, observe_context
+    from src.agents.context.ledger import context_json, context_hash, context_component, context_ledger, observe_context, context_evidence
     from src.agents.ai.adapter import create_ai_sdk_adapter, call_chat, call_chat_stream
 }
 
@@ -46,4 +46,30 @@ test "secret components cannot reach observation sink and malicious text stays h
     let ledger := context_ledger([{"role": "tool", "content": hostile}], [], {}, {})
     assert_equal(ledger["components"][0]["kind"], "tool_result")
     assert_equal(contains(to_json(ledger), "Ignore rules"), 0)
+}
+
+test "durable evidence uses existing secret and credential redaction" {
+    let evidence := context_evidence({"api_key": "private", "nested": {"authorization": "Bearer private"}, "wrapped": secret("hidden"), "callback": func() { return "private" }, "source": "exact non-sensitive evidence"})
+    assert_equal(evidence["api_key"], "[REDACTED]")
+    assert_equal(evidence["nested"]["authorization"], "[REDACTED]")
+    assert_equal(evidence["wrapped"], "***")
+    assert_equal(evidence["callback"], {"runtime_value": "function"})
+    assert_equal(evidence["source"], "exact non-sensitive evidence")
+}
+
+test "adapter observer actually persists receipts after hook composition" {
+    if file_exists(".tmp") == false { create_dir(".tmp") }
+    let path := ".tmp/context-observer-receipt.json"
+    write_file_atomic(path, "not observed", true)
+    let observer := func(receipt) { write_file_atomic(path, to_json(receipt), true) }
+    let adapter := create_ai_sdk_adapter({"context_observer": observer, "chat_completion_fn": func(client, messages, options) { return {"ok": true, "output_text": "done"} }, "chat_completion_stream_fn": func(client, messages, options, callback) { callback({"type": "delta", "text": "done"}); return {"ok": true, "output_text": "done"} }})
+    let messages := [{"role": "user", "content": "private-sentinel"}]
+    assert_equal(call_chat(adapter, messages, {"retry_attempt": 2})["ok"], true)
+    let receipt := parse_json(read_file(path))
+    assert_equal(receipt["retry_number"], 1)
+    assert_equal(receipt["components"][0]["content_hash"], context_hash(messages[0]))
+    assert_equal(contains(read_file(path), "private-sentinel"), 0)
+    write_file_atomic(path, "not observed", true)
+    assert_equal(call_chat_stream(adapter, messages, {}, func(event) { return true })["ok"], true)
+    assert_equal(parse_json(read_file(path))["serialization_version"], "kujo.context-ledger/v1")
 }

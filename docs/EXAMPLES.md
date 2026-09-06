@@ -43,3 +43,9 @@ export KUJO_BIN=kujo
 - traced_agent writes a synthetic run_completed trace event to in-memory sink.
 - artifact_agent demonstrates artifact persistence and listing through in-memory artifact store.
 - retrieval_agent demonstrates retrieval context injection without network access.
+
+## Context observation and verified dispatch
+
+`kujo run examples/context_agent.kujo --interpreter` demonstrates an offline
+metadata-only ledger, an empty executable tool scope, and a verifier receipt.
+This additive example requires Kujo 1.3.1 and is verified by the context CI gate.

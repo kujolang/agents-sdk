@@ -1,0 +1,18 @@
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from src.agents.core_types import create_agent, create_agent_run_request
+from src.agents.runner import create_agent_runner, run_agent
+
+let adapter := create_ai_sdk_adapter({
+    "chat_completion_fn": func(client, messages, options) {
+        return {"ok": true, "provider": "offline", "model": "fixture", "output_text": "Verified locally."}
+    },
+    "context_observer": func(ledger) {
+        print(to_json({"payload_hash": ledger["payload_hash"], "content_mode": ledger["content_mode"], "provider_usage": ledger["provider_usage"]}))
+    }
+})
+let agent := create_agent({"id": "local-verifier", "name": "Local Verifier", "instructions": "Verify exact evidence.", "metadata": {"execution_role": "verifier"}})
+let result := run_agent(create_agent_runner({"ai_adapter": adapter}), agent, create_agent_run_request("Verify this fixture.", {}), {
+    "context": {"capabilities": [], "tool_names": [], "expected_dispatch": [{"kind": "role", "component_id": "verifier", "status": "model_request_completed"}]}
+})
+if result["status"] != "completed" { print(to_json(result["error"])); exit(1) }
+print(to_json({"status": result["status"], "dispatch": result["metadata"]["context_dispatch_verification"]}))
