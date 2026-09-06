@@ -48,7 +48,7 @@ jobs:
       - name: Verify context costs and execution evidence
         run: |
           bash scripts/verify_context.sh
-          "$KUJO_BIN" run scripts/context_token_ratchet.kujo --interpreter
+          "$KUJO_BIN" run scripts/context_token_ratchet.kujo --interpreter -- --check
 
       - name: Preserve offline verification evidence
         if: always()

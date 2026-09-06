@@ -15,7 +15,7 @@ if len(cli_args) > 0 && cli_args[0] == "--approve-growth" {
     write_file_atomic("tests/fixtures/context/evaluation.json", to_json_pretty(evidence) + "\n", true)
     print("Approved baseline written; review baseline, approval and evaluation before committing.")
 } else {
-    if len(cli_args) > 0 { print("unknown arguments"); exit(2) }
+    if cli_args != ["--check"] { print("usage: --check or --approve-growth REASON VERIFIED_EVALUATION_JSON"); exit(2) }
     let baseline := parse_json(read_file(path))
     let approval := parse_json(read_file("tests/fixtures/context/growth-approval.json"))
     let evidence := parse_json(read_file("tests/fixtures/context/evaluation.json"))
