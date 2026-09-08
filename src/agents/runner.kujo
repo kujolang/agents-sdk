@@ -1,3 +1,4 @@
+from src.agents.tracing.lifecycle import observe_lifecycle
 from src.agents.context.dispatch import context_dispatch_receipts, context_verify_dispatch
 from src.agents.context.state import context_validate_handoff
 from src.agents.context.manifest import context_store_value
@@ -1373,7 +1374,7 @@ func build_retrieval_context_message(retrieval_result_input, max_documents_input
 	return context_text
 }
 
-func maybe_inject_retrieval_context(messages_input, retrieval_provider, retrieval_config_input, run_request) {
+func maybe_inject_retrieval_context(messages_input, retrieval_provider, retrieval_config_input, run_request, observer_options, observer_agent) {
 	messages := normalize_array(messages_input)
 	retrieval_config := normalize_dict(retrieval_config_input)
 	retrieval_enabled := normalize_bool(dict_get_or(retrieval_config, "enabled", false), false)
@@ -1422,6 +1423,7 @@ func maybe_inject_retrieval_context(messages_input, retrieval_provider, retrieva
 	if has_key(query_metadata, "retrieval_preferences") || len(keys(preferences)) > 0 {
 		query_metadata["retrieval_preferences"] := preferences
 	}
+	observe_lifecycle(observer_options, run_request, observer_agent, "retrieval", "retrieval", "started", "unset")
 	retrieval_result := retrieval_provider_retrieve(retrieval_provider, {
 		"query_text": query_text,
 		"top_k": max_documents,
@@ -1430,6 +1432,9 @@ func maybe_inject_retrieval_context(messages_input, retrieval_provider, retrieva
 	}, {
 		"source": "runner.pre_model"
 	})
+	retrieval_outcome := "failed"
+	if dict_get_or(retrieval_result, "ok", false) { retrieval_outcome = "succeeded" }
+	observe_lifecycle(observer_options, run_request, observer_agent, "retrieval", "retrieval", "finished", retrieval_outcome)
 	retrieval_result_map := normalize_dict(retrieval_result)
 
 	if dict_get_or(retrieval_result_map, "ok", false) == false {
@@ -2064,7 +2069,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 	}
 
 	messages := build_model_messages(agent_map, run_request)
-	retrieval_injection := maybe_inject_retrieval_context(messages, retrieval_provider, retrieval_config, run_request)
+	retrieval_injection := maybe_inject_retrieval_context(messages, retrieval_provider, retrieval_config, run_request, options_map, agent_map)
 	messages = normalize_array(dict_get_or(retrieval_injection, "messages", messages))
 	retrieval_state = normalize_dict(dict_get_or(retrieval_injection, "state", retrieval_state))
 	retrieval_citations := extract_retrieval_citation_references(retrieval_state)
@@ -2502,10 +2507,14 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 		})
 		tool_call_stage = "execute_tool"
 		tool_input := normalize_dict(dict_get_or(tool_call, "input", dict_get_or(tool_call, "arguments", {})))
+		observe_lifecycle(options_map, run_request, agent_map, "tool", to_string(dict_get_or(tool_step, "step_id", len(steps))), "started", "unset")
 		tool_execution_result := execute_tool(dict_get_or(resolved_tool, "tool", {}), tool_input, tool_execution_context, {
 			"output_sanitizer": tool_output_sanitizer,
 			"artifact_store": artifact_store
 		})
+		tool_outcome := "failed"
+		if dict_get_or(tool_execution_result, "ok", false) { tool_outcome = "succeeded" }
+		observe_lifecycle(options_map, run_request, agent_map, "tool", to_string(dict_get_or(tool_step, "step_id", len(steps))), "finished", tool_outcome)
 		tool_call_stage = "store_tool_call_result"
 		tool_call_results = push(tool_call_results, {
 			"tool_name": tool_name,
@@ -2993,7 +3002,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
             child_options["approval_provider"] := tool_approval_provider
             child_options["cancellation_token"] := cancellation_token
         }
-        target_result := run_agent_safe_impl(runner_map, target_agent, handoff_run_request, child_options)
+        target_result := run_handoff_observed_child(runner_map, target_agent, handoff_run_request, child_options, options_map, {"run_id": run_id}, {"id": agent_id}, target_agent_id)
 
 
         target_status := normalize_string(dict_get_or(target_result, "status", "failed"), "failed")
@@ -3471,6 +3480,35 @@ func run_agent_safe_impl(runner, agent, run_request_input, options) {
 	}
 }
 
+func run_handoff_observed_child(child_runner, child_agent, child_request, child_run_options, source_options, source_observation_request, source_observation_agent, observed_target_id) {
+    child_observation_request := {"run_id": dict_get_or(child_request, "run_id", "")}
+    child_observation_agent := {"id": dict_get_or(child_agent, "id", "")}
+    relation_observation_options := {"producer_instance": dict_get_or(source_options, "producer_instance", ""), "on_lifecycle": dict_get_or(source_options, "on_lifecycle", null), "observation_related_agent": observed_target_id, "observation_task_id": dict_get_or(source_options, "observation_task_id", "")}
+    child_run_options["producer_instance"] := dict_get_or(source_options, "producer_instance", "")
+    child_run_options["observation_task_id"] := dict_get_or(source_options, "observation_task_id", "")
+    child_run_options["on_lifecycle"] := dict_get_or(source_options, "on_lifecycle", null)
+    observe_lifecycle(relation_observation_options, source_observation_request, source_observation_agent, "handoff", observed_target_id, "started", "unset")
+    observe_lifecycle(child_run_options, child_observation_request, child_observation_agent, "agent", "run", "started", "unset")
+    observed_child_result := run_agent_safe_impl(child_runner, child_agent, child_request, child_run_options)
+    observed_child_outcome := "failed"
+    if dict_get_or(observed_child_result, "status", "") == "completed" { observed_child_outcome = "succeeded" }
+    observe_lifecycle(child_run_options, child_observation_request, child_observation_agent, "agent", "run", "finished", observed_child_outcome)
+    observe_lifecycle(relation_observation_options, source_observation_request, source_observation_agent, "handoff", observed_target_id, "finished", observed_child_outcome)
+    return observed_child_result
+}
+
 export create_agent_runner := create_agent_runner_impl
-export run_agent := run_agent_safe_impl
+func run_agent_observed_impl(runner, agent, run_request_input, options) {
+    observation_request := {"run_id": dict_get_or(as_run_request(run_request_input), "run_id", "")}
+    observation_agent := {"id": dict_get_or(agent, "id", "")}
+    observe_lifecycle(options, observation_request, observation_agent, "agent", "run", "started", "unset")
+    result := run_agent_safe_impl(runner, agent, run_request_input, options)
+    outcome := "failed"
+    if dict_get_or(result, "status", "") == "completed" { outcome = "succeeded" }
+    if dict_get_or(result, "status", "") == "cancelled" { outcome = "canceled" }
+    observe_lifecycle(options, observation_request, observation_agent, "agent", "run", "finished", outcome)
+    return result
+}
+
+export run_agent := run_agent_observed_impl
 export describe_runner_module := describe_runner_module_impl

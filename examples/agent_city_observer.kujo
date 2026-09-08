@@ -1,0 +1,26 @@
+# Real SDK + local RAG execution. Offline model, no generated reasoning claim.
+from src.agents.retrieval.rag_adapter import create_kujo_rag_provider, create_kujo_rag_http_transport
+from src.agents.core_types import create_agent, create_agent_run_request
+from src.agents.runner import create_agent_runner, run_agent
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from src.agents.tracing.lifecycle import create_lifecycle_spool
+
+provider := create_kujo_rag_provider({"namespace": "agent-city", "transport": create_kujo_rag_http_transport(env_or("RAG_URL", "http://127.0.0.1:8787"), {})})
+targets := {}
+if env_or("CITY_HANDOFF", "0") == "1" { targets = {"docs-target": create_agent({"id": "docs-target", "instructions": "Documentation target", "policy": {"retrieval": {"enabled": true}}})} }
+runner := create_agent_runner({"handoff_registry": targets, "ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+    return {"ok": true, "status_code": 200, "output_text": "Local documentation retrieved by the offline model fixture."}
+}})})
+actor := env_or("CITY_ACTOR", "worker-1")
+run_id := env_or("CITY_RUN", "")
+assert(run_id != "", "CITY_RUN must be assigned by the host")
+policy := {"retrieval": {"enabled": true}}
+if env_or("CITY_HANDOFF", "0") == "1" { policy["handoff"] := {"target_agent_id": "docs-target"} }
+result := run_agent(runner, create_agent({"id": actor, "policy": policy}), create_agent_run_request("How does Kujo handle module imports?", {"run_id": run_id}), {
+    "producer_instance": env_or("CITY_PRODUCER", ""), "observation_task_id": env_or("CITY_TASK", ""),
+    "on_lifecycle": create_lifecycle_spool(env_or("CITY_SPOOL", "/tmp/agent-city-spool.jsonl"), 262144),
+    "retrieval_provider": provider
+})
+retrieval := result["metadata"]["retrieval"]
+print(to_json({"schema": "agent-city.proof.v1", "run_id": run_id, "actor": actor, "status": result["status"], "retrieval_reason": retrieval["reason"]}))
+assert(result["status"] == "completed" && (retrieval["reason"] == "applied" || env_or("CITY_HANDOFF", "0") == "1"), "real RAG retrieval did not apply")

@@ -30,3 +30,26 @@ bounded provider payload. Provider-reported cost remains explicitly identified
 as provider-reported; the adapter never converts an estimate into billed cost.
 Prompts, responses, tool arguments/results, retrieval bodies, output text, and
 detailed errors are never copied by this adapter.
+
+## Optional live observation
+
+Pass `producer_instance` (a unique host invocation namespace) and `on_lifecycle`
+to `run_agent`. `src.agents.tracing.lifecycle.create_lifecycle_spool(path, bytes)`
+is the provided metadata-only local sink. Give every execution a private spool;
+262144 bytes is the Observer example limit. Overflow writes a `.gap` sidecar.
+The callback is exception-isolated, carries no inputs/results/exception text,
+and has no network delivery or animation acknowledgement. It observes the run,
+pre-model retrieval, tool execution envelopes, and actual child handoffs.
+Operation start and terminal records are distinct. Internal provider retries
+are not claimed as separate attempts; the host can supply `observation_attempt`
+for an explicitly retried invocation. Missing identity disables observation.
+
+Use local storage. Append byte size is bounded; this is not a hard real-time
+filesystem-latency guarantee, and arbitrary custom callbacks must obey the same
+bounded, no-network contract. Callback return/failure never changes source work.
+Child handoff runs retain their own run and agent IDs and inherit the sink.
+
+`examples/agent_city_observer.kujo` runs actual local RAG with an explicitly
+labeled offline model callback. `CITY_HANDOFF=1` adds an actual SDK child handoff.
+Dispatch's separately owned example supplies run correlation. City is an
+external consumer; it does not become an SDK or Dispatch execution dependency.

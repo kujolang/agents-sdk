@@ -1,0 +1,41 @@
+# Optional synchronous metadata-only observation. Callers must supply a bounded
+# local sink; callbacks never receive requests, inputs, results or exception text.
+func field(value, key, fallback) {
+    if type(value) == "dict" { if has_key(value, key) { return value[key] } }
+    return fallback
+}
+func observe(options, request, agent, kind, operation, phase, outcome) {
+    try {
+        sink := field(options, "on_lifecycle", null)
+        producer := field(options, "producer_instance", "")
+        run := field(request, "run_id", "")
+        actor := field(agent, "id", "")
+        if type(sink) != "function" || type(producer) != "string" || producer == "" || run == "" || actor == "" { return false }
+        for id in [producer, run, actor, operation] { if len(id) > 80 { return false } }
+        sink({"schema": "kujo.lifecycle.v1", "producer_instance": producer,
+            "run_id": run, "agent_id": actor, "operation_id": operation,
+            "related_agent_id": field(options, "observation_related_agent", ""), "task_id": field(options, "observation_task_id", ""),
+            "attempt": field(options, "observation_attempt", 1), "kind": kind, "phase": phase, "outcome": outcome,
+            "occurred_at_ms": current_timestamp()})
+        return true
+    } except err { return false }
+}
+export observe_lifecycle := observe
+
+# One private spool per execution; bounded disk use, no network, no retry/ACK.
+# Use a local filesystem. This bounds bytes, not arbitrary filesystem latency.
+export func create_lifecycle_spool(path, max_bytes) {
+    return func(event) {
+        try {
+            encoded := to_json(event) + "\n"
+            used := 0
+            if file_exists(path) { used = file_size(path) }
+            if used + len(encoded) > max_bytes {
+                write_file(path + ".gap", "overflow", true)
+                return false
+            }
+            append_file(path, encoded)
+            return true
+        } except err { return false }
+    }
+}

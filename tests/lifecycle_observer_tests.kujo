@@ -1,0 +1,58 @@
+test_setup {
+from src.agents.runner import create_agent_runner, run_agent
+from src.agents.core_types import create_agent, create_agent_run_request
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from src.agents.retrieval.provider import create_retrieval_provider_interface
+from src.agents.tracing.lifecycle import create_lifecycle_spool
+}
+
+test "live metadata sink observes starts, isolates failures and bounds spool" {
+path := env_or("LIFECYCLE_TEST_LOG", "/tmp/kujo-lifecycle-contract.jsonl")
+write_file(path, "", true)
+options := {"producer_instance": "contract-session", "on_lifecycle": func(event) { append_file(path, to_json(event) + "\n") }, "retrieval_provider": create_retrieval_provider_interface({"retrieve_fn": func(provider, query, options) {
+    journal := read_file(path)
+    assert(contains(journal, "retrieval") && contains(journal, "started"), "retrieval start must be visible inside actual provider")
+    assert(contains(journal, "private-query") == 0, "query leaked")
+    return {"ok": true, "documents": [{"document_id": "docs", "content": "fixture document"}]}
+}})}
+runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) { return {"ok": true, "status_code": 200, "output_text": "private-answer"} }})})
+agent := create_agent({"id": "worker-1", "policy": {"retrieval": {"enabled": true}}})
+request := create_agent_run_request("private-query", {"run_id": "run-1"})
+result := run_agent(runner, agent, request, options)
+
+assert(result["status"] == "completed", "observed run failed")
+lines := split(trim(read_file(path)), "\n")
+assert(len(lines) == 4, "expected paired run/retrieval observations")
+assert(parse_json(lines[0])["phase"] == "started", "run start")
+assert(parse_json(lines[1])["kind"] == "retrieval", "retrieval start")
+assert(parse_json(lines[2])["outcome"] == "succeeded", "retrieval finish")
+assert(parse_json(lines[3])["kind"] == "agent", "run finish")
+assert(contains(read_file(path), "private-") == 0, "content leaked")
+options["on_lifecycle"] := func(event) { assert(false, "sink failure") }
+result = run_agent(runner, agent, request, options)
+assert(result["status"] == "completed", "sink exception changed business outcome")
+print("lifecycle_observer_tests: PASS")
+
+small := path + ".bounded"
+write_file(small, "", true)
+sink := create_lifecycle_spool(small, 10)
+sink({"metadata": "over-quota"})
+assert(file_size(small) == 0, "spool exceeded byte bound")
+assert(file_exists(small + ".gap"), "overflow must be visible")
+}
+
+test "handoff observation preserves parent, child and explicit task identity" {
+    handoff_log := "/tmp/kujo-handoff-observer-contract.jsonl"
+    write_file(handoff_log, "", true)
+    handoff_runner := create_agent_runner({"handoff_registry": {"target": create_agent({"id": "target"})}, "ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) { return {"ok": true, "status_code": 200, "output_text": "done"} }})})
+    handoff_result := run_agent(handoff_runner, create_agent({"id": "source", "policy": {"handoff": {"target_agent_id": "target"}}}), create_agent_run_request("handoff", {"run_id": "parent-run"}), {"producer_instance": "handoff-contract", "observation_task_id": "dispatch-task", "on_lifecycle": create_lifecycle_spool(handoff_log, 262144)})
+    assert(handoff_result["status"] == "completed", "handoff failed")
+    handoff_lines := split(trim(read_file(handoff_log)), "\n")
+    assert(len(handoff_lines) == 6, "paired parent/child/handoff events")
+    handoff_start := parse_json(handoff_lines[0])
+    handoff_end := parse_json(handoff_lines[5])
+    assert(handoff_start["run_id"] == "parent-run" && handoff_end["run_id"] == "parent-run", "parent identity changed across child call")
+    assert(handoff_end["agent_id"] == "source", "parent actor changed")
+    assert(parse_json(handoff_lines[2])["agent_id"] == "target", "child actor lost")
+    for handoff_line in handoff_lines { assert(parse_json(handoff_line)["task_id"] == "dispatch-task", "source-owned task binding lost") }
+}
