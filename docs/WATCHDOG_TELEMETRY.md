@@ -53,3 +53,17 @@ Child handoff runs retain their own run and agent IDs and inherit the sink.
 labeled offline model callback. `CITY_HANDOFF=1` adds an actual SDK child handoff.
 Dispatch's separately owned example supplies run correlation. City is an
 external consumer; it does not become an SDK or Dispatch execution dependency.
+
+### Agent City Observer metadata
+
+`observation_profile` and `observation_collection` are explicit source metadata;
+absent values remain `unknown`. Live handoff envelopes include the actual
+source-qualified child execution in `metadata.relatedInstance`. These fields
+carry no prompts, messages or tool results.
+
+`examples/agent_city_mcp.kujo` registers a real read-only local Kujo MCP tool
+handler. The handler's operation envelope preserves server identity read from
+`/health`, tool name, invocation, attempt and bounded result classification.
+It uses the same bounded local lifecycle spool. HTTP occurs in the business
+tool handler, never in the observation callback. Its optional metadata artifact
+has a separate outcome; an artifact failure cannot change a completed MCP call.

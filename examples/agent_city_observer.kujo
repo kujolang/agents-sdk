@@ -17,9 +17,9 @@ assert(run_id != "", "CITY_RUN must be assigned by the host")
 policy := {"retrieval": {"enabled": true}}
 if env_or("CITY_HANDOFF", "0") == "1" { policy["handoff"] := {"target_agent_id": "docs-target"} }
 result := run_agent(runner, create_agent({"id": actor, "policy": policy}), create_agent_run_request("How does Kujo handle module imports?", {"run_id": run_id}), {
-    "producer_instance": env_or("CITY_PRODUCER", ""), "observation_task_id": env_or("CITY_TASK", ""),
-    "on_lifecycle": create_lifecycle_spool(env_or("CITY_SPOOL", "/tmp/agent-city-spool.jsonl"), 262144),
-    "retrieval_provider": provider
+    "observation_profile": "local-documentation-worker", "producer_instance": env_or("CITY_PRODUCER", ""), "observation_task_id": env_or("CITY_TASK", ""),
+    "observation_attempt": to_int(env_or("CITY_ATTEMPT", "1")), "on_lifecycle": create_lifecycle_spool(env_or("CITY_SPOOL", "/tmp/agent-city-spool.jsonl"), 262144),
+    "observation_collection": "kujo-docs", "retrieval_provider": provider
 })
 retrieval := result["metadata"]["retrieval"]
 print(to_json({"schema": "agent-city.proof.v1", "run_id": run_id, "actor": actor, "status": result["status"], "retrieval_reason": retrieval["reason"]}))

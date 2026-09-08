@@ -1,0 +1,60 @@
+# Actual SDK tool handler invokes the local Kujo MCP server. No model API needed.
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from src.agents.runner import create_agent_runner, run_agent
+from src.agents.core_types import create_agent, create_agent_run_request
+from src.agents.tools.registry import create_tool_registry, register_tool
+from src.agents.tracing.lifecycle import create_lifecycle_spool
+
+city_sink := create_lifecycle_spool(env_or("CITY_SPOOL", ""), 262144)
+city_run := env_or("CITY_RUN", "")
+city_actor := env_or("CITY_ACTOR", "mcp-worker")
+city_tool := env_or("CITY_MCP_TOOL", "read_project_docs")
+city_server_url := env_or("CITY_MCP_URL", "http://127.0.0.1:8931/mcp/v1")
+func city_wire(url, options) {
+    wire := http_request(url, options)
+    match wire {
+        case Ok(response): { return parse_json(response["_body"]) }
+        case Err(error): { assert(false, "Local MCP unavailable"); return {} }
+    }
+}
+city_health := city_wire(city_server_url + "/health", {"timeout": 5, "max_response_bytes": 4096})
+city_server := city_health["server"]
+func city_mcp_emit(kind_value, op_value, phase_value, outcome_value, metadata_value) {
+    city_sink({"schema": "kujo.lifecycle.v1", "observation_profile": "local-mcp-worker", "producer_instance": env_or("CITY_PRODUCER", ""), "profile": "local-mcp-worker", "run_id": city_run, "agent_id": city_actor, "task_id": env_or("CITY_TASK", ""), "operation_id": op_value, "attempt": to_int(env_or("CITY_ATTEMPT", "1")), "kind": "internal", "capability": kind_value, "phase": phase_value, "outcome": outcome_value, "occurred_at_ms": current_timestamp(), "metadata": metadata_value})
+}
+registry := create_tool_registry({})
+registered := register_tool(registry, {"id": "kujo-mcp-docs", "name": "read_mcp_docs", "permissions": ["read"], "handler": func(input_payload, context) {
+    meta := {"server": city_server, "tool": city_tool, "invocation": city_run + ":mcp-docs", "approval": "not-required", "station": "tool-active"}
+    city_mcp_emit("mcp.call", "mcp-docs", "started", "unset", meta)
+    try {
+        data := city_wire(city_server_url + "/tools/call", {"method": "POST", "headers": {"Content-Type": "application/json"}, "body": to_json({"jsonrpc": "2.0", "id": city_run + ":mcp-docs", "method": "tools/call", "params": {"name": city_tool, "arguments": {"file_name": "README"}}}), "timeout": 10, "max_response_bytes": 65536})
+        if has_key(data, "error") { meta["resultCode"] := "mcp-error"; city_mcp_emit("mcp.call", "mcp-docs", "finished", "failed", meta); return {"ok": false, "error": {"code": "mcp_error", "message": "MCP returned an error"}} }
+        assert(has_key(data, "result"), "No MCP result")
+        meta["resultCode"] := "result-returned"
+        city_mcp_emit("mcp.call", "mcp-docs", "finished", "succeeded", meta)
+        # Actual source artifact, containing metadata only. No tool output in telemetry.
+        try {
+            receipt_path := env_or("CITY_ARTIFACT", "")
+            if receipt_path != "" {
+                write_file(receipt_path, to_json({"server": city_server, "tool": city_tool, "run": city_run, "result": "returned"}), true)
+                assert(file_exists(receipt_path) && contains(read_file(receipt_path), city_run), "Metadata artifact was not written")
+                city_mcp_emit("artifact.created", "mcp-receipt", "finished", "succeeded", {"artifactRef": "city-proof:mcp-receipt", "repoRef": "kujolang/mcp"})
+            }
+        } except artifact_error {
+            # Artifact failure cannot contradict the already returned MCP result.
+            city_mcp_emit("artifact.created", "mcp-receipt", "finished", "failed", {"artifactRef": "city-proof:mcp-receipt"})
+        }
+        return {"ok": true, "output": {"result_returned": true}}
+    } except err {
+        meta["resultCode"] := "transport-error"
+        city_mcp_emit("mcp.call", "mcp-docs", "finished", "failed", meta)
+        return {"ok": false, "error": {"code": "mcp_transport", "message": "MCP transport failed"}}
+    }
+}})
+assert(registered["ok"], "MCP tool registration failed")
+runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client,messages,options) {
+    return {"ok": true, "status_code": 200, "output_text": "Offline model invokes a real MCP read.", "tool_calls": [{"name": "read_mcp_docs", "input": {}}]}
+}})})
+result := run_agent(runner, create_agent({"id": city_actor}), create_agent_run_request("Read the local MCP documentation", {"run_id": city_run}), {"observation_profile": "local-mcp-worker", "producer_instance": env_or("CITY_PRODUCER", ""), "observation_task_id": env_or("CITY_TASK", ""), "observation_attempt": to_int(env_or("CITY_ATTEMPT", "1")), "on_lifecycle": city_sink, "tool_registry": registered["registry"]})
+assert(result["status"] == "completed", "Actual MCP SDK run failed")
+print(to_json({"run_id":city_run,"status":result["status"],"server":city_server,"tool":city_tool}))

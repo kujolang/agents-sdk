@@ -3483,7 +3483,8 @@ func run_agent_safe_impl(runner, agent, run_request_input, options) {
 func run_handoff_observed_child(child_runner, child_agent, child_request, child_run_options, source_options, source_observation_request, source_observation_agent, observed_target_id) {
     child_observation_request := {"run_id": dict_get_or(child_request, "run_id", "")}
     child_observation_agent := {"id": dict_get_or(child_agent, "id", "")}
-    relation_observation_options := {"producer_instance": dict_get_or(source_options, "producer_instance", ""), "on_lifecycle": dict_get_or(source_options, "on_lifecycle", null), "observation_related_agent": observed_target_id, "observation_task_id": dict_get_or(source_options, "observation_task_id", "")}
+    relation_observation_options := {"producer_instance": dict_get_or(source_options, "producer_instance", ""), "on_lifecycle": dict_get_or(source_options, "on_lifecycle", null), "observation_related_instance": dict_get_or(source_options, "producer_instance", "")+":"+child_observation_request["run_id"]+":"+child_observation_agent["id"], "observation_related_agent": observed_target_id, "observation_task_id": dict_get_or(source_options, "observation_task_id", "")}
+    child_run_options["observation_attempt"] := dict_get_or(source_options, "observation_attempt", 1)
     child_run_options["producer_instance"] := dict_get_or(source_options, "producer_instance", "")
     child_run_options["observation_task_id"] := dict_get_or(source_options, "observation_task_id", "")
     child_run_options["on_lifecycle"] := dict_get_or(source_options, "on_lifecycle", null)

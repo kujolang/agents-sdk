@@ -14,6 +14,9 @@ func observe(options, request, agent, kind, operation, phase, outcome) {
         for id in [producer, run, actor, operation] { if len(id) > 80 { return false } }
         sink({"schema": "kujo.lifecycle.v1", "producer_instance": producer,
             "run_id": run, "agent_id": actor, "operation_id": operation,
+            "metadata": {"relatedInstance": field(options, "observation_related_instance", "")},
+            "profile": field(options, "observation_profile", "unknown"),
+            "collection": field(options, "observation_collection", "unknown"),
             "related_agent_id": field(options, "observation_related_agent", ""), "task_id": field(options, "observation_task_id", ""),
             "attempt": field(options, "observation_attempt", 1), "kind": kind, "phase": phase, "outcome": outcome,
             "occurred_at_ms": current_timestamp()})

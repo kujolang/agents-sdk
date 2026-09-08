@@ -25,6 +25,7 @@ lines := split(trim(read_file(path)), "\n")
 assert(len(lines) == 4, "expected paired run/retrieval observations")
 assert(parse_json(lines[0])["phase"] == "started", "run start")
 assert(parse_json(lines[1])["kind"] == "retrieval", "retrieval start")
+assert(parse_json(lines[1])["collection"] == "unknown", "Absent retrieval classification must remain unknown")
 assert(parse_json(lines[2])["outcome"] == "succeeded", "retrieval finish")
 assert(parse_json(lines[3])["kind"] == "agent", "run finish")
 assert(contains(read_file(path), "private-") == 0, "content leaked")
@@ -54,5 +55,8 @@ test "handoff observation preserves parent, child and explicit task identity" {
     assert(handoff_start["run_id"] == "parent-run" && handoff_end["run_id"] == "parent-run", "parent identity changed across child call")
     assert(handoff_end["agent_id"] == "source", "parent actor changed")
     assert(parse_json(handoff_lines[2])["agent_id"] == "target", "child actor lost")
+    child_binding := parse_json(handoff_lines[2])
+    relation := parse_json(handoff_lines[1])
+    assert(relation["metadata"]["relatedInstance"] == "handoff-contract:"+child_binding["run_id"]+":target", "Handoff must carry source-qualified actual child instance")
     for handoff_line in handoff_lines { assert(parse_json(handoff_line)["task_id"] == "dispatch-task", "source-owned task binding lost") }
 }
