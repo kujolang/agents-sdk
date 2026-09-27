@@ -72,3 +72,9 @@ export register_ability_tool := register_ability_tool
 export ability_gateway_to_tool_contract := ability_gateway_to_tool_contract
 export register_ability_gateway_tool := register_ability_gateway_tool
 export ability_risk_hint := ability_risk_hint
+
+from src.agents.abilities.controlled import controlled_ability_gateway_to_tool_contract, register_controlled_ability_gateway_tool, validate_ability_handoff, ability_handoff_reference
+export controlled_ability_gateway_to_tool_contract := controlled_ability_gateway_to_tool_contract
+export register_controlled_ability_gateway_tool := register_controlled_ability_gateway_tool
+export validate_ability_handoff := validate_ability_handoff
+export ability_handoff_reference := ability_handoff_reference

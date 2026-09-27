@@ -1,0 +1,76 @@
+# Experimental reference transport. No Dispatch dependency or replay policy.
+from src.agents.abilities.contract import ability_gateway_to_tool_contract, validate_ability_value
+from src.agents.tools.registry import register_tool
+
+func get(obj, key, fallback) {if type(obj) != "dict" {return fallback}; if has_key(obj, key) {return obj[key]}; return fallback}
+func failed(kind) {return {"ok": false, "error": {"kind": kind, "message": "Controlled Ability invocation requires host review.", "details": {}}}}
+func identifier(value) {return type(value) == "string"&&byte_length(value) <= 128&&regex_match(value, "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")&&contains(value, "\n") == 0}
+func reference(value) {return type(value) == "string"&&byte_length(value) == 71&&regex_match(value, "^sha256:[0-9a-f]{64}$")}
+
+export func validate_ability_handoff(value) {
+    if type(value) != "dict"||byte_length(to_json(value)) > 4096 {return false}
+    fields := ["schema", "sdk_run_id", "tool_call_id", "sdk_invocation_id", "tool_name", "ability_id", "ability_version", "definition_digest", "ability_invocation_id", "dispatch_run_id", "dispatch_step_id", "dispatch_attempt_id", "dispatch_effect_id", "outcome", "receipt_id", "receipt_ref", "execution_result_ref", "assurance_ref", "transaction_sha256"]
+    if len(keys(value)) != len(fields) {return false}
+    valid := true
+    for key in fields {if has_key(value, key) == false {valid = false}}
+    if valid == false {return false}
+    if value["schema"] != "agents-sdk.ability-handoff/v1alpha1" {return false}
+    for key in ["sdk_run_id", "tool_call_id", "sdk_invocation_id", "tool_name", "ability_id", "ability_version", "ability_invocation_id", "dispatch_run_id", "dispatch_step_id", "dispatch_attempt_id", "dispatch_effect_id"] {if identifier(value[key]) == false {valid = false}}
+    for key in ["definition_digest", "transaction_sha256"] {if type(value[key]) != "string"||byte_length(value[key]) != 64||regex_match(value[key], "^[0-9a-f]{64}$") == false {valid = false}}
+    if contains(["receipt_succeeded", "receipt_failed", "receipt_unavailable", "transport_failed"], value["outcome"]) == false {valid = false}
+    if reference(value["execution_result_ref"]) == false {valid = false}
+    if value["assurance_ref"] != null&&reference(value["assurance_ref"]) == false {valid = false}
+    if value["receipt_ref"] == null {if value["receipt_id"] != null {valid = false}}
+    else {if reference(value["receipt_ref"]) == false||identifier(value["receipt_id"]) == false {valid = false}}
+    if contains(["receipt_succeeded", "receipt_failed"], value["outcome"])&&value["receipt_ref"] == null {valid = false}
+    return valid
+}
+
+export func ability_handoff_reference(value) {
+    if validate_ability_handoff(value) == false {return {"ok": false, "code": "ability_handoff_invalid"}}
+    return {"ok": true, "ref": "sha256:" + sha256(to_json(value))}
+}
+
+# The host installs both callbacks at registration. Model arguments never install
+# authority or choose a root/verifier. admit is invoked for EVERY call (including
+# duplicates); its decision belongs to the embedding controller, not this SDK.
+export func controlled_ability_gateway_to_tool_contract(definition, binding, exposure) {
+    admit := get(binding, "admit", null); record := get(binding, "record", null)
+    if type(admit) != "function"||type(record) != "function" {return {"ok": false, "code": "ability_controller_missing"}}
+    mapped := ability_gateway_to_tool_contract(definition, binding, exposure)
+    if mapped["ok"] == false {return mapped}
+    tool := mapped["tool"]; original := tool["handler"]
+    metadata := get(tool, "metadata", {}); metadata["controlled_ability"] := true; tool["metadata"] := metadata
+    tool["handler"] := func(input, context) {
+        if validate_ability_value(input, definition["input_schema"], "input")["ok"] == false {return failed("ability_input_invalid")}
+        metadata := get(context, "metadata", {})
+        if identifier(get(metadata, "tool_call_id", "")) == false||identifier(get(metadata, "sdk_invocation_id", "")) == false {return failed("ability_controller_context_missing")}
+        admission := null
+        try {admission = admit(context)} except ignored {return failed("ability_controller_unavailable")}
+        if get(admission, "ok", false) != true {return failed("ability_controller_denied")}
+        if identifier(get(admission, "ability_invocation_id", "")) == false||type(get(admission, "idempotency_key", null)) != "string"||byte_length(admission["idempotency_key"]) < 1||byte_length(admission["idempotency_key"]) > 256 {return failed("ability_controller_context_missing")}
+        metadata["ability_invocation_id"] := admission["ability_invocation_id"]
+        metadata["ability_idempotency_key"] := admission["idempotency_key"]
+        context["metadata"] := metadata
+        result := original(input, context)
+        # Callback privately retains receipts/errors and produces a bounded digest.
+        # It cannot use a returned verified flag to change SDK or Dispatch policy.
+        recorded := null
+        try {recorded = record(admission, context, result)} except ignored {return failed("ability_evidence_unavailable")}
+        if get(recorded, "ok", false) != true||reference(get(recorded, "ref", "")) == false {return failed("ability_evidence_unavailable")}
+        if get(result, "ok", false) == false {
+            return {"ok": false, "error": {"kind": "ability_completion_uncertain", "message": "Ability completion requires controller review.", "details": {"handoff_ref": recorded["ref"]}}}
+        }
+        return {"ok": true, "output": result["output"], "metadata": {"ability_handoff_ref": recorded["ref"]}}
+    }
+    mapped["tool"] := tool
+    return mapped
+}
+
+export func register_controlled_ability_gateway_tool(registry, definition, binding, exposure) {
+    mapped := controlled_ability_gateway_to_tool_contract(definition, binding, exposure)
+    if mapped["ok"] == false {return mapped}
+    registered := register_tool(registry, mapped["tool"])
+    if registered["ok"] == false {return registered}
+    return {"ok": true, "registry": registered["registry"], "tool": mapped["tool"]}
+}

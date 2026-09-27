@@ -2491,8 +2491,13 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 		runtime_services = dict_get_or(dict_get_or(tool_step, "metadata", {}), "runtime_services", runtime_services)
 
 		tool_call_stage = "create_tool_execution_context"
+		tool_metadata := preference_metadata
+		if dict_get_or(dict_get_or(dict_get_or(resolved_tool, "tool", {}), "metadata", {}), "controlled_ability", false) {
+			tool_metadata["tool_call_id"] := dict_get_or(tool_call, "id", "")
+			tool_metadata["sdk_invocation_id"] := dict_get_or(tool_step, "step_id", "")
+		}
 		tool_execution_context := create_tool_execution_context({
-			"metadata": preference_metadata,
+			"metadata": tool_metadata,
 			"run_id": run_id,
 			"session_id": session_id,
 			"agent_id": agent_id,

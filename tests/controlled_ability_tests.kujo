@@ -1,0 +1,66 @@
+test_setup {
+ from src.agents.abilities.controlled import controlled_ability_gateway_to_tool_contract, validate_ability_handoff
+
+	from src.agents.abilities.contract import ABILITY_SCHEMA_ID, ability_risk_hint, ability_to_tool_contract, register_ability_tool, register_ability_gateway_tool, validate_ability_definition, validate_ability_value
+	from src.agents.tools.registry import create_tool_execution_context, create_tool_registry, execute_registered_tool, resolve_registry_tool
+	read_definition := func() {
+		return {
+			"schema": ABILITY_SCHEMA_ID,
+			"id": "kujo.docs.content.find",
+			"version": "1.0.0",
+			"title": "Find documentation",
+			"description": "Find a bounded set of documentation records.",
+			"input_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 200}}, "additionalProperties": false},
+			"output_schema": {"type": "object", "required": ["count"], "properties": {"count": {"type": "integer", "minimum": 0}}, "additionalProperties": false},
+			"effects": [{"kind": "read", "resource": "kujo.docs.content"}],
+			"idempotency": {"mode": "intrinsic"}
+		}
+	}
+}
+
+
+test "Controlled Ability requires installed callbacks and host context" {
+ d := read_definition()
+ assert_false(controlled_ability_gateway_to_tool_contract(d, {"invoke": func(c,x) {throw("must not execute")}}, {})["ok"])
+ binding := {"invoke": func(c,x) {throw("must not execute")}, "admit": func(c) {return {"ok": false}}, "record": func(a,c,r) {throw("must not record")}}
+ mapped := controlled_ability_gateway_to_tool_contract(d, binding, {})
+ assert_true(mapped["ok"])
+ result := mapped["tool"]["handler"]({"query": "safe"}, {})
+ assert_equal(result["error"]["kind"], "ability_controller_context_missing")
+ ctx := {"metadata": {"tool_call_id": "call-1", "sdk_invocation_id": "step-1"}}
+ result = mapped["tool"]["handler"]({"query": "safe"}, ctx)
+ assert_equal(result["error"]["kind"], "ability_controller_denied")
+ for field in ["profile", "verifier_id", "config_revision", "trusted_root", "principal", "tenant", "assurance", "authorize_replay", "run_id", "effect_id"] {
+   payload := {"query": "safe"}; payload[field] := "model-assertion"
+   result = mapped["tool"]["handler"](payload, ctx)
+   assert_equal(result["error"]["kind"], "ability_input_invalid")
+ }
+}
+
+test "Controlled Ability reports uncertain transport without private error payload" {
+ binding := {"invoke": func(c,x) {throw("PRIVATE_APPLICATION_CANARY")}, "admit": func(c) {return {"ok": true, "ability_invocation_id": "app-1", "idempotency_key": "key-1"}}, "record": func(a,c,r) {return {"ok": true, "ref": "sha256:" + sha256("private artifact")}}}
+ mapped := controlled_ability_gateway_to_tool_contract(read_definition(), binding, {})
+ ctx := {"run_id": "sdk-1", "metadata": {"tool_call_id": "call-1", "sdk_invocation_id": "step-1"}}
+ result := mapped["tool"]["handler"]({"query": "safe"}, ctx)
+ assert_false(result["ok"])
+ assert_equal(result["error"]["kind"], "ability_completion_uncertain")
+ assert_equal(contains(to_json(result), "PRIVATE_APPLICATION_CANARY"), 0)
+ assert_equal(len(result["error"]["details"]["handoff_ref"]), 71)
+ binding["record"] := func(a,c,r) {throw("PRIVATE_APPLICATION_CANARY")}
+ mapped = controlled_ability_gateway_to_tool_contract(read_definition(), binding, {})
+ result = mapped["tool"]["handler"]({"query": "safe"}, ctx)
+ assert_equal(result["error"]["kind"], "ability_evidence_unavailable")
+ assert_equal(contains(to_json(result), "PRIVATE_APPLICATION_CANARY"), 0)
+}
+
+test "Handoff is bounded closed content-light reference transport" {
+ h := {"schema": "agents-sdk.ability-handoff/v1alpha1", "sdk_run_id": "sdk-1", "tool_call_id": "call-1", "sdk_invocation_id": "step-1", "tool_name": "publish", "ability_id": "app.publish", "ability_version": "1.0.0", "definition_digest": sha256("definition"), "ability_invocation_id": "invocation-1", "dispatch_run_id": "run-1", "dispatch_step_id": "action", "dispatch_attempt_id": "1", "dispatch_effect_id": "effect-1", "outcome": "transport_failed", "receipt_id": null, "receipt_ref": null, "execution_result_ref": "sha256:" + sha256("result"), "assurance_ref": null, "transaction_sha256": sha256("transaction")}
+ assert_true(validate_ability_handoff(h))
+ assert_true(json_schema_validate(h, parse_json(read_file("schemas/ability-handoff-v1alpha1.schema.json")))["valid"])
+ bad := h; bad["outcome"] := "verified"; assert_false(validate_ability_handoff(bad))
+ bad = h; bad["tool_call_id"] := "call\n"; assert_false(validate_ability_handoff(bad))
+ bad = h; bad["receipt_ref"] := "../../secret"; assert_false(validate_ability_handoff(bad))
+ bad = h; bad["assurance_ref"] := "https://credentials@example.com"; assert_false(validate_ability_handoff(bad))
+ bad = h; bad["input"] := "PRIVATE_APPLICATION_CANARY"; assert_false(validate_ability_handoff(bad))
+ bad = h; bad["receipt_id"] := "orphan"; assert_false(validate_ability_handoff(bad))
+}
