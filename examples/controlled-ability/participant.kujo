@@ -1,0 +1,104 @@
+# Operator-installed offline embedding, not a model-callable gateway or verifier.
+from src.agents.abilities.contract import register_ability_gateway_tool
+from src.agents.abilities.controlled import register_controlled_ability_gateway_tool, validate_ability_handoff, ability_handoff_reference
+from src.agents.tools.registry import create_tool_registry, create_tool_execution_context, execute_registered_tool
+from src.agents.runner import create_agent_runner, run_agent
+from src.agents.core_types import create_agent, create_agent_run_request
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from src.agents.tracing.watchdog import watchdog_telemetry_record
+from examples.support import offline_model_response
+
+arguments := args(); root := arguments[0]; attempt := arguments[1]; mode := arguments[2]
+config := parse_json(read_file_beneath(root, "config.json", 8192))
+invocation := parse_json(read_file_beneath(root, "invocation.json", 4096))
+definition := parse_json(read_file_beneath(root, "definition.json", 8192))
+ticket := {}
+if mode == "run" {ticket = parse_json(read_file_beneath(root, "sdk-ticket-" + attempt + ".json", 8192))}
+
+get := func(obj, key, fallback) {if type(obj) != "dict" {return fallback}; if has_key(obj, key) {return obj[key]}; return fallback}
+require := func(value) {if value == false {throw("Controlled participant rejected")}}
+store := func(raw) {
+    digest := sha256(raw); path := "artifacts/" + digest + ".json"
+    if file_exists(root + "/" + path) {require(read_file_beneath(root, path, 1048576) == raw)}
+    else {write_file_atomic_beneath(root, path, raw, false); sync_directory_beneath(root, "artifacts")}
+    return "sha256:" + digest
+}
+gateway := func(mode) {
+    response := spawn_process([config["runtime"], "run", "examples/application-assurance/gateway.kujo", root, mode, "portable-v1"], {"cwd": config["cwd"], "inherit_env": false, "env": {"ABILITY_GATEWAY_SESSION": env("ABILITY_GATEWAY_SESSION")}, "max_output_bytes": 8192, "timeout_ms": 20000})
+    require(response.success&&response.stderr == ""&&response.stdout_truncated == false)
+    return parse_json(response.stdout)
+}
+invoke := func(call, context) {
+    require(call["input"] == invocation["input"]&&call["invocation_id"] == invocation["invocation_id"]&&call["definition_digest"] == invocation["definition_digest"]&&call["idempotency_key"] == invocation["idempotency_key"])
+    append_file(root + "/sdk-gateway-invocations", attempt + "\n")
+    answer := gateway("execute")
+    return answer
+}
+admit := func(context) {
+    if context["run_id"] != ticket["sdk_run_id"]||context["metadata"]["tool_call_id"] != ticket["tool_call_id"] {return {"ok": false}}
+    # Controller-owned one-use process ticket, never evidence of replay admission.
+    # Only the Dispatch action creates this ticket after its own locked admission.
+    try {write_file_atomic_beneath(root, "sdk-claim-" + attempt, context["metadata"]["sdk_invocation_id"], false)} except ignored {return {"ok": false}}
+    return {"ok": true, "ability_invocation_id": invocation["invocation_id"], "idempotency_key": invocation["idempotency_key"]}
+}
+record := func(admission, context, result) {
+    receipt := get(get(result, "metadata", {}), "ability_receipt", null)
+    if receipt == null {receipt = get(get(get(result, "error", {}), "details", {}), "receipt", null)}
+    outcome := "receipt_unavailable"
+    if get(get(result, "error", {}), "kind", "") == "ability_gateway_failed" {outcome = "transport_failed"}
+    receipt_ref := null; receipt_id := null
+    if receipt != null {
+        receipt_ref = store(to_json(receipt)); receipt_id = receipt["receipt_id"]
+        outcome = "receipt_failed"; if receipt["status"] == "succeeded" {outcome = "receipt_succeeded"}
+    }
+    observed := gateway("observe"); require(observed["ok"])
+    correlation := {"sdk_run_id": context["run_id"], "tool_call_id": context["metadata"]["tool_call_id"], "sdk_invocation_id": context["metadata"]["sdk_invocation_id"], "tool_name": "publish", "ability_id": definition["id"], "ability_version": definition["version"], "definition_digest": invocation["definition_digest"], "ability_invocation_id": invocation["invocation_id"], "receipt_id": receipt_id, "receipt_ref": receipt_ref, "outcome": outcome, "transaction_sha256": observed["profile"]["transaction_sha256"]}
+    stamp := format_date(now(), "YYYY-MM-DDTHH:mm:ssZ")
+    execution := {"schema": "kujo.execution-result/v1", "result_id": ticket["dispatch_run_id"] + ":" + attempt, "subject": {"run_id": ticket["dispatch_run_id"], "step_id": ticket["dispatch_step_id"], "attempt_id": attempt}, "producer": {"name": "sdk-ability-host", "version": "1"}, "status": "indeterminate", "classification": "unknown", "started_at": stamp, "finished_at": stamp, "attempt": parse_int(attempt), "effects": [{"effect_id": ticket["dispatch_effect_id"], "class": "external_idempotent", "state": "unknown", "idempotency_key": observed["profile"]["key_digest"], "enforced_by": "ability-local", "enforcement_evidence_ref": observed["observation"]["evidence_ref"]}], "evidence": [], "sdk_correlation": correlation, "preservation_outcome": ticket["preservation"]}
+    if receipt_ref != null {execution["evidence"] := [{"$ref": receipt_ref}]}
+    if outcome == "receipt_succeeded" {execution["status"] := "success"}
+    raw := to_json(execution); result_ref := store(raw)
+    doc := correlation
+    for key in ["dispatch_run_id", "dispatch_step_id", "dispatch_attempt_id", "dispatch_effect_id"] {doc[key] := ticket[key]}
+    doc["schema"] := "agents-sdk.ability-handoff/v1alpha1"; doc["execution_result_ref"] := result_ref; doc["assurance_ref"] := null
+    require(validate_ability_handoff(doc))
+    reference := store(to_json(doc))
+    write_file_atomic_beneath(root, "sdk-handoff-" + attempt + ".ref", reference, false)
+    write_file_atomic_beneath(root, "result-" + attempt + ".json", raw, false)
+    return {"ok": true, "ref": reference}
+}
+observation := func(event) {
+    # Existing Watchdog tool category only; no new lifecycle authority or payload.
+    if event["kind"] == "tool" {
+        kind := "tool_call_started"
+        if event["phase"] == "finished" {kind = "tool_call_failed"; if event["outcome"] == "succeeded" {kind = "tool_call_completed"}}
+        mapped := watchdog_telemetry_record({"event_kind": kind, "run_id": event["run_id"], "agent_id": event["agent_id"], "timestamp": format_date(now(), "YYYY-MM-DDTHH:mm:ssZ"), "payload": {"tool_name": "publish", "tool_call_id": ticket["tool_call_id"]}})
+        if mapped["ok"] {append_file(root + "/watchdog-" + attempt + ".jsonl", to_json(mapped["record"]) + "\n")}
+    }
+}
+if mode == "attach" {
+    reference := trim(read_file_beneath(root, "sdk-handoff-" + attempt + ".ref", 128))
+    doc := parse_json(read_file_beneath(root, "artifacts/" + substring(reference, 7, 71) + ".json", 4096))
+    raw := read_file_beneath(root, "sdk-assurance.json", 8192)
+    doc["assurance_ref"] := store(raw)
+    require(validate_ability_handoff(doc))
+    ref := store(to_json(doc)); write_file_atomic_beneath(root, "sdk-bound-handoff-" + attempt + ".ref", ref, false)
+    print(to_json({"ok": true, "ref": ref})); exit(0)
+}
+if mode == "standalone" {
+    registered := register_ability_gateway_tool(create_tool_registry({}), definition, {"invoke": invoke}, {"name": "publish"})
+    context := create_tool_execution_context({"run_id": "sdk-standalone", "metadata": {"ability_invocation_id": invocation["invocation_id"], "ability_idempotency_key": invocation["idempotency_key"]}})
+    result := execute_registered_tool(registered["registry"], "publish", invocation["input"], context, {})
+    require(result["ok"])
+    print(to_json({"ok": true, "receipt_id": result["metadata"]["handler"]["ability_receipt"]["receipt_id"], "controlled": false})); exit(0)
+}
+
+registered := register_controlled_ability_gateway_tool(create_tool_registry({}), definition, {"invoke": invoke, "admit": admit, "record": record, "timeout_ms": 30000}, {"name": "publish"})
+require(registered["ok"])
+model := func(client, messages, options) {return offline_model_response("", {"tool_calls": [{"id": ticket["tool_call_id"], "name": "publish", "input": invocation["input"]}]})}
+runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": model})})
+agent := create_agent({"id": "publication-agent", "name": "Publication"})
+request := create_agent_run_request("Perform the admitted publication", {"run_id": ticket["sdk_run_id"], "session_id": "sdk-session"})
+result := run_agent(runner, agent, request, {"tool_registry": registered["registry"], "retry_policy": {"max_tool_retries": 5}, "producer_instance": "sdk-participant", "on_lifecycle": observation})
+# Only bounded terminal status is public. Full result contains private model input.
+print(to_json({"ok": true, "status": result["status"]}))

@@ -55,3 +55,24 @@ deferred; the durable Dispatch journal/result references remain correlation sour
 
 Validation: SDK canonical offline suite plus context gates/examples; real Ability
 owner verification; Dispatch full release gate/new integration; Kujo docs checks.
+
+## Implementation and local validation
+
+The opt-in controlled wrapper reuses the gateway's input/receipt/output validation.
+Host admission runs per call; failed receipts remain uncertain and private. The
+handoff is a closed 4096-byte reference contract. The runner adds correlation only
+to controlled tools; applying it globally initially broke the unset-preference
+metadata regression and was corrected before final validation.
+
+The real participant runs under the SDK's documented interpreter path. Named
+callbacks did not capture host lexical variables; explicit closures fixed the
+fixture. The SDK uses no Dispatch implementation imports. The standalone gateway
+continues to replay the application's retained receipt without synthetic Dispatch
+identity. No Kujo runtime or Ability stable contract change was required.
+
+Local checks: all 41 offline checks pass; controlled tool tests pass; module-export
+and examples smoke pass; context contracts, 20 paired repetitions and 14 dual
+runtime source executions pass; token ratchet passes. The Dispatch cross-repository
+fixture proves business commit/receipt failure, fresh controller review/replay,
+14 rejected substitutions, one logical effect and standalone replay. The complete
+cross-repository evidence record is owned by Dispatch's Wave D rehearsal document.

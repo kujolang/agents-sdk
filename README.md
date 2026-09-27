@@ -391,3 +391,7 @@ Opt-in content-hashed ledgers, ArtifactStore context manifests, typed handoffs,
 verified resume state, scoped tools, progressive skills, token regression checks
 and execution receipts are documented in [Context Contracts](docs/CONTEXT_CONTRACTS.md).
 These APIs require Kujo 1.3.1. Existing execution defaults remain unchanged.
+
+Experimental [controlled Ability tools](docs/CONTROLLED_ABILITY.md) can carry
+bounded evidence references into Dispatch review/replay without making the SDK a
+controller. The existing standalone gateway tool remains available.

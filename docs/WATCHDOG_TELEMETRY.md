@@ -67,3 +67,9 @@ handler. The handler's operation envelope preserves server identity read from
 It uses the same bounded local lifecycle spool. HTTP occurs in the business
 tool handler, never in the observation callback. Its optional metadata artifact
 has a separate outcome; an artifact failure cannot change a completed MCP call.
+
+The controlled Ability example maps actual SDK tool lifecycle callbacks to existing
+`tool_call_started`, `tool_call_failed` and `tool_call_completed` observations.
+Receipt failure remains an observation, not proof of no business commit. Dispatch
+review and replay remain authoritative outside telemetry; private receipts and
+assurance configuration are not projected.

@@ -36,3 +36,7 @@ Reviewed exported runtime surfaces under src/agents and root index exports for n
 - No breaking export renames introduced in this release pass.
 - Contract tests cover deterministic result/event schema stability.
 - Remaining risk is additive growth of integration metadata maps; this is documented and marked experimental.
+
+The controlled Ability gateway registration/projection, handoff validation/reference
+helpers and `agents-sdk.ability-handoff/v1alpha1` are experimental, additive and
+unreleased. Standalone Ability tool behavior remains unchanged.

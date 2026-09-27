@@ -25,3 +25,11 @@
 ## 1.0.0 - 06/10/2026
 
 - initial release
+
+## Unreleased — controlled Ability interoperability
+
+- Add experimental host-admitted Ability gateway tools and bounded immutable
+  handoff references; standalone gateway tools retain their existing behavior.
+- Carry model-call and SDK invocation attribution only for controlled tools.
+- Add a real offline SDK participant for Dispatch beta review/replay integration,
+  private receipt retention and existing Watchdog lifecycle observations.

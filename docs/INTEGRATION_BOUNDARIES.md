@@ -76,3 +76,7 @@ Examples:
 ### Kujo RAG documentation
 
 The optional `src/agents/retrieval/rag_adapter.kujo` maps the documented RAG `/query` envelope into retrieval documents and citations. Host-owned transport configuration is separate from task-owned preferences. `supports_preferences` explicitly enables the Kujo body parameter; unsupported recipients receive their existing body shape. See `docs/RETRIEVAL_PREFERENCES.md` and the opt-in live example for timeout, byte, redirect, and error behavior.
+
+Experimental controlled Ability tools transport immutable evidence references to
+Dispatch; they do not verify assurance or admit replay. See
+[Controlled Ability](CONTROLLED_ABILITY.md) for host callback and ownership rules.
