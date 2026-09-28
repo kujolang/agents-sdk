@@ -48,4 +48,4 @@ export KUJO_BIN=kujo
 
 `kujo run examples/context_agent.kujo --interpreter` demonstrates an offline
 metadata-only ledger, an empty executable tool scope, and a verifier receipt.
-This additive example requires Kujo 1.3.1 and is verified by the context CI gate.
+This additive example requires Kujo 1.6.0 and is verified by the context CI gate.

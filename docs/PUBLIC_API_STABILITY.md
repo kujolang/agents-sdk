@@ -39,4 +39,4 @@ Reviewed exported runtime surfaces under src/agents and root index exports for n
 
 The controlled Ability gateway registration/projection, handoff validation/reference
 helpers and `agents-sdk.ability-handoff/v1alpha1` are experimental, additive and
-unreleased. Standalone Ability tool behavior remains unchanged.
+included as opt-in experimental APIs in 1.1.0. Standalone Ability tool behavior remains unchanged.

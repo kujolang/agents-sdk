@@ -6,13 +6,31 @@
 
 Library-first agent workflow primitives for Kujo, built on top of the Kujo AI SDK.
 
-Current status: stable 1.0 runtime primitives with deterministic offline fixtures and contract coverage. Integration payload metadata may continue to evolve through backward-compatible additions.
+Current status: 1.1.0 retains the stable runtime primitives with deterministic offline fixtures and contract coverage. Integration payload metadata may continue to evolve through backward-compatible additions.
 
 ## Production Readiness
 
 Agents SDK is ready to use as a local-first, provider-gated foundation for agent workflows that need deterministic tests, copyable examples, and explicit runtime contracts. It is not yet a blanket claim of universal enterprise readiness: hosted operations, organization-specific compliance controls, persistence backends, and provider-specific production adapters should be integrated through the documented boundaries and validated in the target environment.
 
 Root files are intentionally limited to package metadata, contributor guidance, license/changelog, and this README. Canonical implementation modules live under `src/`, runnable demos live under `examples/`, and contract coverage lives under `tests/`.
+
+## Install
+
+Use published Kujo 1.6.0 or newer and Kennel 1.1.0 or newer:
+
+```bash
+kennel add agents-sdk@1.1.0
+kennel install
+```
+
+The exact Ability 1.0.1 Git dependency remains pinned in the package. Git and
+GitHub access are required for that dependency; provider credentials are not
+needed for offline examples. AI SDK calls are supplied through application
+callbacks, not an implicit unpinned runtime dependency.
+
+Controlled Ability handoffs remain experimental alpha and opt-in. Dispatch
+owns review and replay admission; SDK correlation never grants replay permission.
+The separate TypeScript/Python participant SDKs remain private and unpublished.
 
 ## Quickstart
 
@@ -390,7 +408,7 @@ bash scripts/ci_no_network_enforcement.sh
 Opt-in content-hashed ledgers, ArtifactStore context manifests, typed handoffs,
 verified resume state, scoped tools, progressive skills, token regression checks
 and execution receipts are documented in [Context Contracts](docs/CONTEXT_CONTRACTS.md).
-These APIs require Kujo 1.3.1. Existing execution defaults remain unchanged.
+Use Kujo 1.6.0 or newer for this release. Existing execution defaults remain unchanged.
 
 Experimental [controlled Ability tools](docs/CONTROLLED_ABILITY.md) can carry
 bounded evidence references into Dispatch review/replay without making the SDK a
