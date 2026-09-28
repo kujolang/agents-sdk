@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased — context accounting
+## 1.1.0 — candidate
+
+### Context accounting
 
 - Verify real observer delivery after hook composition, retain non-sensitive durable evidence under the existing redaction policy, and export the context APIs with an offline example.
 - Integrate opt-in context preparation, typed child evidence, verified resume, dispatch receipts and CI token regression checks without changing default payloads.
@@ -10,7 +12,7 @@
 - Add versioned context manifests as existing Artifact metadata, with hash-verified retrieval and fail-closed source invalidation.
 - Add opt-in metadata-only context cost observation at the AI adapter boundary; provider usage remains distinct from heuristic estimates.
 
-## Unreleased
+### Integration
 
 - Pin the production-stable Ability 1.0.1 contract and runtime package.
 - Pin the canonical `ability` package, remove the duplicated schema, expose
@@ -22,14 +24,16 @@
 - Add launch readiness spec and deterministic Eval suite for prelaunch review evidence.
 - Declare the documented local-first runtime primitives and offline integration contracts stable for the official 1.0 release.
 
-## 1.0.0 - 06/10/2026
-
-- initial release
-
-## Unreleased — controlled Ability interoperability
+### Experimental controlled Ability interoperability
 
 - Add experimental host-admitted Ability gateway tools and bounded immutable
   handoff references; standalone gateway tools retain their existing behavior.
 - Carry model-call and SDK invocation attribution only for controlled tools.
 - Add a real offline SDK participant for Dispatch beta review/replay integration,
   private receipt retention and existing Watchdog lifecycle observations.
+
+- Validate the full offline and context gates on Kujo 1.6.0. Dispatch remains the sole replay/admission authority.
+
+## 1.0.0 - 06/10/2026
+
+- initial release

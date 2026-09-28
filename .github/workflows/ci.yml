@@ -18,9 +18,9 @@ jobs:
 
       - name: Install pinned Kujo runtime
         id: kujo
-        uses: kujolang/kujo/.github/actions/setup-kujo@22582e7f0111a1005002579b44f5d03cd2ed1c9c
+        uses: kujolang/kujo/.github/actions/setup-kujo@fc53093f35e4236682bbbf5ab1ccc8d2b4df990c
         with:
-          version: v1.3.1
+          version: v1.6.0
 
       - name: Export Kujo runtime path
         shell: bash
