@@ -1,12 +1,12 @@
 # Agents SDK
 
-[![Version](https://img.shields.io/badge/version-1.1.0-black)](https://github.com/kujolang/agents-sdk)
+[![Version](https://img.shields.io/badge/version-1.1.1-black)](https://github.com/kujolang/agents-sdk)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 [![built with Kujo](https://img.shields.io/badge/built%20with-Kujo-white.svg)](https://github.com/kujolang/kujo)
 
 Library-first agent workflow primitives for Kujo, built on top of the Kujo AI SDK.
 
-Current status: 1.1.0 retains the stable runtime primitives with deterministic offline fixtures and contract coverage. Integration payload metadata may continue to evolve through backward-compatible additions.
+Current status: 1.1.1 retains the stable runtime primitives with deterministic offline fixtures and contract coverage. Integration payload metadata may continue to evolve through backward-compatible additions.
 
 ## Production Readiness
 
@@ -16,10 +16,10 @@ Root files are intentionally limited to package metadata, contributor guidance, 
 
 ## Install
 
-Use published Kujo 1.6.0 or newer and Kennel 1.1.0 or newer:
+Use published Kujo 1.6.0 or newer and Kennel 1.1.1 or newer:
 
 ```bash
-kennel add agents-sdk@1.1.0
+kennel add agents-sdk@1.1.1
 kennel install
 ```
 

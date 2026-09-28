@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 — 2026-09-28
+
+- Issue a new immutable package after the Kennel publisher fix restores `src/agents/artifacts/store.kujo` in registry distributions. Runtime source is unchanged from 1.1.0.
+- Use 1.1.1 for registry installation; the 1.1.0 GitHub source is intact, but its registry archive omitted this required module and is retained unchanged.
+
+
 ## 1.1.0 — 2026-09-28
 
 ### Context accounting
