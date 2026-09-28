@@ -2,7 +2,7 @@
 
 These additive, opt-in APIs live in `src/agents/context/`. Existing model
 messages, provider options, event shapes, approval gates, and ArtifactStore
-ownership remain the defaults. They require Kujo 1.3.1 for exact UTF-8 byte
+ownership remain the defaults. They require Kujo 1.6.0 for exact UTF-8 byte
 counts. No language syntax changes are involved.
 
 ## Observe-only ledger

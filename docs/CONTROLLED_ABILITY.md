@@ -1,4 +1,4 @@
-# Controlled Ability tools (experimental, unreleased)
+# Controlled Ability tools (experimental alpha, opt-in)
 
 `register_controlled_ability_gateway_tool` and
 `controlled_ability_gateway_to_tool_contract` add host callbacks to the existing
