@@ -1,9 +1,14 @@
 # Changelog
 
+## 1.1.2 — 2026-09-28
+
+- Restore the required ArtifactStore module in Kennel distributions after reconciling both the reusable workflow and its publisher source checkout. Runtime source remains unchanged from 1.1.0.
+- Use 1.1.2 for registry installation. The 1.1.0 and 1.1.1 GitHub source releases are intact, but their immutable registry archives omitted `src/agents/artifacts/store.kujo`.
+
 ## 1.1.1 — 2026-09-28
 
-- Issue a new immutable package after the Kennel publisher fix restores `src/agents/artifacts/store.kujo` in registry distributions. Runtime source is unchanged from 1.1.0.
-- Use 1.1.1 for registry installation; the 1.1.0 GitHub source is intact, but its registry archive omitted this required module and is retained unchanged.
+- Attempted a new immutable package after the Kennel publisher fix to restore `src/agents/artifacts/store.kujo` in registry distributions. Runtime source is unchanged from 1.1.0.
+- Superseded by 1.1.2: the workflow still checked out the older publisher. Do not use 1.1.1 for registry installation; the 1.1.0 GitHub source is intact, but its registry archive omitted this required module and is retained unchanged.
 
 
 ## 1.1.0 — 2026-09-28
