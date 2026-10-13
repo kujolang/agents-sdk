@@ -43,7 +43,13 @@
   model, tool, handoff and final steps; reaching it stops before the next step,
   including within a multi-tool response. Previously executed tool/handoff
   evidence and the terminal session snapshot remain available.
-- Enforce budget limits for tokens, cost, steps, and elapsed time.
+- Enforce budget limits for tokens, steps, and elapsed time. Token counters
+  accumulate provider-reported usage from every model attempt, including failed
+  retries, rejected structured output and failed stream responses. Missing usage
+  is not estimated. The final model response keeps its own per-response usage.
+- Cost telemetry uses `cost_cents`, while the generic budget counter uses
+  `cost_microunits`. Automatic conversion is not defined: configure cost limits
+  in the host/provider layer rather than relying on the runner to convert cents.
 - Tool-call/step budgets are checked against the next tool before invocation.
   Timeouts remain cooperative boundary checks, not preemption of callbacks.
   Non-stream model retries stop at success, a non-retryable failure, or the

@@ -8,7 +8,7 @@ from src.agents.core_types import create_agent_run_request, create_agent_context
 from src.agents.core_types import create_agent_step, create_agent_run_result, validate_agent_config
 from src.agents.events import create_agent_event
 from src.agents.errors import create_agent_error
-from src.agents.ai.adapter import build_ai_request_options, call_chat, call_chat_stream
+from src.agents.ai.adapter import build_ai_request_options, call_chat, call_chat_stream, extract_usage_metrics
 from src.agents.runtime.cancellation import create_cancellation_token, cancellation_requested
 from src.agents.runtime.clock_ids import runtime_now_ms
 from src.agents.tools.registry import resolve_registry_tool, create_tool_execution_context, execute_tool
@@ -302,15 +302,18 @@ func with_retry_attempt_options(request_options, attempt, max_attempts) {
 
 func execute_model_with_retry_attempt(ai_adapter, messages, request_options, attempt, max_attempts) {
 	current_attempt := attempt
+	retry_usage := create_budget_usage({})
 	while true {
 		attempt_options := with_retry_attempt_options(request_options, current_attempt, max_attempts)
 		model_result := call_chat(ai_adapter, messages, attempt_options)
+		retry_usage = increment_budget_usage(retry_usage, build_model_budget_delta(model_result, 1))
 
 		if dict_get_or(model_result, "ok", false) || current_attempt >= max_attempts || is_retryable_model_result(model_result) == false {
 			return {
 				"model_result": model_result,
 				"model_attempts": current_attempt,
-				"model_retries_used": current_attempt - 1
+				"model_retries_used": current_attempt - 1,
+				"budget_delta": dict_get_or(retry_usage, "counters", {})
 			}
 		}
 
@@ -1042,7 +1045,11 @@ func initialize_budget_usage(run_id_input, options_map, run_request) {
 
 func build_model_budget_delta(model_result_input, model_attempts_input) {
 	model_result := normalize_dict(model_result_input)
-	budget_usage := normalize_dict(dict_get_or(model_result, "budget_usage", dict_get_or(model_result, "usage", {})))
+	budget_usage := dict_get_or(model_result, "budget_usage", dict_get_or(model_result, "usage", null))
+	if type(budget_usage) != "dict" {
+		// Failed adapter responses retain provider-reported usage in raw.
+		budget_usage = extract_usage_metrics(normalize_dict(dict_get_or(model_result, "raw", {})))
+	}
 
 	return {
 		"model_calls": normalize_non_negative_int(model_attempts_input, 0),
@@ -2140,7 +2147,11 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 		"error": create_agent_error("model_error", "Model request failed.", {})
 	})
 	retry_counters := create_retry_counters(retry_policy, normalize_non_negative_int(dict_get_or(model_execution, "model_attempts", 1), 1), normalize_non_negative_int(dict_get_or(model_execution, "model_retries_used", 0), 0), 0, 0)
-	budget_usage = increment_budget_usage(budget_usage, build_model_budget_delta(model_result, dict_get_or(retry_counters, "model_attempts", 0)))
+	model_budget_delta := dict_get_or(model_execution, "budget_delta", null)
+	if type(model_budget_delta) != "dict" {
+		model_budget_delta = build_model_budget_delta(model_result, dict_get_or(retry_counters, "model_attempts", 0))
+	}
+	budget_usage = increment_budget_usage(budget_usage, model_budget_delta)
 	if dict_get_or(model_result, "ok", false) {
 		model_request_completed := create_agent_event("model_request_completed", {
 			"step_id": dict_get_or(model_step, "step_id", ""),

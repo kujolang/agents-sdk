@@ -1432,3 +1432,75 @@ test "runner retry non-retryable preserves bounded attempts without recursive st
 	assert_equal(probe_result["metadata"]["retry_counters"]["max_model_retries"], 40)
 	assert_equal(probe_result["error"]["kind"], "invalid_request")
 }
+
+
+test "runner accounts reported retry tokens once in enforce and observe modes" {
+	usage_chat := func(client, messages, request_options) {
+		if request_options["retry_attempt"] == 1 {
+			return {"ok": false, "status_code": 504, "error": {"code": "timeout", "retryable": true}, "usage": {"prompt_tokens": 4, "completion_tokens": 3}}
+		}
+		return {"ok": true, "status_code": 200, "output_text": "Recovered", "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}}
+	}
+	usage_runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": usage_chat})})
+	for usage_mode in ["enforce", "observe"] {
+		usage_result := run_agent(usage_runner, create_agent({"id": "usage-retry", "name": "Usage retry"}), create_agent_run_request("retry", {}), {
+			"retry_policy": {"max_model_retries": 1},
+			"budget_usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3},
+			"budget_policy": {"mode": usage_mode, "budget": {"limits": {"max_total_tokens": 10}}}
+		})
+		usage_counters := usage_result["metadata"]["budget"]["usage"]["counters"]
+		assert_equal(usage_counters["model_calls"], 2)
+		assert_equal(usage_counters["input_tokens"], 9)
+		assert_equal(usage_counters["output_tokens"], 6)
+		assert_equal(usage_counters["total_tokens"], 15)
+		assert_equal(usage_result["metadata"]["retry_counters"]["model_retries_used"], 1)
+		if usage_mode == "enforce" {
+			assert_equal(usage_result["status"], "budget_exceeded")
+			assert_equal(len(usage_result["steps"]), 1)
+		} else {
+			assert_equal(usage_result["status"], "completed")
+			assert_equal(usage_result["output"]["model_result"]["usage"]["total_tokens"], 5)
+		}
+	}
+}
+
+test "runner retains reported tokens when retries exhaust" {
+	usage_chat := func(client, messages, request_options) {
+		return {"ok": false, "status_code": 504, "error": {"code": "timeout", "retryable": true}, "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7}}
+	}
+	usage_runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": usage_chat})})
+	usage_result := run_agent(usage_runner, create_agent({"id": "usage-exhausted", "name": "Usage exhausted"}), create_agent_run_request("retry", {}), {"retry_policy": {"max_model_retries": 2}})
+	assert_equal(usage_result["status"], "failed")
+	assert_equal(usage_result["error"]["kind"], "timeout")
+	assert_equal(usage_result["metadata"]["budget"]["usage"]["counters"]["model_calls"], 3)
+	assert_equal(usage_result["metadata"]["budget"]["usage"]["counters"]["total_tokens"], 21)
+}
+
+test "runner accounts tokens from rejected structured output" {
+	usage_chat := func(client, messages, request_options) {
+		return {"ok": true, "status_code": 200, "output_text": "Invalid structured output", "structured_output": {}, "usage": {"input_tokens": 8, "output_tokens": 6, "total_tokens": 14}}
+	}
+	usage_runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": usage_chat})})
+	for usage_mode in ["enforce", "observe"] {
+		usage_result := run_agent(usage_runner, create_agent({"id": "usage-structured", "name": "Usage structured", "output_schema": {"type": "object", "required": ["answer"]}}), create_agent_run_request("structured", {}), {"budget_policy": {"mode": usage_mode, "budget": {"limits": {"max_total_tokens": 10}}}})
+		assert_equal(usage_result["metadata"]["budget"]["usage"]["counters"]["total_tokens"], 14)
+		if usage_mode == "enforce" {
+			assert_equal(usage_result["status"], "budget_exceeded")
+		} else {
+			assert_equal(usage_result["status"], "failed")
+			assert_equal(usage_result["error"]["kind"], "structured_output_invalid")
+		}
+	}
+}
+
+test "runner accounts reported tokens from a failed stream response" {
+	usage_stream := func(client, messages, request_options, on_event) {
+		return {"ok": false, "status_code": 400, "error": {"code": "invalid_request", "retryable": false}, "usage": {"prompt_tokens": 4, "completion_tokens": 3}}
+	}
+	usage_runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_stream_fn": usage_stream})})
+	usage_result := run_agent(usage_runner, create_agent({"id": "usage-stream", "name": "Usage stream"}), create_agent_run_request("stream", {}), {"stream": true})
+	assert_equal(usage_result["status"], "failed")
+	assert_equal(usage_result["error"]["kind"], "invalid_request")
+	assert_equal(usage_result["metadata"]["budget"]["usage"]["counters"]["total_tokens"], 7)
+	assert_equal(usage_result["metadata"]["budget"]["usage"]["counters"]["model_calls"], 1)
+}
