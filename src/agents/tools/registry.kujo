@@ -312,11 +312,14 @@ func emit_tool_handler_artifacts(tool_name_input, context_input, options_input, 
 	while index < total {
 		candidate := normalize_dict(artifacts[index])
 		if len(keys(candidate)) > 0 {
+			// Artifact content is source data; preserve it before storage and byte checks.
+			artifact_content := dict_get_or(candidate, "content", dict_get_or(candidate, "text", ""))
+			if type(artifact_content) != "string" { artifact_content = "" }
 			create_result := artifact_store_create(artifact_store, {
 				"artifact_id": normalize_string(dict_get_or(candidate, "artifact_id", dict_get_or(candidate, "id", "")), ""),
 				"artifact_kind": normalize_string(dict_get_or(candidate, "artifact_kind", dict_get_or(candidate, "kind", "other")), "other"),
 				"title": normalize_string(dict_get_or(candidate, "title", ""), ""),
-				"content": normalize_string(dict_get_or(candidate, "content", dict_get_or(candidate, "text", "")), ""),
+				"content": artifact_content,
 				"media_type": normalize_string(dict_get_or(candidate, "media_type", dict_get_or(candidate, "mime_type", "text/plain")), "text/plain"),
 				"bytes": normalize_non_negative_int(dict_get_or(candidate, "bytes", -1), -1),
 				"producer_run_id": normalize_string(dict_get_or(candidate, "producer_run_id", run_id), run_id),

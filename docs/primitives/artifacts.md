@@ -32,6 +32,12 @@ Artifacts store typed durable outputs produced during runs.
 ## Policy Notes
 
 - Enforce artifact size and kind limits.
+- Tool-emitted `content` and its legacy `text` fallback preserve source whitespace
+  before storage and byte validation. An explicit `content` field takes precedence;
+  non-string content retains the existing empty-string fallback.
+- Tool artifact writes remain best-effort: inspect `metadata.artifact_writes` for
+  failures. A rejected artifact is omitted from returned artifacts; later valid
+  artifacts can still persist without changing successful handler status.
 - Configured byte limits check actual UTF-8 content bytes as well as declared
   estimates. A caller-supplied lower estimate cannot bypass a store limit.
 - A missing/unreadable backing file returns `artifact_store_read_failed` rather

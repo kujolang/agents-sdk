@@ -6,7 +6,7 @@ test_setup {
 	from src.agents.security.approval import create_approval_policy, create_deny_all_approval_provider
 	from src.agents.security.approval import create_auto_approval_provider
 	from src.agents.runtime.clock_ids import create_fixed_runtime_services
-	from src.agents.artifacts.store import create_in_memory_artifact_store, reset_in_memory_artifact_store, artifact_store_list
+	from src.agents.artifacts.store import create_file_artifact_store, create_in_memory_artifact_store, reset_in_memory_artifact_store, artifact_store_list
 }
 
 test "tool registry registers, resolves, and lists tool metadata deterministically" {
@@ -588,4 +588,64 @@ test "registered tool execution falls back when sanitizer rejects output" {
 	assert_equal(result["metadata"]["sanitizer"]["sanitizer_failed"], true)
 	assert_equal(result["metadata"]["sanitizer"]["failure_reason"], "sanitizer_rejected")
 	assert_equal(result["metadata"]["sanitizer"]["error"]["code"], "sanitizer_offline")
+}
+
+
+test "tool artifacts preserve source strings and legacy content precedence" {
+    let store := create_in_memory_artifact_store({"store_id": "tool-content-fidelity"})
+    reset_in_memory_artifact_store({"store_id": "tool-content-fidelity"})
+    let registration := register_tool(create_tool_registry({}), {"id": "emit-id", "name": "emit", "handler": func(input, context) {
+        return {"ok": true, "artifacts": [
+            {"content": "    return value\n"},
+            {"text": "\tpass\r\n"},
+            {"content": "", "text": "must not revive"},
+            {"content": 123, "text": "must not revive"},
+            {"content": " \n🌍\n "}
+        ]}
+    }})
+    assert_equal(registration["ok"], true)
+    let context := create_tool_execution_context({"artifact_store": store})
+    let result := execute_registered_tool(registration["registry"], "emit", {}, context, {})
+    assert_equal(result["ok"], true)
+    let stored := artifact_store_list(store, {})
+    assert_equal(stored["count"], 5)
+    let expected := ["    return value\n", "\tpass\r\n", "", "", " \n🌍\n "]
+    for index in range(5) {
+        assert_equal(result["artifacts"][index]["content"], expected[index])
+        assert_equal(stored["artifacts"][index]["content"], expected[index])
+    }
+}
+
+test "tool artifact limits apply before any source whitespace is lost" {
+    let store := create_in_memory_artifact_store({"store_id": "tool-original-byte-limit", "metadata": {"max_artifact_bytes": 4}})
+    reset_in_memory_artifact_store({"store_id": "tool-original-byte-limit"})
+    let registration := register_tool(create_tool_registry({}), {"id": "emit-id", "name": "emit", "handler": func(input, context) {
+        return {"ok": true, "artifacts": [{"content": " \n🌍\n ", "bytes": 0}, {"text": "🌍", "bytes": 0}]}
+    }})
+    let result := execute_registered_tool(registration["registry"], "emit", {}, {}, {"artifact_store": store})
+    assert_equal(result["ok"], true)
+    assert_equal(len(result["artifacts"]), 1)
+    let writes := result["metadata"]["artifact_writes"]
+    assert_equal(len(writes), 2)
+    assert_equal(writes[0]["ok"], false)
+    assert_equal(writes[0]["error"]["kind"], "budget_exceeded")
+    assert_equal(writes[0]["error"]["details"]["artifact_bytes"], 8)
+    assert_equal(writes[1]["ok"], true)
+    assert_equal(artifact_store_list(store, {})["count"], 1)
+    assert_equal(result["artifacts"][0]["content"], "🌍")
+}
+
+test "tool artifact file bytes match the original handler content" {
+    let artifact_id := "tool-file-content-" + to_string(current_timestamp())
+    let store := create_file_artifact_store({"store_id": artifact_id, "root_path": "/tmp"})
+    let registration := register_tool(create_tool_registry({}), {"id": "emit-id", "name": "emit", "handler": func(input, context) {
+        return {"ok": true, "artifacts": [{"artifact_id": artifact_id, "text": "\treturn value\r\n"}]}
+    }})
+    let result := execute_registered_tool(registration["registry"], "emit", {}, {}, {"artifact_store": store})
+    assert_equal(len(result["artifacts"]), 1)
+    let path := result["artifacts"][0]["metadata"]["file_path"]
+    let actual := read_file(path)
+    delete_file(path)
+    assert_equal(actual, "\treturn value\r\n")
+    assert_equal(result["artifacts"][0]["content"], actual)
 }
