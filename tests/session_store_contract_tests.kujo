@@ -263,3 +263,19 @@ test "deleting an in-memory session removes its saved run state" {
 	assert_equal(deleted["ok"], true)
 	assert_equal(run_state["ok"], false)
 }
+
+test "deleted sessions can be recreated without reviving messages or run state" {
+    store := create_in_memory_session_store({"store_id": "delete-recreate-audit"})
+    session_store_create(store, {"session_id": "first", "messages": [{"role": "user", "content": "old private payload"}]})
+    session_store_create(store, {"session_id": "second"})
+    session_store_save_run_state(store, "first", {"cursor": "old"}, {})
+    assert_equal(session_store_delete(store, "first")["deleted"], true)
+    assert_equal(session_store_get(store, "first")["ok"], false)
+    assert_equal(session_store_get_run_state(store, "first", {})["ok"], false)
+    session_store_create(store, {"session_id": "first"})
+    assert_equal(session_store_get(store, "first")["session"]["state"]["messages"], [])
+    listed := session_store_list(store, {})
+    assert_equal(listed["count"], 2)
+    assert_equal(listed["sessions"][0]["session_id"], "first")
+    assert_equal(listed["sessions"][1]["session_id"], "second")
+}

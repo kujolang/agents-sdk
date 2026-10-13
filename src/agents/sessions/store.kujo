@@ -400,6 +400,10 @@ func in_memory_delete_session_fn_impl(store_map, session_id_input) {
 	})
 
 	if key_in_dict(active_ids, session_id) {
+        // Keep the ordering tombstone, but release the deleted session payload.
+        sessions_by_id := normalize_dict(dict_get_or(state, "sessions_by_id", {}))
+        sessions_by_id[session_id] := null
+        state["sessions_by_id"] := sessions_by_id
 		active_ids[session_id] := false
 		run_state_by_session[session_id] := null
 		state["active_ids"] := active_ids
