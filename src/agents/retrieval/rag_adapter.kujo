@@ -44,7 +44,7 @@ func retrieve_rag(provider, query, options) {
   id := rag_get(citation, "chunk_id", "")
   path := rag_get(citation, "path", "")
   content := rag_get(citation, "text", null)
-  if type(content) != "string" || id == "" { return rag_failure("invalid_response", "RAG citation is missing text or identity.") }
+  if type(content) != "string" || type(id) != "string" || id == "" { return rag_failure("invalid_response", "RAG citation is missing text or identity.") }
   metadata := {"path": path, "line_start": rag_get(citation, "line_start", 1), "line_end": rag_get(citation, "line_end", 1)}
   documents = push(documents, {"document_id": id, "content": content, "source": path, "score": rag_get(citation, "score", 0), "metadata": metadata})
   references = push(references, {"citation_id": "rag-" + id, "document_id": id, "span": "L" + to_string(metadata["line_start"]) + "-L" + to_string(metadata["line_end"]), "metadata": metadata})

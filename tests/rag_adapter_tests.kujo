@@ -39,3 +39,20 @@ test "RAG adapter rejects invalid and unsuccessful responses" {
   assert_equal(type(result["error"]), "dict")
  }
 }
+
+
+test "RAG rejects malformed citation identities without exposing partial content" {
+ for identity in [123, 1.5, true, null, [], {}, ""] {
+  provider := create_kujo_rag_provider({"transport": func(request, options) {
+   return {"status_code": 200, "body": {"ok": true, "data": {"citations": [
+    {"chunk_id": "valid", "text": "partial private content"},
+    {"chunk_id": identity, "text": "private malformed content"}
+   ]}}}
+  }})
+  result := retrieval_provider_retrieve(provider, {}, {})
+  assert_equal(result["ok"], false)
+  assert_equal(result["error"]["kind"], "invalid_response")
+  assert_equal(result["documents"], [])
+  assert_equal(contains(to_json(result["error"]), "private"), 0)
+ }
+}
