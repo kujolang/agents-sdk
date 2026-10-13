@@ -1374,3 +1374,61 @@ test "guardrail stream events map to deterministic guardrail_blocked kind" {
 
 	assert_equal(mapped["kind"], "guardrail_blocked")
 }
+
+
+test "runner retry recovery preserves bounded attempts without recursive stack growth" {
+	probe_chat := func(client, messages, request_options) {
+		probe_attempt := request_options["retry_attempt"]
+		if probe_attempt < 1 || request_options["retry_max_attempts"] != 41 || request_options["metadata"]["retry_attempt"] != probe_attempt || request_options["metadata"]["retry_max_attempts"] != 41 {
+			return {"ok": false, "status_code": 400, "error": {"code": "invalid_request", "message": "Retry metadata mismatch", "retryable": false}}
+		}
+		if probe_attempt == 40 {
+			return {"ok": true, "status_code": 200, "output_text": "Recovered"}
+		}
+		return {"ok": false, "status_code": 504, "error": {"code": "timeout", "message": "Retry", "retryable": true}}
+	}
+	probe_runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": probe_chat})})
+	probe_result := run_agent(probe_runner, create_agent({"id": "retry-depth", "name": "Retry depth"}), create_agent_run_request("retry", {"run_id": "retry-depth"}), {"retry_policy": {"max_model_retries": 40}})
+	assert_equal(probe_result["status"], "completed")
+	assert_equal(probe_result["output"]["text"], "Recovered")
+	assert_equal(probe_result["metadata"]["retry_counters"]["model_attempts"], 40)
+	assert_equal(probe_result["metadata"]["retry_counters"]["model_retries_used"], 39)
+	assert_equal(probe_result["metadata"]["retry_counters"]["max_model_retries"], 40)
+}
+
+test "runner retry exhaustion preserves bounded attempts without recursive stack growth" {
+	probe_chat := func(client, messages, request_options) {
+		probe_attempt := request_options["retry_attempt"]
+		if probe_attempt < 1 || request_options["retry_max_attempts"] != 41 || request_options["metadata"]["retry_attempt"] != probe_attempt || request_options["metadata"]["retry_max_attempts"] != 41 {
+			return {"ok": false, "status_code": 400, "error": {"code": "invalid_request", "message": "Retry metadata mismatch", "retryable": false}}
+		}
+		return {"ok": false, "status_code": 504, "error": {"code": "timeout", "message": "Retry", "retryable": true}}
+	}
+	probe_runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": probe_chat})})
+	probe_result := run_agent(probe_runner, create_agent({"id": "retry-depth", "name": "Retry depth"}), create_agent_run_request("retry", {"run_id": "retry-depth"}), {"retry_policy": {"max_model_retries": 40}})
+	assert_equal(probe_result["status"], "failed")
+	assert_equal(probe_result["metadata"]["retry_counters"]["model_attempts"], 41)
+	assert_equal(probe_result["metadata"]["retry_counters"]["model_retries_used"], 40)
+	assert_equal(probe_result["metadata"]["retry_counters"]["max_model_retries"], 40)
+	assert_equal(probe_result["error"]["kind"], "timeout")
+}
+
+test "runner retry non-retryable preserves bounded attempts without recursive stack growth" {
+	probe_chat := func(client, messages, request_options) {
+		probe_attempt := request_options["retry_attempt"]
+		if probe_attempt < 1 || request_options["retry_max_attempts"] != 41 || request_options["metadata"]["retry_attempt"] != probe_attempt || request_options["metadata"]["retry_max_attempts"] != 41 {
+			return {"ok": false, "status_code": 400, "error": {"code": "invalid_request", "message": "Retry metadata mismatch", "retryable": false}}
+		}
+		if probe_attempt == 4 {
+			return {"ok": false, "status_code": 400, "error": {"code": "invalid_request", "message": "Stop", "retryable": false}}
+		}
+		return {"ok": false, "status_code": 504, "error": {"code": "timeout", "message": "Retry", "retryable": true}}
+	}
+	probe_runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": probe_chat})})
+	probe_result := run_agent(probe_runner, create_agent({"id": "retry-depth", "name": "Retry depth"}), create_agent_run_request("retry", {"run_id": "retry-depth"}), {"retry_policy": {"max_model_retries": 40}})
+	assert_equal(probe_result["status"], "failed")
+	assert_equal(probe_result["metadata"]["retry_counters"]["model_attempts"], 4)
+	assert_equal(probe_result["metadata"]["retry_counters"]["model_retries_used"], 3)
+	assert_equal(probe_result["metadata"]["retry_counters"]["max_model_retries"], 40)
+	assert_equal(probe_result["error"]["kind"], "invalid_request")
+}

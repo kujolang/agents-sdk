@@ -301,26 +301,21 @@ func with_retry_attempt_options(request_options, attempt, max_attempts) {
 }
 
 func execute_model_with_retry_attempt(ai_adapter, messages, request_options, attempt, max_attempts) {
-	attempt_options := with_retry_attempt_options(request_options, attempt, max_attempts)
-	model_result := call_chat(ai_adapter, messages, attempt_options)
+	current_attempt := attempt
+	while true {
+		attempt_options := with_retry_attempt_options(request_options, current_attempt, max_attempts)
+		model_result := call_chat(ai_adapter, messages, attempt_options)
 
-	if dict_get_or(model_result, "ok", false) {
-		return {
-			"model_result": model_result,
-			"model_attempts": attempt,
-			"model_retries_used": attempt - 1
+		if dict_get_or(model_result, "ok", false) || current_attempt >= max_attempts || is_retryable_model_result(model_result) == false {
+			return {
+				"model_result": model_result,
+				"model_attempts": current_attempt,
+				"model_retries_used": current_attempt - 1
+			}
 		}
-	}
 
-	if attempt >= max_attempts || is_retryable_model_result(model_result) == false {
-		return {
-			"model_result": model_result,
-			"model_attempts": attempt,
-			"model_retries_used": attempt - 1
-		}
+		current_attempt = current_attempt + 1
 	}
-
-	return execute_model_with_retry_attempt(ai_adapter, messages, request_options, attempt + 1, max_attempts)
 }
 
 func execute_model_with_retry_policy(ai_adapter, messages, request_options, retry_policy) {

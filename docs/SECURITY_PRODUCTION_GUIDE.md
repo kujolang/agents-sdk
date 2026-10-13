@@ -46,8 +46,10 @@
 - Enforce budget limits for tokens, cost, steps, and elapsed time.
 - Tool-call/step budgets are checked against the next tool before invocation.
   Timeouts remain cooperative boundary checks, not preemption of callbacks.
-  Model retries run within their configured retry ceiling; transport callbacks
-  must enforce per-attempt deadlines and cancellation themselves.
+  Non-stream model retries stop at success, a non-retryable failure, or the
+  configured retry ceiling. Retry execution does not consume an additional call
+  frame per attempt. Transport callbacks must enforce per-attempt deadlines and
+  cancellation themselves; choose a small retry ceiling for deployed runs.
 
 ## Session and Memory Hardening
 
