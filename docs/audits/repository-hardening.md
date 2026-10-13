@@ -1,6 +1,7 @@
 # Repository Hardening Engineering Receipt
 
-Latest follow-up: [2026-10-13 bounded-retry audit](repository-hardening-2026-10-13-seventh.md).
+Latest follow-up: [2026-10-13 model-usage audit](repository-hardening-2026-10-13-eighth.md).
+Previous follow-up: [2026-10-13 bounded-retry audit](repository-hardening-2026-10-13-seventh.md).
 Previous follow-up: [2026-10-13 tool-artifact audit](repository-hardening-2026-10-13-sixth.md).
 Previous follow-up: [2026-10-12 retrieval-integrity audit](repository-hardening-2026-10-12-fifth.md).
 Previous follow-up: [2026-10-12 session/trace audit](repository-hardening-2026-10-12-fourth.md).
