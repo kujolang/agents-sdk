@@ -261,3 +261,31 @@ test "jsonl trace sink appends parseable lines and applies redaction metadata" {
 	assert_equal(paged["traces"][0]["event_kind"], "run_completed")
 	delete_file("/tmp/" + file_name)
 }
+
+
+test "trace pagination handles maximum integers and preserves matching order" {
+    let sink := create_in_memory_trace_sink({"store_id": "trace-boundary-page"})
+    reset_in_memory_trace_sink({"store_id": "trace-boundary-page"})
+    for i in range(6) {
+        trace_sink_append(sink, {"trace_id": "trace-" + to_string(i), "run_id": "selected", "agent_id": "agent", "event_kind": "run_started", "payload": {"index": i}}, {})
+    }
+    trace_sink_append(sink, {"run_id": "other"}, {})
+    let page := trace_sink_list(sink, {"run_id": "selected", "offset": 2, "limit": 2})
+    assert_equal(page["count"], 6)
+    assert_equal(page["total_count"], 6)
+    assert_equal(len(page["traces"]), 2)
+    assert_equal(page["traces"][0]["payload"]["index"], 2)
+    assert_equal(page["traces"][1]["payload"]["index"], 3)
+    mut payload := page["traces"][0]["payload"]
+    payload["index"] = 99
+    assert_equal(trace_sink_list(sink, {"run_id": "selected", "offset": 2, "limit": 1})["traces"][0]["payload"]["index"], 2)
+    for limit in [0, -1, "invalid", 9223372036854775807] {
+        let remaining := trace_sink_list(sink, {"run_id": "selected", "offset": 2, "limit": limit})
+        assert_equal(remaining["count"], 6)
+        assert_equal(len(remaining["traces"]), 4)
+    }
+    let empty := trace_sink_list(sink, {"offset": 9223372036854775807, "limit": 2})
+    assert_equal(empty["count"], 7)
+    assert_equal(empty["traces"], [])
+    assert_equal(trace_sink_list(sink, {"run_id": "absent", "limit": 1})["count"], 0)
+}

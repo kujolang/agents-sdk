@@ -1,0 +1,16 @@
+from src.agents.tracing.sink import create_in_memory_trace_sink, trace_sink_append, trace_sink_list, reset_in_memory_trace_sink
+let bench_id := "trace-page-benchmark"
+reset_in_memory_trace_sink({"store_id": bench_id})
+let bench_sink := create_in_memory_trace_sink({"store_id": bench_id})
+for bench_i in range(120) {
+ trace_sink_append(bench_sink, {"trace_id": "event-" + to_string(bench_i), "run_id": "run", "timestamp": "2026-10-12 00:00:00", "payload": {"content": repeat("evidence 🌍 ", 128), "index": bench_i}}, {})
+}
+let bench_started := current_timestamp()
+mut bench_hash := ""
+for bench_i in range(8) {
+ let bench_result := trace_sink_list(bench_sink, {"run_id": "run", "offset": 60, "limit": 2})
+ assert_equal(bench_result["count"], 120)
+ assert_equal(len(bench_result["traces"]), 2)
+ bench_hash = sha256(to_json(bench_result))
+}
+print(to_json({"elapsed_ms": current_timestamp() - bench_started, "result_hash": bench_hash, "records": 120, "page_size": 2, "queries": 8}))

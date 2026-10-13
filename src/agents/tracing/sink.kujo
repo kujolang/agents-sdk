@@ -519,7 +519,10 @@ func in_memory_list_traces_fn_impl(sink_input, options) {
 	}
 	filter_map := normalize_dict(options)
 
-	filtered := []
+	offset := normalize_non_negative_int(dict_get_or(filter_map, "offset", 0), 0)
+	limit := normalize_non_negative_int(dict_get_or(filter_map, "limit", 0), 0)
+	matched_count := 0
+	items := []
 	index := 0
 	total_ids := len(ordered_trace_ids)
 	while index < total_ids {
@@ -529,7 +532,11 @@ func in_memory_list_traces_fn_impl(sink_input, options) {
 				trace := normalize_dict(dict_get_or(traces_by_id, trace_id, {}))
 				if len(keys(trace)) > 0 {
 					if matches_trace_filter(trace, filter_map) {
-						filtered = push(filtered, to_trace_record(trace))
+						// Count every match, but rebuild only the returned page.
+						if matched_count >= offset && (limit == 0 || len(items) < limit) {
+							items = push(items, to_trace_record(trace))
+						}
+						matched_count = matched_count + 1
 					}
 				}
 			}
@@ -537,29 +544,11 @@ func in_memory_list_traces_fn_impl(sink_input, options) {
 		index = index + 1
 	}
 
-	offset := normalize_non_negative_int(dict_get_or(filter_map, "offset", 0), 0)
-	limit := normalize_non_negative_int(dict_get_or(filter_map, "limit", len(filtered)), len(filtered))
-	if limit <= 0 {
-		limit = len(filtered)
-	}
-
-	items := []
-	cursor := offset
-	max_items := offset + limit
-	if max_items > len(filtered) {
-		max_items = len(filtered)
-	}
-
-	while cursor < max_items {
-		items = push(items, filtered[cursor])
-		cursor = cursor + 1
-	}
-
 	return {
 		"ok": true,
 		"traces": items,
-		"count": len(filtered),
-		"total_count": len(filtered)
+		"count": matched_count,
+		"total_count": matched_count
 	}
 }
 
