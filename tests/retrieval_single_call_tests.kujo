@@ -1,4 +1,5 @@
 test_setup {
+ from src.agents.retrieval.rag_adapter import create_kujo_rag_provider
  from src.agents.retrieval.provider import create_retrieval_provider_interface, retrieval_provider_retrieve
  from src.agents.core_types import create_agent, create_agent_run_request
  from src.agents.runner import create_agent_runner, run_agent
@@ -61,5 +62,34 @@ test "runner invokes empty failing malformed and summary-only providers exactly 
    assert_equal(retrieval["result"]["error"]["message"], "Keep this error")
   } else if has_key(response, "summary") { assert_equal(retrieval["applied"], true) }
   else { assert_equal(retrieval["reason"], "empty_context") }
+ }
+}
+
+
+test "runner preserves retrieved text and handles malformed RAG citations with one call" {
+ for identity in ["code", 123] {
+  receipt_path := "/tmp/rag-audit-call-" + to_string(current_timestamp()) + ".txt"
+  write_file(receipt_path, "", true)
+  provider := create_kujo_rag_provider({"transport": func(request, options) {
+   append_file(receipt_path, "call\n")
+   return {"status_code": 200, "body": {"ok": true, "data": {"citations": [{"chunk_id": identity, "text": "    return value\n"}]}}}
+  }})
+  adapter := create_ai_sdk_adapter({"chat_completion_fn": func(c, messages, o) {
+   if type(identity) == "string" {
+    assert_equal(messages[len(messages)-1]["content"], "Retrieved context:\nDocuments:\n- [code] Document:     return value\n")
+   } else {
+    assert_equal(contains(to_json(messages), "return value"), 0)
+   }
+   return {"ok": true, "status_code": 200, "output_text": "done"}
+  }})
+  result := run_agent(create_agent_runner({"ai_adapter": adapter}), create_agent({"policy": {"retrieval": {"enabled": true}}}), create_agent_run_request("question", {}), {"retrieval_provider": provider})
+  calls := read_file(receipt_path)
+  delete_file(receipt_path)
+  assert_equal(calls, "call\n")
+  assert_equal(result["status"], "completed")
+  if type(identity) != "string" {
+   assert_equal(result["metadata"]["retrieval"]["reason"], "provider_error")
+   assert_equal(result["metadata"]["retrieval"]["result"]["error"]["kind"], "invalid_response")
+  }
  }
 }

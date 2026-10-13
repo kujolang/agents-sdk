@@ -113,12 +113,14 @@ func create_retrieval_query_impl(options) {
 
 func create_retrieved_document_impl(options) {
 	document_options_map := normalize_dict(options)
+	document_content := dict_get_or(document_options_map, "content", "")
+	if type(document_content) != "string" { document_content = "" }
 
 	return {
 		"type": "RetrievedDocument",
 		"document_id": normalize_string(dict_get_or(document_options_map, "document_id", "doc-default"), "doc-default"),
 		"title": normalize_string(dict_get_or(document_options_map, "title", ""), ""),
-		"content": normalize_string(dict_get_or(document_options_map, "content", ""), ""),
+		"content": document_content,
 		"score": dict_get_or(document_options_map, "score", 0),
 		"source": normalize_string(dict_get_or(document_options_map, "source", ""), ""),
 		"metadata": clone_value(dict_get_or(document_options_map, "metadata", {}))

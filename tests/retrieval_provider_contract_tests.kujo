@@ -172,3 +172,18 @@ test "mock retrieval provider returns deterministic seeded responses" {
 	assert_equal(beta_result["ok"], true)
 	assert_equal(type(beta_result["metadata"]), "dict")
 }
+
+
+test "retrieved documents retain whitespace while identifiers keep normalization" {
+ for text in ["    return value\n", "\tpass\r\n", " \n", "", "🌍  "] {
+  document := create_retrieved_document({"document_id": " code ", "title": " Title ", "content": text})
+  assert_equal(document["document_id"], "code")
+  assert_equal(document["title"], "Title")
+  assert_equal(document["content"], text)
+  context := create_retrieved_context({"documents": [document]})
+  assert_equal(context["documents"][0]["content"], text)
+ }
+ for invalid in [null, 123, {}, []] {
+  assert_equal(create_retrieved_document({"content": invalid})["content"], "")
+ }
+}

@@ -1357,7 +1357,8 @@ func build_retrieval_context_message(retrieval_result_input, max_documents_input
 			document := normalize_dict(documents[index])
 			document_id := normalize_string(dict_get_or(document, "document_id", "doc-" + to_string(index + 1)), "doc-" + to_string(index + 1))
 			title_text := normalize_string(dict_get_or(document, "title", ""), "")
-			content_text := normalize_string(dict_get_or(document, "content", ""), "")
+			content_text := dict_get_or(document, "content", "")
+			if type(content_text) != "string" { content_text = "" }
 
 			line := "- [" + document_id + "] "
 			if title_text != "" {
@@ -1474,9 +1475,12 @@ func maybe_inject_retrieval_context(messages_input, retrieval_provider, retrieva
 		index = index + 1
 	}
 
-	injected_messages = push(injected_messages, create_agent_message("system", context_message, {
+	retrieval_message := create_agent_message("system", context_message, {
 		"source": "retrieval.context"
-	}))
+	})
+	// Document whitespace is source data, including the final document's newline.
+	retrieval_message["content"] := context_message
+	injected_messages = push(injected_messages, retrieval_message)
 
 	return {
 		"messages": injected_messages,

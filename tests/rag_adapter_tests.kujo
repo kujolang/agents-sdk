@@ -56,3 +56,13 @@ test "RAG rejects malformed citation identities without exposing partial content
   assert_equal(contains(to_json(result["error"]), "private"), 0)
  }
 }
+
+
+test "RAG document normalization preserves code indentation and final newlines" {
+ provider := create_kujo_rag_provider({"transport": func(request, options) {
+  return {"status_code": 200, "body": {"ok": true, "data": {"citations": [{"chunk_id": "code", "text": "    return value\n"}, {"chunk_id": "tab", "text": "\tpass\r\n"}]}}}
+ }})
+ result := retrieval_provider_retrieve(provider, {}, {})
+ assert_equal(result["documents"][0]["content"], "    return value\n")
+ assert_equal(result["context"]["documents"][1]["content"], "\tpass\r\n")
+}
