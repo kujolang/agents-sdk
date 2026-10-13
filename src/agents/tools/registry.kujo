@@ -658,6 +658,20 @@ func evaluate_tool_approval_gate(tool_input, context_input, options_input) {
 	}
 }
 
+// Parent handoff policies constrain the child's own policy; neither can grant
+// authority denied by the other. Only trusted runner options carry these gates.
+func evaluate_tool_approval_gates(tool, context, options) {
+    local_gate := evaluate_tool_approval_gate(tool, context, options)
+    if dict_get_or(local_gate, "ok", false) == false { return local_gate }
+    inherited_context := context
+    inherited_context["policy_handles"] := {}
+    for inherited in normalize_array(dict_get_or(options, "inherited_approval_gates", [])) {
+        gate := evaluate_tool_approval_gate(tool, inherited_context, inherited)
+        if dict_get_or(gate, "ok", false) == false { return gate }
+    }
+    return local_gate
+}
+
 func execute_tool_impl(tool_input, input_payload, context_input, options_input) {
 	tool := normalize_dict(tool_input)
 	options := normalize_dict(options_input)
@@ -673,7 +687,7 @@ func execute_tool_impl(tool_input, input_payload, context_input, options_input) 
 	}
 
 	tool_context := with_tool_execution_invocation_impl(context_input, tool_name, dict_get_or(input_validation, "normalized_input", {}))
-	approval_gate := evaluate_tool_approval_gate(tool, tool_context, options)
+	approval_gate := evaluate_tool_approval_gates(tool, tool_context, options)
 	if dict_get_or(approval_gate, "ok", false) == false {
 		approval_status := normalize_string(dict_get_or(approval_gate, "status", "approval_required"), "approval_required")
 		approval_decision := normalize_dict(dict_get_or(approval_gate, "approval_decision", {}))

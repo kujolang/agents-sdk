@@ -1,5 +1,8 @@
 # Repository Hardening Engineering Receipt
 
+Latest follow-up: [2026-10-12 audit](repository-hardening-2026-10-12.md).
+The record below describes the historical September revision.
+
 Recorded 2026-09-05; observations began 2026-09-04.
 
 ## Scope and Baseline

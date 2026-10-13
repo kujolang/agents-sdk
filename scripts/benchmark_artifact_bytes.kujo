@@ -1,0 +1,11 @@
+from src.agents.artifacts.store import create_artifact_store_interface, artifact_store_create
+let content := repeat("🌍 abc ", 8192)
+let store := create_artifact_store_interface({"metadata": {"max_artifact_bytes": byte_length(content)}, "create_artifact_fn": func(store, artifact) { return {"ok": true, "bytes": byte_length(artifact["content"])} }})
+let started := current_timestamp()
+mut checksum := 0
+for i in range(100) {
+    let result := artifact_store_create(store, {"artifact_id": "benchmark", "content": content})
+    assert_equal(result["ok"], true)
+    checksum = checksum + result["bytes"]
+}
+print(to_json({"elapsed_ms": current_timestamp() - started, "checksum": checksum, "iterations": 100}))

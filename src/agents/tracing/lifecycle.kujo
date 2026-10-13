@@ -33,7 +33,7 @@ export func create_lifecycle_spool(path, max_bytes) {
             encoded := to_json(event) + "\n"
             used := 0
             if file_exists(path) { used = file_size(path) }
-            if used + len(encoded) > max_bytes {
+            if used + byte_length(encoded) > max_bytes {
                 write_file(path + ".gap", "overflow", true)
                 return false
             }
