@@ -1,6 +1,7 @@
 # Repository Hardening Engineering Receipt
 
-Latest follow-up: [2026-10-12 session/trace audit](repository-hardening-2026-10-12-fourth.md).
+Latest follow-up: [2026-10-12 retrieval-integrity audit](repository-hardening-2026-10-12-fifth.md).
+Previous follow-up: [2026-10-12 session/trace audit](repository-hardening-2026-10-12-fourth.md).
 Previous follow-up: [2026-10-12 latest-main audit](repository-hardening-2026-10-12-third.md).
 Previous follow-up: [2026-10-12 repeat audit](repository-hardening-2026-10-12-repeat.md).
 Previous follow-up: [2026-10-12 audit](repository-hardening-2026-10-12.md).
