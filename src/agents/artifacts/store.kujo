@@ -3,13 +3,7 @@ func key_in_dict(obj, expected_key) {
 		return false
 	}
 
-	for key in keys(obj) {
-		if key == expected_key {
-			return true
-		}
-	}
-
-	return false
+	return has_key(obj, expected_key) != 0
 }
 
 func unwrap_dict(value) {
@@ -515,40 +509,28 @@ func in_memory_list_artifacts_fn_impl(store_map, options_input) {
 	offset := normalize_non_negative_int(dict_get_or(options, "offset", 0), 0)
 	limit := normalize_non_negative_int(dict_get_or(options, "limit", len(ordered_artifact_ids)), len(ordered_artifact_ids))
 
-	filtered := []
+	count := 0
+	items := []
 	for artifact_id in ordered_artifact_ids {
 		if key_in_dict(artifacts_by_id, artifact_id) {
 			artifact_value := dict_get_or(artifacts_by_id, artifact_id, null)
 			if type(artifact_value) == "dict" {
-				artifact := to_artifact_record(artifact_value)
-				if matches_artifact_filter(artifact, options) {
-					filtered = push(filtered, artifact)
+				if matches_artifact_filter(artifact_value, options) {
+					// Preserve total matching counts without rebuilding off-page records.
+					if count >= offset && (limit <= 0 || len(items) < limit) {
+						items = push(items, to_artifact_record(artifact_value))
+					}
+					count = count + 1
 				}
 			}
 		}
 	}
 
-	if limit <= 0 {
-		limit = len(filtered)
-	}
-
-	items := []
-	index := offset
-	max_items := offset + limit
-	if max_items > len(filtered) {
-		max_items = len(filtered)
-	}
-
-	while index < max_items {
-		items = push(items, filtered[index])
-		index = index + 1
-	}
-
 	return {
 		"ok": true,
 		"artifacts": items,
-		"count": len(filtered),
-		"total_count": len(filtered)
+		"count": count,
+		"total_count": count
 	}
 }
 

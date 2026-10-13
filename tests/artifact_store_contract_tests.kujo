@@ -279,3 +279,29 @@ test "automatic artifact IDs skip consecutive reservations without changing repl
     assert_equal(listed["artifacts"][0]["artifact_id"], id + "-artifact-1")
     assert_equal(listed["artifacts"][0]["content"], "updated")
 }
+
+test "artifact pages preserve matching totals order and zero-limit semantics" {
+    let id := "artifact-paging-contract"
+    reset_in_memory_artifact_store({"store_id": id})
+    let store := create_in_memory_artifact_store({"store_id": id})
+    for i in range(6) {
+        artifact_store_create(store, {"artifact_id": "record-" + to_string(i), "artifact_kind": "text", "producer_run_id": "selected", "content": "body", "metadata": {"nested": {"index": i}}})
+    }
+    artifact_store_create(store, {"artifact_id": "wrong-kind", "artifact_kind": "json", "producer_run_id": "selected"})
+    artifact_store_create(store, {"artifact_id": "wrong-run", "artifact_kind": "text", "producer_run_id": "other"})
+    let page := artifact_store_list(store, {"artifact_kind": "text", "producer_run_id": "selected", "offset": 2, "limit": 2})
+    assert_equal(page["count"], 6)
+    assert_equal(page["total_count"], 6)
+    assert_equal(len(page["artifacts"]), 2)
+    assert_equal(page["artifacts"][0]["artifact_id"], "record-2")
+    assert_equal(page["artifacts"][1]["artifact_id"], "record-3")
+    mut nested := page["artifacts"][0]["metadata"]["nested"]
+    nested["index"] = 99
+    assert_equal(artifact_store_get(store, "record-2")["artifact"]["metadata"]["nested"]["index"], 2)
+    let unlimited := artifact_store_list(store, {"artifact_kind": "text", "producer_run_id": "selected", "offset": 2, "limit": 0})
+    assert_equal(unlimited["count"], 6)
+    assert_equal(len(unlimited["artifacts"]), 4)
+    let empty := artifact_store_list(store, {"offset": 9223372036854775807, "limit": 2})
+    assert_equal(empty["count"], 8)
+    assert_equal(empty["artifacts"], [])
+}

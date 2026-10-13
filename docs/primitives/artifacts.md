@@ -37,3 +37,14 @@ Artifacts store typed durable outputs produced during runs.
 - A missing/unreadable backing file returns `artifact_store_read_failed` rather
   than stale cached content.
 - Keep metadata-only references in result payloads when possible.
+
+## Listing and measurement
+
+Artifact lists retain insertion order and report all matching records in `count`
+and `total_count`. `offset` and `limit` select the returned page; `limit: 0` keeps
+the existing unlimited-page behavior. Only records in that page are rebuilt for
+return. File-backed lists use the same process-local index and pagination rules.
+
+Run `"$KUJO_BIN" run scripts/benchmark_artifact_page.kujo --interpreter` for a
+repeatable local list workload. The receipt includes query time and a result hash;
+timing is diagnostic, not a CI threshold.

@@ -1,0 +1,16 @@
+from src.agents.artifacts.store import create_in_memory_artifact_store, reset_in_memory_artifact_store, artifact_store_create, artifact_store_list
+let bench_id := "artifact-page-benchmark"
+reset_in_memory_artifact_store({"store_id": bench_id})
+let bench_store := create_in_memory_artifact_store({"store_id": bench_id})
+for bench_i in range(160) {
+    artifact_store_create(bench_store, {"artifact_id": "item-" + to_string(bench_i), "content": repeat("evidence 🌍 ", 1024), "artifact_kind": "text", "producer_run_id": "run", "metadata": {"index": bench_i}})
+}
+let bench_started := current_timestamp()
+mut bench_hash := ""
+for bench_i in range(12) {
+    let bench_result := artifact_store_list(bench_store, {"offset": 80, "limit": 2, "producer_run_id": "run"})
+    assert_equal(bench_result["count"], 160)
+    assert_equal(len(bench_result["artifacts"]), 2)
+    bench_hash = sha256(to_json(bench_result))
+}
+print(to_json({"elapsed_ms": current_timestamp() - bench_started, "result_hash": bench_hash, "records": 160, "page_size": 2, "queries": 12}))
