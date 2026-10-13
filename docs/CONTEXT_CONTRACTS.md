@@ -102,7 +102,10 @@ size estimate, metadata hash, test IDs and dependencies. Loading verifies hashes
 rejects cycles/depth overflow and loads core plus every security rule before
 returning. Exact triggers add optional references; prose, forged headings and
 repository instructions cannot activate triggers. Missing required context is
-an error. Hashes prove integrity against trusted references, not authenticity
+an error. Shared dependencies are validated and loaded once per invocation;
+completed dependency state is never reused across calls, so a later run rechecks
+artifact freshness. Cycle detection still tracks the active recursion path.
+Hashes prove integrity against trusted references, not authenticity
 of an attacker-supplied catalog; pin catalog provenance through the manifest.
 
 ## Runner opt-in and dispatch evidence
@@ -130,7 +133,9 @@ resume state or parent dispatch expectations. Durable runtime evidence uses the 
 secret values stay masked and executable callbacks become type markers.
 Parent and child evidence remain
 available through references on handoff metadata. Without `context_handoff`,
-legacy parent-output handoffs remain unchanged.
+legacy parent-output payloads remain unchanged. All handoffs now retain parent
+approval/cancellation/sanitizer controls; parent approval gates also preserve
+stricter child policies.
 
 Full schema expansion is the default. On-demand mode requires the explicit
 `supports_schema_on_demand` adapter contract: the application must implement

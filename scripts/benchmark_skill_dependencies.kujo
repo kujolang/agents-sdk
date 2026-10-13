@@ -1,0 +1,24 @@
+from src.agents.context.skills import context_load_skills
+from src.agents.context.ledger import context_hash
+from src.agents.context.manifest import context_reference
+from src.agents.artifacts.store import create_artifact_store_interface
+let path := "/tmp/sdk-skill-fetches-" + to_string(current_timestamp())
+write_file(path, "", true)
+let artifact := {"artifact_id": "core", "content": "shared skill content"}
+let ref := context_reference(artifact)["reference"]
+let store := create_artifact_store_interface({"get_artifact_fn": func(store, id) { append_file(path, "x"); return {"ok": true, "artifact": artifact} }})
+mut catalog := {}
+for index in range(8) {
+    let id := "skill-" + to_string(index)
+    mut dependencies := []
+    if index > 0 { dependencies = ["skill-" + to_string(index - 1), "skill-" + to_string(index - 1)] }
+    mut skill := {"serialization_version": "kujo.skill-context/v1", "skill_id": id, "core": ref, "references": [], "triggers": [], "capabilities": [], "security_rules": [], "estimated_tokens": 5, "tests": [], "dependencies": dependencies}
+    skill["content_hash"] = context_hash(skill)
+    catalog[id] = skill
+}
+let started := current_timestamp()
+let result := context_load_skills(catalog, ["skill-7"], [], [], store)
+assert_equal(result["ok"], true)
+assert_equal(len(result["loaded"]), 8)
+print(to_json({"fetches": file_size(path), "elapsed_ms": current_timestamp() - started, "loaded": len(result["loaded"]), "output_hash": context_hash(result)}))
+delete_file(path)

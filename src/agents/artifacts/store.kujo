@@ -317,7 +317,7 @@ func artifact_store_create_impl(store_input, artifact_input) {
 	artifact_bytes := normalize_non_negative_int(dict_get_or(artifact, "bytes", 0), 0)
 	if max_artifact_bytes > 0 {
 		// The declared estimate must not undercount the content being persisted.
-		content_bytes := len(decode_base64(encode_base64(artifact["content"])))
+		content_bytes := byte_length(artifact["content"])
 		if content_bytes > artifact_bytes { artifact_bytes = content_bytes }
 	}
 	if max_artifact_bytes > 0 && artifact_bytes > max_artifact_bytes {

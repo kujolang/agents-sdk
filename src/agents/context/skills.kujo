@@ -1,8 +1,9 @@
 from src.agents.context.ledger import context_get, context_hash
 from src.agents.context.manifest import context_error, context_fetch
 
-func load_skill(catalog, id, triggers, capabilities, store, visited) {
+func load_skill(catalog, id, triggers, capabilities, store, visited, completed) {
     if contains(visited, id) || len(visited) >= 16 { return context_error("skill_dependency_cycle") }
+    if contains(completed, id) { return {"ok": true, "loaded": [], "completed": completed} }
     if has_key(catalog, id) == 0 { return context_error("missing_skill") }
     let skill := catalog[id]
     if context_get(skill, "serialization_version", "") != "kujo.skill-context/v1" { return context_error("unsupported_skill_version") }
@@ -17,10 +18,12 @@ func load_skill(catalog, id, triggers, capabilities, store, visited) {
     for capability in skill["capabilities"] { if contains(capabilities, capability) == false { return context_error("skill_capability_denied") } }
     let next_visited := push(visited, id)
     mut loaded := []
+    mut finished := completed
     for dependency in skill["dependencies"] {
-        let result := load_skill(catalog, dependency, triggers, capabilities, store, next_visited)
+        let result := load_skill(catalog, dependency, triggers, capabilities, store, next_visited, finished)
         if result["ok"] == false { return result }
         loaded = concat(loaded, result["loaded"])
+        finished = result["completed"]
     }
     mut references := [{"kind": "skill_core", "reference": skill["core"]}]
     for rule in skill["security_rules"] { references = push(references, {"kind": "security_rule", "reference": rule}) }
@@ -34,16 +37,18 @@ func load_skill(catalog, id, triggers, capabilities, store, visited) {
         if fetched["ok"] == false { return fetched }
         loaded = push(loaded, {"skill_id": id, "kind": item["kind"], "reference": item["reference"], "content": fetched["artifact"]["content"]})
     }
-    return {"ok": true, "loaded": loaded}
+    return {"ok": true, "loaded": loaded, "completed": push(finished, id)}
 }
 
 export func context_load_skills(catalog, selected_ids, triggers, capabilities, store) {
     if type(catalog) != "dict" || type(selected_ids) != "array" || type(triggers) != "array" || type(capabilities) != "array" { return context_error("invalid_skill_selection") }
     mut loaded := []
     mut seen := []
+    mut completed := []
     for id in sort(selected_ids) {
-        let result := load_skill(catalog, id, triggers, capabilities, store, [])
+        let result := load_skill(catalog, id, triggers, capabilities, store, [], completed)
         if result["ok"] == false { return result }
+        completed = result["completed"]
         for item in result["loaded"] {
             let identity := item["skill_id"] + ":" + item["kind"] + ":" + item["reference"]["content_hash"]
             if contains(seen, identity) == false { loaded = push(loaded, item); seen = push(seen, identity) }
