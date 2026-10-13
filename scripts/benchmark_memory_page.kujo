@@ -1,0 +1,16 @@
+from src.agents.memory.store import create_in_memory_memory_store, reset_in_memory_memory_store, memory_store_write, memory_store_query
+let id := "memory-page-benchmark"
+reset_in_memory_memory_store({"store_id": id})
+let store := create_in_memory_memory_store({"store_id": id})
+for i in range(160) {
+    memory_store_write(store, {"entry_id": "item-" + to_string(i), "content": repeat("memory 🌍 ", 1024), "tags": ["benchmark"], "metadata": {"index": i}})
+}
+let started := current_timestamp()
+mut checksum := ""
+for i in range(12) {
+    let result := memory_store_query(store, {"offset": 80, "limit": 2, "tags": ["benchmark"]})
+    assert_equal(result["count"], 160)
+    assert_equal(len(result["entries"]), 2)
+    checksum = sha256(to_json(result))
+}
+print(to_json({"elapsed_ms": current_timestamp() - started, "result_hash": checksum, "records": 160, "page_size": 2, "queries": 12}))

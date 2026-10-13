@@ -195,3 +195,21 @@ bash scripts/ci_no_network_enforcement.sh
 ## Agent Search Hygiene
 
 Use `AGENTS.md` as the source of truth for canonical examples and fixture boundaries. Default readability sweeps should exclude `tests/*.out` expected-output fixtures and the historical `docs/AGENTS_SDK_BUILD_CHECKLIST.md` work log unless the task explicitly targets them.
+
+## Memory query behavior
+
+`memory_store_query` retains a provider's `error` on failed queries, alongside the
+normalized query-result fields. Successful result shapes remain unchanged. The
+in-memory store scans all matches to preserve `count` and `total_count`, but only
+materializes the requested page and uses native dictionary membership. These counts describe all matches, not page length;
+`limit: 0` returns an empty page. Ordering, scope/text/tag filtering, and page
+provenance remain unchanged. Returned records are detached from stored values.
+
+For a repeatable local pagination benchmark:
+
+```bash
+"$KUJO_BIN" run scripts/benchmark_memory_page.kujo --interpreter
+```
+
+The receipt includes elapsed query time and an exact result hash. Compare with
+the same runtime and workload; timing is diagnostic, not a CI threshold.

@@ -292,3 +292,46 @@ test "rewriting a deleted memory entry reports a new creation" {
 	assert_equal(query["count"], 1)
 	assert_equal(query["entries"][0]["content"], "second")
 }
+
+test "memory query preserves storage errors" {
+    from src.agents.memory.store import create_memory_store_interface
+    let expected := {"kind": "storage_unavailable", "message": "retry read", "details": {"retryable": true}}
+    let store := create_memory_store_interface({"query_memory_fn": func(store, query) { return {"ok": false, "error": expected} }})
+    let result := memory_store_query(store, {})
+    assert_equal(result["ok"], false)
+    assert_equal(result["error"], expected)
+}
+
+test "memory pages retain totals filters order and detached nested values" {
+    let store := create_in_memory_memory_store({"store_id": "memory-page-contract"})
+    reset_in_memory_memory_store({"store_id": "memory-page-contract"})
+    for i in range(6) {
+        memory_store_write(store, {"entry_id": "page-" + to_string(i), "scope_id": "page", "content": "match", "tags": ["keep"], "metadata": {"nested": {"index": i}}})
+    }
+    memory_store_write(store, {"entry_id": "other", "scope_id": "elsewhere", "content": "match", "tags": ["keep"]})
+    memory_store_delete(store, "page-1")
+    mut page := memory_store_query(store, {"scope_id": "page", "tags": ["keep"], "text": "match", "offset": 1, "limit": 2})
+    assert_equal(page["count"], 5)
+    assert_equal(page["total_count"], 5)
+    assert_equal(len(page["entries"]), 2)
+    assert_equal(page["entries"][0]["entry_id"], "page-2")
+    assert_equal(page["entries"][1]["entry_id"], "page-3")
+    mut nested := page["entries"][0]["metadata"]["nested"]
+    nested["index"] = 999
+    assert_equal(nested["index"], 999)
+    assert_equal(memory_store_read(store, "page-2")["entry"]["metadata"]["nested"]["index"], 2)
+    assert_equal(has_key(page, "error"), 0)
+}
+
+test "empty memory pages preserve matching counts and empty provenance" {
+    let store := create_in_memory_memory_store({"store_id": "memory-empty-page"})
+    reset_in_memory_memory_store({"store_id": "memory-empty-page"})
+    memory_store_write(store, {"entry_id": "entry", "content": "value"})
+    for query in [{"limit": 0}, {"offset": 99}, {"offset": 9223372036854775807, "limit": 1}] {
+        let page := memory_store_query(store, query)
+        assert_equal(page["entries"], [])
+        assert_equal(page["count"], 1)
+        assert_equal(page["total_count"], 1)
+        assert_equal(page["provenance"]["entries_with_provenance"], 0)
+    }
+}

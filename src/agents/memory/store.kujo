@@ -3,13 +3,7 @@ func key_in_dict(obj, expected_key) {
 		return false
 	}
 
-	for key in keys(obj) {
-		if key == expected_key {
-			return true
-		}
-	}
-
-	return false
+	return has_key(obj, expected_key) != 0
 }
 
 func unwrap_dict(value) {
@@ -349,7 +343,7 @@ func memory_store_query_impl(store_input, query_input) {
 	total_count := normalize_non_negative_int(dict_get_or(result, "total_count", count), count)
 	provenance := dict_get_or(result, "provenance", build_memory_query_provenance_summary_impl(entries, query))
 
-	return {
+	query_result := {
 		"type": "MemoryQueryResult",
 		"ok": normalize_bool(dict_get_or(result, "ok", true), true),
 		"query": query,
@@ -359,6 +353,11 @@ func memory_store_query_impl(store_input, query_input) {
 		"provenance": clone_value(provenance),
 		"metadata": clone_value(dict_get_or(result, "metadata", {}))
 	}
+	// Preserve actionable provider diagnostics without changing successful result shapes.
+	if query_result["ok"] == false && key_in_dict(unwrap_dict(result), "error") {
+		query_result["error"] := dict_get_or(result, "error", null)
+	}
+	return query_result
 }
 
 func memory_store_delete_impl(store_input, entry_id_input) {
@@ -551,7 +550,8 @@ func in_memory_query_memory_fn_impl(store_map, query_input) {
 	query_scope_id := normalize_string(dict_get_or(query, "scope_id", "default"), "default")
 	limit := normalize_non_negative_int(dict_get_or(query, "limit", 50), 50)
 	offset := normalize_non_negative_int(dict_get_or(query, "offset", 0), 0)
-	filtered := []
+	count := 0
+	items := []
 
 	for entry_id in ordered_entry_ids {
 		if key_in_dict(entries_by_id, entry_id) {
@@ -563,23 +563,14 @@ func in_memory_query_memory_fn_impl(store_map, query_input) {
 				entry_scope_id := normalize_string(dict_get_or(scope, "scope_id", "default"), "default")
 
 				if entry_scope_kind == query_scope_kind && entry_scope_id == query_scope_id && entry_matches_memory_query(entry, query) {
-					filtered = push(filtered, parse_json(to_json(entry)))
+					// Count every match, but materialize only the requested page.
+					if count >= offset && len(items) < limit {
+						items = push(items, parse_json(to_json(entry)))
+					}
+					count = count + 1
 				}
 			}
 		}
-	}
-
-	count := len(filtered)
-	items := []
-	index := offset
-	max_items := offset + limit
-	if max_items > count {
-		max_items = count
-	}
-
-	while index < max_items {
-		items = push(items, filtered[index])
-		index = index + 1
 	}
 
 	return {
