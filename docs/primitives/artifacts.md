@@ -14,12 +14,18 @@ Artifacts store typed durable outputs produced during runs.
 
 ## Default Behavior
 
-- In-memory artifact store for local tests.
+- In-memory artifact store for local tests. Automatic IDs skip IDs already in the
+  store; explicit IDs retain replacement semantics.
 - Optional file-backed store with validated leaf IDs and suffixes. The caller
   owns and trusts the root directory; this is not a filesystem sandbox.
 - File replacements use the runtime's atomic write operation. No automatic
   backup files are accumulated. Content whitespace and caller metadata survive
   persistence; storage-owned reference fields take precedence.
+- Automatic file IDs retain the timestamp prefix and gain a numeric suffix when
+  a filename or indexed ID already exists. Automatic writes use atomic
+  non-overwriting publication; a racing writer can cause a visible
+  `artifact_store_write_failed`, never an implicit replacement. Explicit IDs
+  retain atomic replacement behavior. No automatic retry is performed.
 - The index remains process-local. Use distinct store IDs for distinct roots;
   listing/recovery across restarts requires a durable backend adapter.
 

@@ -432,6 +432,11 @@ func in_memory_create_artifact_fn_impl(store_map, artifact_input) {
 
 	if artifact_id == "" || artifact_id == "artifact-default" {
 		artifact_id = store_id + "-artifact-" + to_string(next_artifact_number)
+		// Explicit IDs share this namespace; automatic creation must not replace them.
+		while has_key(artifacts_by_id, artifact_id) {
+			next_artifact_number = next_artifact_number + 1
+			artifact_id = store_id + "-artifact-" + to_string(next_artifact_number)
+		}
 		next_artifact_number = next_artifact_number + 1
 		created = true
 	}
@@ -611,7 +616,8 @@ func file_store_create_artifact_fn_impl(store_map, artifact_input) {
 
 	artifact := to_artifact_record(artifact_input)
 	artifact_id := normalize_string(dict_get_or(artifact, "artifact_id", ""), "")
-	if artifact_id == "" || artifact_id == "artifact-default" {
+	automatic_id := artifact_id == "" || artifact_id == "artifact-default"
+	if automatic_id {
 		artifact_id = store_id + "-artifact-" + to_string(current_timestamp())
 	}
 
@@ -630,7 +636,20 @@ func file_store_create_artifact_fn_impl(store_map, artifact_input) {
 	content := normalize_content(dict_get_or(artifact, "content", ""))
 
 	try {
-		write_file_atomic(file_path, content, true)
+		if automatic_id {
+			// Millisecond timestamps can repeat, and files can outlive the local index.
+			index_state := ensure_in_memory_state(resolve_file_store_index_id(store_id))
+			used_ids := dict_get_or(index_state, "artifacts_by_id", {})
+			base_id := artifact_id
+			suffix := 1
+			while file_exists(file_path) || has_key(used_ids, artifact_id) {
+				artifact_id = base_id + "-" + to_string(suffix)
+				suffix = suffix + 1
+				file_path = resolve_file_artifact_path(metadata, artifact_id)["file_path"]
+			}
+		}
+		// A racing creator must fail visibly instead of replacing another artifact.
+		write_file_atomic(file_path, content, automatic_id == false)
 	} except err {
 		return {
 			"ok": false,

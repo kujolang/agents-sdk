@@ -491,6 +491,11 @@ func in_memory_write_memory_fn_impl(store_map, entry_input) {
 
 	if entry_id == "" || entry_id == "mem-entry-default" {
 		entry_id = store_id + "-entry-" + to_string(next_entry_number)
+		// Explicit IDs share this namespace; automatic creation must not replace them.
+		while has_key(entries_by_id, entry_id) {
+			next_entry_number = next_entry_number + 1
+			entry_id = store_id + "-entry-" + to_string(next_entry_number)
+		}
 		next_entry_number = next_entry_number + 1
 		created = true
 	}

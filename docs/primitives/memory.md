@@ -17,6 +17,8 @@ Memory stores scoped long-term or run-adjacent entries with provenance metadata.
 
 - Noop memory store for no-write contexts.
 - In-memory scope-aware implementation for deterministic tests.
+- Automatic IDs skip caller-supplied IDs and deleted-ID tombstones. Supplying an
+  explicit existing ID still replaces that entry; automatic writes never do.
 
 ## Policy Notes
 

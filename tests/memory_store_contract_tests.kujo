@@ -335,3 +335,31 @@ test "empty memory pages preserve matching counts and empty provenance" {
         assert_equal(page["provenance"]["entries_with_provenance"], 0)
     }
 }
+
+test "automatic memory IDs do not overwrite caller supplied IDs" {
+    let id := "memory-id-collision"
+    reset_in_memory_memory_store({"store_id": id})
+    let store := create_in_memory_memory_store({"store_id": id})
+    memory_store_write(store, {"entry_id": id + "-entry-1", "content": "preserved", "scope_id": "owner"})
+    let created := memory_store_write(store, {"content": "new", "scope_id": "other"})
+    assert_equal(created["entry"]["entry_id"], id + "-entry-2")
+    assert_equal(created["created"], true)
+    assert_equal(memory_store_read(store, id + "-entry-1")["entry"]["content"], "preserved")
+    assert_equal(memory_store_query(store, {"scope_id": "owner"})["count"], 1)
+}
+
+test "automatic memory IDs skip deleted and consecutive reserved IDs" {
+    let id := "memory-reserved-ids"
+    reset_in_memory_memory_store({"store_id": id})
+    let store := create_in_memory_memory_store({"store_id": id})
+    memory_store_write(store, {"entry_id": id + "-entry-1", "content": "deleted"})
+    memory_store_write(store, {"entry_id": id + "-entry-2", "content": "reserved"})
+    memory_store_delete(store, id + "-entry-1")
+    let automatic := memory_store_write(store, {"content": "new"})
+    assert_equal(automatic["entry"]["entry_id"], id + "-entry-3")
+    assert_equal(memory_store_read(store, id + "-entry-1")["ok"], false)
+    let replaced := memory_store_write(store, {"entry_id": id + "-entry-2", "content": "updated"})
+    assert_equal(replaced["created"], false)
+    assert_equal(memory_store_query(store, {})["count"], 2)
+    assert_equal(memory_store_write(store, {"content": "next"})["entry"]["entry_id"], id + "-entry-4")
+}

@@ -230,3 +230,52 @@ test "artifact store enforces kind allowlist and byte limits" {
 	assert_equal(oversized["ok"], false)
 	assert_equal(oversized["error"]["kind"], "budget_exceeded")
 }
+
+test "automatic artifact IDs do not overwrite caller supplied IDs" {
+    let id := "artifact-id-collision"
+    reset_in_memory_artifact_store({"store_id": id})
+    let store := create_in_memory_artifact_store({"store_id": id})
+    artifact_store_create(store, {"artifact_id": id + "-artifact-1", "content": "preserved"})
+    let created := artifact_store_create(store, {"content": "new"})
+    assert_equal(created["artifact"]["artifact_id"], id + "-artifact-2")
+    assert_equal(created["created"], true)
+    assert_equal(artifact_store_get(store, id + "-artifact-1")["artifact"]["content"], "preserved")
+    assert_equal(artifact_store_list(store, {})["count"], 2)
+}
+
+test "file automatic creates retain prior content and explicit replacement remains supported" {
+    let id := "file-auto-contract-" + to_string(current_timestamp())
+    let store := create_file_artifact_store({"store_id": id, "root_path": "/tmp"})
+    let first := artifact_store_create(store, {"content": "first"})
+    let second := artifact_store_create(store, {"content": "second"})
+    assert_equal(first["ok"], true)
+    assert_equal(second["ok"], true)
+    let first_id := first["artifact"]["artifact_id"]
+    let second_id := second["artifact"]["artifact_id"]
+    assert_equal(first_id == second_id, false)
+    assert_equal(artifact_store_get(store, first_id)["artifact"]["content"], "first")
+    assert_equal(artifact_store_get(store, second_id)["artifact"]["content"], "second")
+    let replaced := artifact_store_create(store, {"artifact_id": first_id, "content": "updated"})
+    assert_equal(replaced["created"], false)
+    assert_equal(artifact_store_list(store, {})["count"], 2)
+    assert_equal(artifact_store_get(store, first_id)["artifact"]["content"], "updated")
+    delete_file(first["artifact"]["metadata"]["file_path"])
+    delete_file(second["artifact"]["metadata"]["file_path"])
+}
+
+test "automatic artifact IDs skip consecutive reservations without changing replacement order" {
+    let id := "artifact-reserved-ids"
+    reset_in_memory_artifact_store({"store_id": id})
+    let store := create_in_memory_artifact_store({"store_id": id})
+    for suffix in [1, 2] {
+        artifact_store_create(store, {"artifact_id": id + "-artifact-" + to_string(suffix), "content": "reserved"})
+    }
+    assert_equal(artifact_store_create(store, {"content": "new"})["artifact"]["artifact_id"], id + "-artifact-3")
+    let replaced := artifact_store_create(store, {"artifact_id": id + "-artifact-1", "content": "updated"})
+    assert_equal(replaced["created"], false)
+    assert_equal(artifact_store_create(store, {"content": "next"})["artifact"]["artifact_id"], id + "-artifact-4")
+    let listed := artifact_store_list(store, {})
+    assert_equal(listed["count"], 4)
+    assert_equal(listed["artifacts"][0]["artifact_id"], id + "-artifact-1")
+    assert_equal(listed["artifacts"][0]["content"], "updated")
+}
