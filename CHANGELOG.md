@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.3 — 2026-10-13
+
+- Harden approval authority, handoffs, runtime limits, and state recovery.
+- Prevent automatic storage ID collisions; release deleted session state.
+- Preserve retrieval and tool-artifact source text; reject malformed RAG citation IDs.
+- Remove recursive model retries and include failed-attempt tokens in run budgets.
+- Bound memory, artifact, and trace page materialization; deduplicate skill loads.
+- Refresh the README and release guidance, including the unresolved cost-unit conversion limit.
+- Verify 277 contract cases, 42 fixtures, and the full offline/context gates. Public API and result shapes remain unchanged; see [upgrade notes](docs/RELEASE_NOTES.md).
+
 ## 1.1.2 — 2026-09-28
 
 - Restore the required ArtifactStore module in Kennel distributions after reconciling both the reusable workflow and its publisher source checkout. Runtime source remains unchanged from 1.1.0.
