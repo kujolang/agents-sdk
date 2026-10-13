@@ -1,0 +1,136 @@
+test_setup {
+    from src.agents.core_types import create_agent, create_agent_run_request
+    from src.agents.ai.adapter import create_ai_sdk_adapter
+    from src.agents.runner import create_agent_runner, run_agent
+    from src.agents.tracing.lifecycle import create_lifecycle_spool
+}
+
+test "ordinary handoff retains the parent tool approval policy" {
+    let child := create_agent({"id": "child", "model_policy": {"actor": "child"}})
+    let runner := create_agent_runner({"handoff_registry": {"child": child}, "ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+        if options["actor"] == "child" { return {"ok": true, "output_text": "child", "tool_calls": [{"name": "write", "input": {}}]} }
+        return {"ok": true, "output_text": "parent"}
+    }})})
+    let parent := create_agent({"id": "parent", "model_policy": {"actor": "parent"}, "policy": {"handoff": {"target_agent_id": "child"}}})
+    let registry := {"type": "ToolRegistry", "tools": [{"id": "write", "name": "write", "permissions": ["write"], "handler": func(input, context) { return {"ok": true, "output": "MUTATED"} }}]}
+    let result := run_agent(runner, parent, create_agent_run_request("task", {}), {"tool_registry": registry, "approval_policy": {"mode": "always_deny"}})
+    assert_equal(result["status"], "failed")
+    assert_equal(result["metadata"]["handoff"]["result"]["error"]["kind"], "approval_denied")
+}
+
+test "ordinary handoff retains parent cancellation predicate" {
+    let child := create_agent({"id": "child"})
+    let runner := create_agent_runner({"handoff_registry": {"child": child}, "ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) { return {"ok": true, "output_text": "done"} }})})
+    let parent := create_agent({"id": "parent", "policy": {"handoff": {"target_agent_id": "child"}}})
+    let result := run_agent(runner, parent, create_agent_run_request("task", {}), {"cancellation_token": {"is_cancelled_fn": func(stage, context, token) { return context["agent_id"] == "child" }}})
+    assert_equal(result["status"], "failed")
+    assert_equal(result["metadata"]["handoff"]["target_status"], "cancelled")
+}
+
+test "tool batches cannot overrun the iteration ceiling" {
+    let runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+        return {"ok": true, "output_text": "done", "tool_calls": [{"name": "count", "input": {}}, {"name": "count", "input": {}}, {"name": "count", "input": {}}]}
+    }})})
+    let registry := {"type": "ToolRegistry", "tools": [{"id": "count", "name": "count", "handler": func(input, context) { return {"ok": true, "output": "called"} }}]}
+    let result := run_agent(runner, create_agent({"id": "bounded"}), create_agent_run_request("task", {}), {"tool_registry": registry, "max_iterations": 2})
+    assert_equal(result["status"], "max_iterations")
+    assert_equal(len(result["steps"]), 2)
+    assert_equal(result["metadata"]["budget"]["usage"]["counters"]["tool_calls"], 1)
+}
+
+test "lifecycle spool enforces UTF8 byte quotas" {
+    let path := "/tmp/sdk-audit-spool-" + to_string(current_timestamp())
+    let event := {"id": "🌍🌍🌍"}
+    let encoded := to_json(event) + "\n"
+    write_file(path, "", true)
+    let sink := create_lifecycle_spool(path, byte_length(encoded) - 1)
+    let accepted := sink(event)
+    let size := file_size(path)
+    delete_file(path)
+    if file_exists(path + ".gap") { delete_file(path + ".gap") }
+    assert_equal(accepted, false)
+    assert_equal(size, 0)
+}
+
+test "iteration stops retain executed tool evidence and terminal session state" {
+    from src.agents.sessions.store import create_in_memory_session_store, session_store_get_run_state
+    let sessions := create_in_memory_session_store({"store_id": "audit-iterations"})
+    let runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) { return {"ok": true, "output_text": "done", "tool_calls": [{"name": "read", "input": {}}]} }})})
+    let registry := {"type": "ToolRegistry", "tools": [{"id": "read", "name": "read", "handler": func(input, context) { return {"ok": true, "output": "evidence"} }}]}
+    let result := run_agent(runner, create_agent({"id": "bounded"}), create_agent_run_request("task", {"session_id": "bounded-session"}), {"tool_registry": registry, "session_store": sessions, "max_iterations": 2})
+    assert_equal(result["status"], "max_iterations")
+    assert_equal(result["error"]["details"]["stage"], "before_final")
+    assert_equal(result["metadata"]["tool_calls"][0]["result"]["output"], "evidence")
+    let events := result["metadata"]["events"]
+    assert_equal(events[len(events) - 1]["kind"], "run_failed")
+    assert_equal(session_store_get_run_state(sessions, "bounded-session", {})["run_state"]["stage"], "max_iterations_before_final")
+    let completed := run_agent(runner, create_agent({"id": "bounded"}), create_agent_run_request("task", {}), {"tool_registry": registry, "max_iterations": 3})
+    assert_equal(completed["status"], "completed")
+    assert_equal(len(completed["steps"]), 3)
+}
+
+test "handoffs honor provider denial and preserve child policy without parent override" {
+    let registry := {"type": "ToolRegistry", "tools": [{"id": "write", "name": "write", "permissions": ["write"], "handler": func(input, context) { return {"ok": true, "output": "MUTATED"} }}]}
+    let child := create_agent({"id": "child", "model_policy": {"actor": "child"}, "policy": {"approval": {"mode": "always_deny"}}})
+    let runner := create_agent_runner({"handoff_registry": {"child": child}, "ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+        if options["actor"] == "child" { return {"ok": true, "output_text": "child", "tool_calls": [{"name": "write", "input": {}}]} }
+        return {"ok": true, "output_text": "parent"}
+    }})})
+    let parent := create_agent({"id": "parent", "model_policy": {"actor": "parent"}})
+    for options in [{"tool_registry": registry}, {"tool_registry": registry, "approval_policy": {"mode": "always_allow"}}, {"tool_registry": registry, "approval_policy": {"mode": "write_tool"}, "approval_provider": {"kind": "deny_all"}}] {
+        let result := run_agent(runner, parent, create_agent_run_request("task", {}), options)
+        assert_equal(result["status"], "failed")
+        assert_equal(result["metadata"]["handoff"]["result"]["error"]["kind"], "approval_denied")
+    }
+}
+
+test "iteration ceiling applies before a child and after a completed handoff" {
+    let runner := create_agent_runner({"handoff_registry": {"child": create_agent({"id": "child", "model_policy": {"actor": "child"}})}, "ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) {
+        if options["actor"] == "parent" { return {"ok": true, "output_text": "parent", "tool_calls": [{"name": "read", "input": {}}]} }
+        return {"ok": true, "output_text": "child"}
+    }})})
+    let registry := {"type": "ToolRegistry", "tools": [{"id": "read", "name": "read", "handler": func(input, context) { return {"ok": true, "output": "evidence"} }}]}
+    let parent := create_agent({"id": "parent", "model_policy": {"actor": "parent"}})
+    let stopped := run_agent(runner, parent, create_agent_run_request("task", {}), {"tool_registry": registry, "max_iterations": 2})
+    assert_equal(stopped["status"], "max_iterations")
+    assert_equal(stopped["metadata"]["handoff"]["executed"], false)
+    assert_equal(stopped["error"]["details"]["stage"], "before_handoff")
+    let after_child := run_agent(runner, parent, create_agent_run_request("task", {}), {"tool_registry": registry, "max_iterations": 3})
+    assert_equal(after_child["status"], "max_iterations")
+    assert_equal(len(after_child["steps"]), 3)
+    assert_equal(after_child["metadata"]["handoff"]["executed"], true)
+    assert_equal(after_child["error"]["details"]["stage"], "before_final")
+}
+
+test "lifecycle spool accepts exact byte quota and refuses a following record" {
+    let path := "/tmp/sdk-audit-exact-spool-" + to_string(current_timestamp())
+    let event := {"id": "🌍"}
+    let encoded := to_json(event) + "\n"
+    write_file(path, "", true)
+    let sink := create_lifecycle_spool(path, byte_length(encoded))
+    assert_equal(sink(event), true)
+    assert_equal(read_file(path), encoded)
+    assert_equal(sink(event), false)
+    assert_equal(file_size(path), byte_length(encoded))
+    assert_equal(file_exists(path + ".gap"), true)
+    delete_file(path)
+    delete_file(path + ".gap")
+}
+
+test "parent approval cannot fall back to a child provider" {
+    from src.agents.tools.registry import execute_tool
+    from src.agents.security.approval import create_auto_approval_provider
+    let result := execute_tool({"id": "write", "name": "write", "permissions": ["write"], "handler": func(input, context) { return {"ok": true, "output": "MUTATED"} }}, {}, {"policy_handles": {"approval_provider": create_auto_approval_provider({})}}, {"inherited_approval_gates": [{"approval_policy": {"mode": "write_tool"}, "approval_provider": null}]})
+    assert_equal(result["ok"], false)
+    assert_equal(result["status"], "approval_required")
+}
+
+test "runner preserves manual and custom approval providers" {
+    let registry := {"type": "ToolRegistry", "tools": [{"id": "write", "name": "write", "permissions": ["write"], "handler": func(input, context) { return {"ok": true, "output": "MUTATED"} }}]}
+    let runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": func(client, messages, options) { return {"ok": true, "output_text": "done", "tool_calls": [{"name": "write", "input": {}}]} }})})
+    for provider in [{"kind": "manual_stub"}, {"kind": "unknown"}, {"kind": "auto", "resolve_fn": func(provider, request) { return {"ok": false, "decision": {"status": "approved"}} }}] {
+        let result := run_agent(runner, create_agent({"id": "writer"}), create_agent_run_request("task", {}), {"tool_registry": registry, "approval_policy": {"mode": "write_tool"}, "approval_provider": provider})
+        assert_equal(result["status"], "failed")
+        assert_equal(result["error"]["kind"], "approval_required")
+    }
+}

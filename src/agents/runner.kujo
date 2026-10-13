@@ -16,7 +16,7 @@ from src.agents.sessions.store import session_store_get_run_state, session_store
 from src.agents.memory.store import memory_store_write
 from src.agents.retrieval.provider import retrieval_provider_retrieve
 from src.agents.artifacts.store import artifact_store_create
-from src.agents.security.approval import create_approval_policy, create_auto_approval_provider, create_deny_all_approval_provider
+from src.agents.security.approval import create_approval_policy, create_auto_approval_provider, create_deny_all_approval_provider, create_manual_stub_approval_provider
 from src.agents.handoffs.handoff import create_handoff_request_from_parts, create_handoff_result
 from src.agents.budgets.limits import create_budget_limit_policy, create_budget_usage, increment_budget_usage, evaluate_budget_limits
 from src.agents.streaming.events import map_ai_sdk_stream_event
@@ -808,7 +808,24 @@ func create_timeout_result(stage_input, timeout_check_input, steps, events, cont
 	})
 }
 
-func create_max_iterations_result(stage_input, max_iterations, steps_count, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_ms, timeout_checks) {
+func create_max_iterations_result(stage_input, max_iterations, steps_count, steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_ms, timeout_checks, session_store, runtime_services, execution_evidence) {
+    stage := normalize_string(stage_input, "unknown")
+    run_id := dict_get_or(context, "run_id", "")
+    session_id := dict_get_or(context, "session_id", "")
+    step_id := ""
+    if len(steps) > 0 { step_id = dict_get_or(steps[len(steps) - 1], "step_id", "") }
+    events = push(events, create_agent_event("run_failed", {
+        "error_kind": "internal_error", "stop_reason": "max_iterations"
+    }, {
+        "run_id": run_id, "agent_id": dict_get_or(context, "agent_id", ""),
+        "session_id": session_id, "step_id": step_id, "runtime_services": runtime_services
+    }))
+    saved := persist_session_run_state(session_store, session_id, {
+        "run_id": run_id, "stage": "max_iterations_" + stage,
+        "events_count": len(events), "steps_count": len(steps), "max_iterations": max_iterations
+    }, {"source": "runner", "stage": "max_iterations_" + stage})
+    session_store_results = append_lifecycle_result(session_store_results, "max_iterations_" + stage, saved)
+
 	error_payload := create_agent_error("internal_error", "Run reached the configured max iterations limit.", {
 		"details": {
 			"stop_reason": "max_iterations",
@@ -818,7 +835,7 @@ func create_max_iterations_result(stage_input, max_iterations, steps_count, step
 		}
 	})
 
-	return create_runner_error_result("max_iterations", error_payload, steps, {
+	result := create_runner_error_result("max_iterations", error_payload, steps, {
 		"events": events,
 		"context": context,
 		"retrieval": retrieval_state,
@@ -839,6 +856,10 @@ func create_max_iterations_result(stage_input, max_iterations, steps_count, step
 			"checks": timeout_checks
 		}
 	})
+    metadata := dict_get_or(result, "metadata", {})
+    for key in keys(execution_evidence) { metadata[key] := execution_evidence[key] }
+    result["metadata"] := metadata
+    return result
 }
 
 func push_cancelled_event(events, run_id, agent_id, session_id, step_id, cancelled_stage, runtime_services) {
@@ -897,35 +918,22 @@ func resolve_tool_approval_policy(options_map, run_request, agent_map) {
 	return null
 }
 
+func normalize_tool_approval_provider(provider) {
+    // Preserve host callbacks. Reconstructing every provider as auto would
+    // discard a manual decision, denial, exception, or custom policy.
+    if type(dict_get_or(provider, "resolve_fn", null)) == "function" { return provider }
+    kind := dict_get_or(provider, "kind", "auto")
+    if kind == "auto" { return create_auto_approval_provider(provider) }
+    if kind == "deny_all" { return create_deny_all_approval_provider(provider) }
+    return create_manual_stub_approval_provider(provider)
+}
+
 func resolve_tool_approval_provider(runner_map, options_map, run_request) {
-	from_options := dict_get_or(options_map, "approval_provider", null)
-	if type(from_options) == "dict" {
-		provider_kind := normalize_string(dict_get_or(from_options, "kind", "auto"), "auto")
-		if provider_kind == "deny_all" {
-			return create_deny_all_approval_provider(from_options)
-		}
-		return create_auto_approval_provider(from_options)
-	}
-
-	from_request := dict_get_or(run_request, "approval_provider", null)
-	if type(from_request) == "dict" {
-		provider_kind := normalize_string(dict_get_or(from_request, "kind", "auto"), "auto")
-		if provider_kind == "deny_all" {
-			return create_deny_all_approval_provider(from_request)
-		}
-		return create_auto_approval_provider(from_request)
-	}
-
-	from_runner := dict_get_or(runner_map, "approval_provider", null)
-	if type(from_runner) == "dict" {
-		provider_kind := normalize_string(dict_get_or(from_runner, "kind", "auto"), "auto")
-		if provider_kind == "deny_all" {
-			return create_deny_all_approval_provider(from_runner)
-		}
-		return create_auto_approval_provider(from_runner)
-	}
-
-	return null
+    for source in [options_map, run_request, runner_map] {
+        provider := dict_get_or(source, "approval_provider", null)
+        if type(provider) == "dict" { return normalize_tool_approval_provider(provider) }
+    }
+    return null
 }
 
 func resolve_tool_output_sanitizer(options_map, run_request) {
@@ -2352,30 +2360,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 	}
 
 	if len(steps) >= max_iterations {
-		run_failed := create_agent_event("run_failed", {
-			"error_kind": "internal_error",
-			"stop_reason": "max_iterations"
-		}, {
-			"run_id": run_id,
-			"agent_id": agent_id,
-			"session_id": session_id,
-			"step_id": dict_get_or(model_step, "step_id", ""),
-			"runtime_services": runtime_services
-		})
-		events = push(events, run_failed)
-		max_iterations_state_result := persist_session_run_state(session_store, session_id, {
-			"run_id": run_id,
-			"stage": "max_iterations_after_model",
-			"events_count": len(events),
-			"steps_count": len(steps),
-			"max_iterations": max_iterations
-		}, {
-			"source": "runner",
-			"stage": "max_iterations_after_model"
-		})
-		session_store_results = append_lifecycle_result(session_store_results, "max_iterations_after_model", max_iterations_state_result)
-
-		return create_max_iterations_result("after_model", max_iterations, len(steps), steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_ms, timeout_checks)
+		return create_max_iterations_result("after_model", max_iterations, len(steps), steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_ms, timeout_checks, session_store, runtime_services, {})
 	}
 
 	output_text := normalize_string(dict_get_or(model_result, "output_text", ""), "")
@@ -2383,6 +2368,10 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 	model_tool_calls := normalize_array(dict_get_or(model_result, "tool_calls", []))
 	tool_call_index := 0
 	while tool_call_index < len(model_tool_calls) {
+		if len(steps) >= max_iterations {
+			return create_max_iterations_result("before_tool", max_iterations, len(steps), steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_ms, timeout_checks, session_store, runtime_services, {"tool_calls": tool_call_results, "model_result": model_result})
+		}
+
 		tool_call := normalize_dict(model_tool_calls[tool_call_index])
 		tool_name := normalize_string(dict_get_or(tool_call, "tool_name", dict_get_or(tool_call, "name", "")), "")
 		tool_call_stage := "validate_tool_name"
@@ -2514,6 +2503,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 		tool_input := normalize_dict(dict_get_or(tool_call, "input", dict_get_or(tool_call, "arguments", {})))
 		observe_lifecycle(options_map, run_request, agent_map, "tool", to_string(dict_get_or(tool_step, "step_id", len(steps))), "started", "unset")
 		tool_execution_result := execute_tool(dict_get_or(resolved_tool, "tool", {}), tool_input, tool_execution_context, {
+			"inherited_approval_gates": dict_get_or(options_map, "inherited_approval_gates", []),
 			"output_sanitizer": tool_output_sanitizer,
 			"artifact_store": artifact_store
 		})
@@ -2625,6 +2615,9 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 	}
 
 	if should_run_handoff {
+		if len(steps) >= max_iterations {
+			return create_max_iterations_result("before_handoff", max_iterations, len(steps), steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_ms, timeout_checks, session_store, runtime_services, {"tool_calls": tool_call_results, "model_result": model_result, "handoff": handoff_metadata})
+		}
 		handoff_loop_state := resolve_handoff_loop_state(run_request, options_map, agent_id)
 		handoff_depth := normalize_non_negative_int(dict_get_or(handoff_loop_state, "depth", 0), 0)
 		handoff_max_depth := normalize_non_negative_int(dict_get_or(handoff_loop_state, "max_depth", 3), 3)
@@ -3003,10 +2996,15 @@ func run_agent_impl(runner, agent, run_request_input, options) {
             child_context["tool_names"] := dict_get_or(child_context, "tool_names", [])
             child_context["resume"] := false
             child_options["context"] := child_context
-            child_options["approval_policy"] := tool_approval_policy
-            child_options["approval_provider"] := tool_approval_provider
-            child_options["cancellation_token"] := cancellation_token
         }
+        // Every handoff stays inside the parent invocation's safety controls.
+        inherited_gates := normalize_array(dict_get_or(options_map, "inherited_approval_gates", []))
+        if type(tool_approval_policy) == "dict" {
+            inherited_gates = push(inherited_gates, {"approval_policy": tool_approval_policy, "approval_provider": tool_approval_provider})
+        }
+        child_options["inherited_approval_gates"] := inherited_gates
+        child_options["cancellation_token"] := cancellation_token
+        child_options["tool_output_sanitizer"] := tool_output_sanitizer
         target_result := run_handoff_observed_child(runner_map, target_agent, handoff_run_request, child_options, options_map, {"run_id": run_id}, {"id": agent_id}, target_agent_id)
 
 
@@ -3124,6 +3122,10 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 				}
 			})
 		}
+	}
+
+	if len(steps) >= max_iterations {
+		return create_max_iterations_result("before_final", max_iterations, len(steps), steps, events, context, retrieval_state, retry_counters, session_restore_result, session_store_results, memory_store_results, artifact_store_results, budget_policy, budget_usage, budget_checks, timeout_ms, timeout_checks, session_store, runtime_services, {"tool_calls": tool_call_results, "model_result": model_result, "handoff": handoff_metadata})
 	}
 
 	final_step := create_agent_step("final", "Run completed with model output.", {
