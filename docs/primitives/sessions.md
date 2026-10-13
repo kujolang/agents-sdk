@@ -17,6 +17,9 @@ Sessions persist conversation/run continuity across turns and resumptions.
 
 - In-memory implementation is deterministic and ordered.
 - Session state can include resumable run snapshots.
+- Deletion clears saved run state even when the runner saved a snapshot without
+  creating a separate Session record. Other session IDs remain intact; creating
+  the same session later does not restore the deleted snapshot.
 
 ## Policy Notes
 

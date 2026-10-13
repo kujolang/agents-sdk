@@ -2,7 +2,7 @@ test_setup {
 	from src.agents.core_types import create_agent, create_agent_run_request
 	from src.agents.ai.adapter import create_ai_sdk_adapter
 	from src.agents.runner import create_agent_runner, run_agent
-	from src.agents.sessions.store import create_in_memory_session_store, reset_in_memory_session_store
+	from src.agents.sessions.store import create_in_memory_session_store, reset_in_memory_session_store, session_store_delete, session_store_get_run_state
 	from src.agents.memory.store import create_in_memory_memory_store, reset_in_memory_memory_store, memory_store_query
 }
 
@@ -84,4 +84,11 @@ test "runner persists and restores session/memory lifecycle across turns" {
 	assert_equal(memory_query["ok"], true)
 	assert_equal(memory_query["count"], 2)
 	assert_equal(memory_query["type"], "MemoryQueryResult")
+
+    assert_equal(session_store_delete(session_store, "session-99")["deleted"], true)
+    assert_equal(session_store_get_run_state(session_store, "session-99", {})["ok"], false)
+    third_request := create_agent_run_request("fresh turn", {"run_id": "mem-005-run-3", "session_id": "session-99"})
+    third_result := run_agent(runner, agent, third_request, {"session_store": session_store})
+    assert_equal(third_result["status"], "completed")
+    assert_equal(third_result["metadata"]["session_store"]["restore"]["ok"], false)
 }

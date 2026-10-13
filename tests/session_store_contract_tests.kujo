@@ -279,3 +279,22 @@ test "deleted sessions can be recreated without reviving messages or run state" 
     assert_equal(listed["sessions"][0]["session_id"], "first")
     assert_equal(listed["sessions"][1]["session_id"], "second")
 }
+
+
+test "deletion removes runner-only state without creating a visible session" {
+    let store := create_in_memory_session_store({"store_id": "runner-only-delete"})
+    session_store_save_run_state(store, "snapshot-only", {"cursor": 7, "private": "old"}, {})
+    session_store_save_run_state(store, "other", {"cursor": 8}, {})
+    assert_equal(session_store_list(store, {})["count"], 0)
+    let deleted := session_store_delete(store, "snapshot-only")
+    assert_equal(deleted["ok"], true)
+    assert_equal(deleted["deleted"], true)
+    assert_equal(session_store_get_run_state(store, "snapshot-only", {})["ok"], false)
+    assert_equal(session_store_get_run_state(store, "other", {})["run_state"]["cursor"], 8)
+    assert_equal(session_store_list(store, {})["count"], 0)
+    session_store_create(store, {"session_id": "snapshot-only"})
+    assert_equal(session_store_get_run_state(store, "snapshot-only", {})["ok"], false)
+    session_store_save_run_state(store, "snapshot-only", {"cursor": 9}, {})
+    assert_equal(session_store_get_run_state(store, "snapshot-only", {})["run_state"]["cursor"], 9)
+    assert_equal(session_store_delete(store, "never-stored")["deleted"], false)
+}
