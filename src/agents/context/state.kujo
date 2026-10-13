@@ -27,13 +27,18 @@ export func context_validate_handoff(envelope, capabilities, store) {
     }
     for field in ["required_evidence", "produced_artifacts"] {
         if type(envelope[field]) != "array" { return context_error("invalid_evidence") }
+    }
+    // Bound the envelope before invoking external evidence-store callbacks.
+    try {
+        if byte_length(context_json(envelope)) > 32768 { return context_error("handoff_too_large") }
+    } except err { return context_error("invalid_evidence") }
+    for field in ["required_evidence", "produced_artifacts"] {
         for reference in envelope[field] {
             // Verify presence/hash now, but only references enter the model envelope.
             let result := context_fetch(store, reference)
             if result["ok"] == false { return result }
         }
     }
-    if byte_length(context_json(envelope)) > 32768 { return context_error("handoff_too_large") }
     return {"ok": true, "envelope": envelope}
 }
 
@@ -54,21 +59,28 @@ export func context_validate_state(state, current_sources, store) {
     if type(state["retry_count"]) != "int" || state["retry_count"] < 0 { return context_error("invalid_retry_count") }
     for field in ["tool_results", "test_outcomes"] {
         if type(state[field]) != "array" { return context_error("invalid_resume_evidence") }
+    }
+    // Bound the envelope before invoking external evidence-store callbacks.
+    try {
+        if byte_length(context_json(state)) > 32768 { return context_error("resume_too_large") }
+    } except err { return context_error("invalid_resume_evidence") }
+    for field in ["tool_results", "test_outcomes"] {
         for reference in state[field] {
             let fetched := context_fetch(store, reference)
             if fetched["ok"] == false { return fetched }
         }
     }
-    if byte_length(context_json(state)) > 32768 { return context_error("resume_too_large") }
     return {"ok": true, "state": state}
 }
 
 export func context_save_resume(session_store, session_id, artifact_store, state, current_sources, full_evidence) {
     let checked := context_validate_state(state, current_sources, artifact_store)
     if checked["ok"] == false { return checked }
+    let previous := session_store_get_run_state(session_store, session_id, {})
+    // A missing state has no error; a failed read must never authorize an overwrite.
+    if context_get(previous, "ok", false) == false && context_get(previous, "error", null) != null { return previous }
     let evidence := context_store_value(artifact_store, full_evidence, {"security_classification": "restricted"})
     if evidence["ok"] == false { return evidence }
-    let previous := session_store_get_run_state(session_store, session_id, {})
     mut run_state := context_get(previous, "run_state", {})
     run_state["context_resume"] = state
     run_state["context_evidence"] = evidence["reference"]

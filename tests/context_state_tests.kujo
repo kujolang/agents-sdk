@@ -45,3 +45,61 @@ test "session resume retains full evidence outside compact state" {
     assert_equal(has_key(loaded["state"], "history"), 0)
     assert_equal(context_load_resume(sessions, "resume-test", store, {"main": sha256("changed")})["error"]["code"], "stale_source")
 }
+
+test "resume read failure cannot authorize replacement state" {
+    from src.agents.artifacts.store import create_artifact_store_interface
+    from src.agents.sessions.store import create_session_store_interface
+    let store := create_artifact_store_interface({"create_artifact_fn": func(store, artifact) { throw("unexpected_evidence_write") }})
+    let sessions := create_session_store_interface({
+        "get_run_state_fn": func(store, id, options) { return {"ok": false, "error": {"kind": "storage_unavailable"}} },
+        "save_run_state_fn": func(store, id, state, options) { throw("unexpected_save") }
+    })
+    let state := {"serialization_version": "kujo.resume/v1", "completed_steps": [], "decisions": [], "source_hashes": {}, "test_outcomes": [], "tool_results": [], "current_failure": "", "retry_count": 0, "remaining_steps": [], "next_action": "finish"}
+    let result := context_save_resume(sessions, "session", store, state, {}, {})
+    assert_equal(result["ok"], false)
+    assert_equal(result["error"]["kind"], "storage_unavailable")
+}
+
+test "oversized resume is rejected before artifact lookup" {
+    from src.agents.artifacts.store import create_artifact_store_interface
+    from src.agents.sessions.store import create_session_store_interface
+    let store := create_artifact_store_interface({"get_artifact_fn": func(store, id) { throw("unexpected_read") }})
+    mut refs := []
+    for i in range(400) { refs = push(refs, {"artifact_id": "evidence", "content_hash": repeat("a", 64), "bytes": 0}) }
+    let state := {"serialization_version": "kujo.resume/v1", "completed_steps": [], "decisions": [], "source_hashes": {}, "test_outcomes": refs, "tool_results": [], "current_failure": "", "retry_count": 0, "remaining_steps": [], "next_action": "finish"}
+    assert_equal(context_validate_state(state, {}, store)["error"]["code"], "resume_too_large")
+}
+
+test "oversized handoff is rejected before artifact lookup" {
+    from src.agents.artifacts.store import create_artifact_store_interface
+    from src.agents.sessions.store import create_session_store_interface
+    let store := create_artifact_store_interface({"get_artifact_fn": func(store, id) { throw("unexpected_read") }})
+    mut refs := []
+    for i in range(400) { refs = push(refs, {"artifact_id": "evidence", "content_hash": repeat("a", 64), "bytes": 0}) }
+    let envelope := {"serialization_version": "kujo.handoff/v1", "task_id": "task", "objective": "review", "constraints": [], "relevant_files": [], "required_evidence": refs, "decisions": [], "unresolved_questions": [], "produced_artifacts": [], "test_commands": [], "result_hashes": [], "allowed_capabilities": [], "next_action": "inspect"}
+    assert_equal(context_validate_handoff(envelope, [], store)["error"]["code"], "handoff_too_large")
+}
+
+test "resume save preserves unrelated session state and evidence on success" {
+    from src.agents.sessions.store import session_store_save_run_state, session_store_get_run_state
+    let store := create_in_memory_artifact_store({"store_id": "resume-merge-evidence"})
+    let sessions := create_in_memory_session_store({"store_id": "resume-merge-state"})
+    session_store_save_run_state(sessions, "session", {"host_checkpoint": {"revision": 7}}, {})
+    let state := {"serialization_version": "kujo.resume/v1", "completed_steps": [], "decisions": [], "source_hashes": {}, "test_outcomes": [], "tool_results": [], "current_failure": "", "retry_count": 0, "remaining_steps": [], "next_action": "finish"}
+    assert_equal(context_save_resume(sessions, "session", store, state, {}, {"result": "proof"})["ok"], true)
+    let saved := session_store_get_run_state(sessions, "session", {})["run_state"]
+    assert_equal(saved["host_checkpoint"], {"revision": 7})
+    assert_equal(saved["context_resume"], state)
+    assert_equal(context_load_resume(sessions, "session", store, {})["ok"], true)
+}
+
+test "malformed resume evidence fails with a structured error before reads" {
+    from src.agents.artifacts.store import create_artifact_store_interface
+    let store := create_artifact_store_interface({"get_artifact_fn": func(store, id) { throw("unexpected_read") }})
+    let state := {"serialization_version": "kujo.resume/v1", "completed_steps": [], "decisions": [], "source_hashes": {}, "test_outcomes": [], "tool_results": [], "current_failure": "", "retry_count": 0, "remaining_steps": [], "next_action": "finish"}
+    for evidence in ["invalid", [func() { return "not data" }]] {
+        mut invalid := state
+        invalid["tool_results"] = evidence
+        assert_equal(context_validate_state(invalid, {}, store)["error"]["code"], "invalid_resume_evidence")
+    }
+}

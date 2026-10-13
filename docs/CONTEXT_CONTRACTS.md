@@ -62,9 +62,16 @@ unresolved questions, produced artifacts, test commands, result hashes, allowed
 capabilities and next action. Strings are bounded; large evidence is represented
 by verified ArtifactStore references. Capabilities must be a subset of a trusted
 caller-supplied ceiling. This validation is not a grant of host permissions.
+Handoff and resume envelopes are limited to 32,768 canonical JSON UTF-8 bytes;
+size and serializability checks run before evidence-store lookups.
 
 `context_save_resume` extends SessionStore run state with `context_resume`
 and `context_evidence`, retaining full evidence separately in ArtifactStore.
+A reported SessionStore read error is returned before writing evidence or replacing
+state. Store adapters must distinguish missing state (`ok: false` without an error)
+from a failed read (`ok: false` with an `error`). Successful saves retain unrelated
+run-state fields. Read/merge/write is not a multi-writer transaction; the host must
+serialize concurrent saves or provide transactional storage coordination.
 `context_load_resume` validates every referenced outcome/result and compares
 all current source hashes before returning compact state. State includes completed
 steps, decisions, source hashes, test outcome references, tool result references,
