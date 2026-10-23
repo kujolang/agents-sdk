@@ -1,0 +1,284 @@
+test_setup {
+	from src.agents.artifacts.store import create_in_memory_artifact_store, artifact_store_create, artifact_store_list
+	from examples.maintenance_agent import run_maintenance_agent
+	from examples.maintenance.tools import create_maintenance_tool_registry
+	from examples.maintenance.fixtures import create_fixture_metadata
+	from examples.maintenance.sanitizer import create_maintenance_sanitizer
+	from src.agents.tools.registry import validate_tool_input, execute_registered_tool
+	from src.agents.tools.registry import create_tool_execution_context
+	from src.agents.runtime.clock_ids import create_fixed_runtime_services
+	from examples.maintenance.helpers import dict_get_or, normalize_string, normalize_dict, normalize_array
+}
+
+test "approved: write_cleanup_plan executes and plan artifact is persisted" {
+	raw_output := run_maintenance_agent({
+		"run_id": "run-maintenance-approved",
+		"session_id": "session-maintenance-approved",
+		"approval_provider_kind": "auto"
+	})
+
+	result := dict_get_or(raw_output, "result", {})
+	assert_equal(dict_get_or(raw_output, "ok", false), true)
+	assert_equal(dict_get_or(raw_output, "requires_network", false), false)
+
+	status := normalize_string(dict_get_or(result, "status", ""), "")
+	assert_equal(status, "completed")
+
+	steps := normalize_array(dict_get_or(result, "steps", []))
+	assert_equal(len(steps) >= 4, true)
+
+	artifacts := normalize_array(dict_get_or(result, "artifacts", []))
+	assert_equal(len(artifacts), 1) // Runner final output; tool artifacts are in the store.
+	stored := raw_output["stored_artifacts"]
+	assert_equal(stored["ok"], true)
+	assert_equal(stored["count"], 2)
+	plan := stored["artifacts"][0]
+	assert_equal(plan["artifact_kind"], "json")
+	assert_equal(plan["producer_tool_name"], "write_cleanup_plan")
+	assert_equal(plan["producer_run_id"], "run-maintenance-approved")
+	plan_data := parse_json(plan["content"])
+	assert_equal(plan_data["project_path"], "fixtures/sample-project")
+	assert_equal(len(plan_data["cleanup_steps"]), 4)
+	assert_equal(plan_data["cleanup_steps"][2]["target"], "tmp/cache.dat")
+	assert_equal(stored["artifacts"][1]["artifact_kind"], "markdown")
+
+	metadata := normalize_dict(dict_get_or(result, "metadata", {}))
+	tool_calls := normalize_array(dict_get_or(metadata, "tool_calls", []))
+	assert_equal(len(tool_calls), 2)
+
+	first_call := normalize_dict(tool_calls[0])
+	first_result := normalize_dict(dict_get_or(first_call, "result", {}))
+	assert_equal(dict_get_or(first_result, "ok", false), true)
+	assert_equal(normalize_string(dict_get_or(first_call, "tool_name", ""), ""), "list_project_files")
+
+	second_call := normalize_dict(tool_calls[1])
+	second_result := normalize_dict(dict_get_or(second_call, "result", {}))
+	assert_equal(dict_get_or(second_result, "ok", false), true)
+	assert_equal(normalize_string(dict_get_or(second_call, "tool_name", ""), ""), "write_cleanup_plan")
+
+	second_meta := normalize_dict(dict_get_or(second_result, "metadata", {}))
+	approval_decision := normalize_dict(dict_get_or(second_meta, "approval_decision", {}))
+	assert_equal(normalize_string(dict_get_or(approval_decision, "outcome", ""), ""), "require_approval")
+	provider_decision := normalize_dict(dict_get_or(second_meta, "approval_provider_decision", {}))
+	assert_equal(normalize_string(dict_get_or(provider_decision, "status", ""), ""), "approved")
+
+	memory_writes := normalize_array(dict_get_or(metadata, "memory_store_writes", []))
+	assert_equal(len(memory_writes) >= 1, true)
+
+	session_writes := normalize_dict(dict_get_or(metadata, "session_store", {}))
+	session_write_list := normalize_array(dict_get_or(session_writes, "writes", []))
+	assert_equal(len(session_write_list) >= 1, true)
+
+	budget := normalize_dict(dict_get_or(metadata, "budget", {}))
+	usage := normalize_dict(dict_get_or(budget, "usage", {}))
+	counters := normalize_dict(dict_get_or(usage, "counters", {}))
+	assert_equal(dict_get_or(counters, "tool_calls", 0) >= 2, true)
+	assert_equal(dict_get_or(counters, "steps", 0) >= 4, true)
+	assert_equal(dict_get_or(counters, "artifact_bytes", 0) > 0, true)
+}
+
+test "denied: write_cleanup_plan is blocked by approval provider" {
+	raw_output := run_maintenance_agent({
+		"run_id": "run-maintenance-denied",
+		"session_id": "session-maintenance-denied",
+		"approval_provider_kind": "deny_all"
+	})
+
+	result := dict_get_or(raw_output, "result", {})
+	assert_equal(dict_get_or(raw_output, "ok", false), true)
+	assert_equal(dict_get_or(raw_output, "requires_network", false), false)
+
+	status := normalize_string(dict_get_or(result, "status", ""), "")
+	assert_equal(status, "failed")
+
+	error_payload := normalize_dict(dict_get_or(result, "error", {}))
+	error_kind := normalize_string(dict_get_or(error_payload, "kind", ""), "")
+	assert_equal(error_kind, "approval_denied")
+
+	metadata := normalize_dict(dict_get_or(result, "metadata", {}))
+	tool_calls := normalize_array(dict_get_or(metadata, "tool_calls", []))
+	assert_equal(len(tool_calls), 2)
+
+	first_call := normalize_dict(tool_calls[0])
+	first_result := normalize_dict(dict_get_or(first_call, "result", {}))
+	assert_equal(dict_get_or(first_result, "ok", false), true)
+	assert_equal(normalize_string(dict_get_or(first_call, "tool_name", ""), ""), "list_project_files")
+
+	second_call := normalize_dict(tool_calls[1])
+	second_result := normalize_dict(dict_get_or(second_call, "result", {}))
+	assert_equal(dict_get_or(second_result, "ok", false), false)
+	assert_equal(normalize_string(dict_get_or(second_call, "tool_name", ""), ""), "write_cleanup_plan")
+	assert_equal(normalize_string(dict_get_or(second_result, "status", ""), ""), "approval_denied")
+
+	second_meta := normalize_dict(dict_get_or(second_result, "metadata", {}))
+	provider_decision := normalize_dict(dict_get_or(second_meta, "approval_provider_decision", {}))
+	assert_equal(normalize_string(dict_get_or(provider_decision, "status", ""), ""), "denied")
+
+	artifacts := normalize_array(dict_get_or(result, "artifacts", []))
+	assert_equal(len(artifacts), 0)
+	assert_equal(raw_output["stored_artifacts"]["count"], 0)
+}
+
+test "budget_exceeded: artifact byte budget stops the run deterministically" {
+	raw_output := run_maintenance_agent({
+		"run_id": "run-maintenance-budget",
+		"session_id": "session-maintenance-budget",
+		"approval_provider_kind": "auto",
+		"budget_policy": {
+			"mode": "enforce",
+			"budget": {
+				"limits": {
+					"max_artifact_bytes": 1
+				}
+			}
+		}
+	})
+
+	result := dict_get_or(raw_output, "result", {})
+	assert_equal(dict_get_or(raw_output, "ok", false), true)
+	assert_equal(dict_get_or(raw_output, "requires_network", false), false)
+
+	status := normalize_string(dict_get_or(result, "status", ""), "")
+	assert_equal(status, "budget_exceeded")
+
+	error_payload := normalize_dict(dict_get_or(result, "error", {}))
+	error_kind := normalize_string(dict_get_or(error_payload, "kind", ""), "")
+	assert_equal(error_kind, "budget_exceeded")
+
+	error_details := normalize_dict(dict_get_or(error_payload, "details", {}))
+	assert_equal(normalize_string(dict_get_or(error_details, "counter", ""), ""), "artifact_bytes")
+	assert_equal(normalize_string(dict_get_or(error_details, "limit", ""), ""), "max_artifact_bytes")
+	assert_equal(dict_get_or(error_details, "max", 0), 1)
+
+	metadata := normalize_dict(dict_get_or(result, "metadata", {}))
+	budget := normalize_dict(dict_get_or(metadata, "budget", {}))
+	usage := normalize_dict(dict_get_or(budget, "usage", {}))
+	counters := normalize_dict(dict_get_or(usage, "counters", {}))
+	assert_equal(dict_get_or(counters, "artifact_bytes", 0) > 1, true)
+
+	budget_checks := normalize_array(dict_get_or(budget, "checks", []))
+	has_exceeded_check := false
+	index := 0
+	total := len(budget_checks)
+	while index < total {
+		check := normalize_dict(budget_checks[index])
+		if normalize_string(dict_get_or(check, "status", ""), "") == "budget_exceeded" {
+			has_exceeded_check = true
+		}
+		index = index + 1
+	}
+	assert_equal(has_exceeded_check, true)
+
+	// Error results retain usage and lifecycle steps, not success-only tool_calls metadata.
+	assert_equal(dict_get_or(counters, "tool_calls", 0), 2)
+	assert_equal(budget_checks[len(budget_checks) - 1]["stage"], "after_artifact")
+	// The lifecycle budget reports exhaustion after persistence; it is not a write cap.
+	assert_equal(raw_output["stored_artifacts"]["count"], 2)
+}
+
+test "tool input schema rejects unknown fields and missing required properties" {
+	fixture := create_fixture_metadata()
+	registry_result := create_maintenance_tool_registry(fixture)
+	assert_equal(dict_get_or(registry_result, "ok", false), true)
+	registry := dict_get_or(registry_result, "registry", {})
+
+	runtime_services := create_fixed_runtime_services(0, "2026-05-22 00:00:00", 1)
+	context := create_tool_execution_context({
+		"run_id": "run-schema-test",
+		"session_id": "session-schema-test",
+		"agent_id": "maintenance-agent",
+		"tool_name": "list_project_files",
+		"runtime_services": runtime_services
+	})
+
+	missing_required := execute_registered_tool(registry, "list_project_files", {}, context, {})
+	assert_equal(dict_get_or(missing_required, "ok", false), false)
+	violations := normalize_array(dict_get_or(missing_required, "violations", []))
+	assert_equal(len(violations) >= 1, true)
+
+	unknown_field := execute_registered_tool(registry, "list_project_files", {
+		"project_path": "fixtures/sample-project",
+		"rogue_field": "should_be_rejected"
+	}, context, {})
+	assert_equal(dict_get_or(unknown_field, "ok", false), false)
+	unknown_violations := normalize_array(dict_get_or(unknown_field, "violations", []))
+	has_unknown := false
+	idx := 0
+	while idx < len(unknown_violations) {
+		v := normalize_dict(unknown_violations[idx])
+		if normalize_string(dict_get_or(v, "code", ""), "") == "unknown_field" {
+			has_unknown = true
+		}
+		idx = idx + 1
+	}
+	assert_equal(has_unknown, true)
+
+	write_missing := execute_registered_tool(registry, "write_cleanup_plan", {
+		"project_path": "fixtures/sample-project"
+	}, context, {})
+	assert_equal(dict_get_or(write_missing, "ok", false), false)
+	write_violations := normalize_array(dict_get_or(write_missing, "violations", []))
+	assert_equal(len(write_violations) >= 2, true)
+}
+
+test "sanitizer redacts token secret and authorization fields from fixture output" {
+	fixture := create_fixture_metadata()
+	registry_result := create_maintenance_tool_registry(fixture)
+	assert_equal(dict_get_or(registry_result, "ok", false), true)
+	registry := dict_get_or(registry_result, "registry", {})
+
+	sanitizer := create_maintenance_sanitizer()
+	runtime_services := create_fixed_runtime_services(0, "2026-05-22 00:00:00", 1)
+	context := create_tool_execution_context({
+		"run_id": "run-sanitizer-test",
+		"session_id": "session-sanitizer-test",
+		"agent_id": "maintenance-agent",
+		"tool_name": "list_project_files",
+		"policy_handles": {
+			"tool_output_sanitizer": sanitizer
+		},
+		"runtime_services": runtime_services
+	})
+
+	result := execute_registered_tool(registry, "list_project_files", {
+		"project_path": "fixtures/sample-project"
+	}, context, {
+		"output_sanitizer": sanitizer
+	})
+
+	assert_equal(dict_get_or(result, "ok", false), true)
+	output := normalize_dict(dict_get_or(result, "output", {}))
+	files := normalize_array(dict_get_or(output, "files", []))
+
+	assert_equal(len(files) >= 2, true)
+	first_file := normalize_dict(files[0])
+	assert_equal(dict_get_or(first_file, "token", ""), "[REDACTED]")
+
+	second_file := normalize_dict(files[1])
+	assert_equal(dict_get_or(second_file, "secret", ""), "[REDACTED]")
+	assert_equal(dict_get_or(second_file, "authorization", ""), "[REDACTED]")
+
+	sanitizer_meta := normalize_dict(dict_get_or(result, "metadata", {}))
+	sanitizer_info := normalize_dict(dict_get_or(sanitizer_meta, "sanitizer", {}))
+	assert_equal(dict_get_or(sanitizer_info, "sanitizer_applied", false), true)
+}
+
+test "a denied run after approval does not reuse stored plans" {
+	approved := run_maintenance_agent({"run_id": "approved-first"})
+	assert_equal(approved["stored_artifacts"]["count"], 2)
+	denied := run_maintenance_agent({"run_id": "denied-next", "approval_provider_kind": "deny_all"})
+	assert_equal(denied["result"]["status"], "failed")
+	assert_equal(denied["stored_artifacts"]["count"], 0)
+}
+
+
+test "maintenance reset preserves unrelated default store artifacts" {
+	store := create_in_memory_artifact_store({})
+	created := artifact_store_create(store, {"artifact_id": "unrelated-sentinel", "content": "preserved"})
+	assert_equal(created["ok"], true)
+	before := artifact_store_list(store, {})
+	run_maintenance_agent({})
+	after := artifact_store_list(store, {})
+	assert_equal(after["count"], before["count"])
+	assert_equal(after["artifacts"], before["artifacts"])
+}

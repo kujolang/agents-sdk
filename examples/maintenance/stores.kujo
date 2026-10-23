@@ -1,0 +1,94 @@
+from src.agents.artifacts.store import create_in_memory_artifact_store, reset_in_memory_artifact_store
+from src.agents.sessions.store import create_in_memory_session_store, reset_in_memory_session_store
+from src.agents.memory.store import create_in_memory_memory_store, reset_in_memory_memory_store, create_memory_store_interface, create_memory_scope, create_memory_provenance, memory_store_write
+from examples.maintenance.helpers import dict_get_or, normalize_string, normalize_dict, clone_value
+
+func create_project_scoped_memory_store_impl(options) {
+	options_map := normalize_dict(options)
+	project_id := normalize_string(dict_get_or(options_map, "project_id", "maintenance-project"), "maintenance-project")
+	store_id := normalize_string(dict_get_or(options_map, "store_id", "project-scoped-memory-store"), "project-scoped-memory-store")
+
+	inner_store := create_in_memory_memory_store({
+		"store_id": store_id,
+		"name": "ProjectScopedMemoryStore",
+		"metadata": {
+			"store_kind": "project_scoped",
+			"project_id": project_id
+		}
+	})
+
+	captured_project_id := project_id
+	captured_inner_store := inner_store
+
+	write_fn := func(store, entry) {
+		entry_metadata := normalize_dict(dict_get_or(entry, "metadata", {}))
+		modified_entry := {
+			"entry_id": dict_get_or(entry, "entry_id", "mem-entry-default"),
+			"scope": create_memory_scope("project", captured_project_id, {}),
+			"content": dict_get_or(entry, "content", ""),
+			"tags": dict_get_or(entry, "tags", []),
+			"metadata": entry_metadata,
+			"provenance": create_memory_provenance({
+				"source": "maintenance_agent",
+				"source_id": captured_project_id,
+				"metadata": {
+					"project_id": captured_project_id,
+					"run_id": dict_get_or(entry_metadata, "run_id", ""),
+					"agent_id": dict_get_or(entry_metadata, "agent_id", "")
+				}
+			}),
+			"created_at": dict_get_or(entry, "created_at", ""),
+			"updated_at": dict_get_or(entry, "updated_at", "")
+		}
+		return memory_store_write(captured_inner_store, modified_entry)
+	}
+
+	return create_memory_store_interface({
+		"name": "ProjectScopedMemoryStore",
+		"write_memory_fn": write_fn,
+		"read_memory_fn": dict_get_or(inner_store, "read_memory_fn", null),
+		"query_memory_fn": dict_get_or(inner_store, "query_memory_fn", null),
+		"delete_memory_fn": dict_get_or(inner_store, "delete_memory_fn", null),
+		"metadata": {
+			"store_kind": "project_scoped",
+			"store_id": store_id,
+			"project_id": project_id
+		}
+	})
+}
+
+func create_maintenance_artifact_store_impl() {
+	return create_in_memory_artifact_store({
+		"store_id": "maintenance-artifact-store",
+		"name": "MaintenanceArtifactStore",
+		"metadata": {
+			"scope": "maintenance_agent"
+		}
+	})
+}
+
+func create_maintenance_session_store_impl() {
+	return create_in_memory_session_store({
+		"store_id": "maintenance-session-store",
+		"name": "MaintenanceSessionStore",
+		"metadata": {
+			"scope": "maintenance_agent"
+		}
+	})
+}
+
+func reset_maintenance_stores_impl() {
+	reset_in_memory_artifact_store({"store_id": "maintenance-artifact-store"})
+	reset_in_memory_session_store({"store_id": "maintenance-session-store"})
+	reset_in_memory_memory_store({
+		"store_id": "project-scoped-memory-store"
+	})
+	return {
+		"ok": true
+	}
+}
+
+export create_project_scoped_memory_store := create_project_scoped_memory_store_impl
+export create_maintenance_artifact_store := create_maintenance_artifact_store_impl
+export create_maintenance_session_store := create_maintenance_session_store_impl
+export reset_maintenance_stores := reset_maintenance_stores_impl

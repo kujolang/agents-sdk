@@ -13,6 +13,7 @@ Prioritize copyable examples over tests: examples should model the most token-ef
 - examples/handoff_agent.kujo
 - examples/traced_agent.kujo
 - examples/artifact_agent.kujo
+- examples/maintenance_agent.kujo
 - examples/examples_smoke_runner.kujo
 
 ## Support Files
@@ -26,7 +27,7 @@ Prioritize copyable examples over tests: examples should model the most token-ef
 `examples/examples_smoke_runner.kujo` prints:
 
 ```json
-{"approval_agent":{"ok":true,"requires_network":false,"status":"failed"},"artifact_agent":{"ok":true,"requires_network":false,"status":"completed"},"handoff_agent":{"ok":true,"requires_network":false,"status":"completed"},"hello_agent":{"ok":true,"requires_network":false,"status":"completed"},"retrieval_agent":{"ok":true,"requires_network":false,"status":"completed"},"tool_agent":{"ok":true,"requires_network":false,"status":"completed"},"traced_agent":{"ok":true,"requires_network":false,"status":"completed"}}
+{"approval_agent":{"ok":true,"requires_network":false,"status":"failed"},"artifact_agent":{"ok":true,"requires_network":false,"status":"completed"},"handoff_agent":{"ok":true,"requires_network":false,"status":"completed"},"hello_agent":{"ok":true,"requires_network":false,"status":"completed"},"maintenance_agent":{"ok":true,"requires_network":false,"status":"completed"},"retrieval_agent":{"ok":true,"requires_network":false,"status":"completed"},"tool_agent":{"ok":true,"requires_network":false,"status":"completed"},"traced_agent":{"ok":true,"requires_network":false,"status":"completed"}}
 ```
 
 ## Validate Example Smoke Coverage
@@ -49,3 +50,5 @@ export KUJO_BIN=kujo
 `kujo run examples/context_agent.kujo` demonstrates an offline
 metadata-only ledger, an empty executable tool scope, and a verifier receipt.
 This additive example requires Kujo 1.6.0 and is verified by the context CI gate.
+
+- [Maintenance agent](MAINTENANCE_AGENT.md) combines approval, redaction, stores and lifecycle budgets with synthetic fixture data. Its support modules live in `examples/maintenance/`.

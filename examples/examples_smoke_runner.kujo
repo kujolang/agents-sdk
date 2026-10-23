@@ -1,3 +1,4 @@
+from examples.maintenance_agent import run_maintenance_agent
 from examples.hello_agent import run_hello_agent_example
 from examples.tool_agent import run_tool_agent_example
 from examples.approval_agent import run_approval_agent_example
@@ -49,7 +50,8 @@ func run_all_examples_impl() {
 		{"name": "retrieval_agent", "result": run_retrieval_agent_example()},
 		{"name": "handoff_agent", "result": run_handoff_agent_example()},
 		{"name": "traced_agent", "result": run_traced_agent_example()},
-		{"name": "artifact_agent", "result": run_artifact_agent_example()}
+		{"name": "artifact_agent", "result": run_artifact_agent_example()},
+		{"name": "maintenance_agent", "result": run_maintenance_agent({})}
 	]
 
 	results := {}
