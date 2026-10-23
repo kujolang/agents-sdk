@@ -164,7 +164,7 @@ receipts, not signed remote attestations; only trust runtime-produced results.
 ## CI ratchet and evaluation
 
 Run `KUJO_BIN=/path/to/kujo bash scripts/verify_context.sh`, then
-`kujo run scripts/context_token_ratchet.kujo --interpreter -- --check`. The committed
+`kujo run scripts/context_token_ratchet.kujo -- --check`. The committed
 baseline includes instructions, normalized paired payloads, tool schemas/catalogs,
 skill views, handoffs, resume, retry duplication and provider usage fixtures.
 Bytes/characters/heuristic estimates remain separate from provider-specific
@@ -176,7 +176,7 @@ retained separately from program stdout in evaluation artifacts.
 Approved growth is explicit, after verification:
 
 ```bash
-kujo run scripts/context_token_ratchet.kujo --interpreter -- \
+kujo run scripts/context_token_ratchet.kujo -- \
   --approve-growth "Explain required growth and reliability evidence" \
   .tmp/context-evaluation/report.json
 ```

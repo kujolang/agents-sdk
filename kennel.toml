@@ -60,8 +60,8 @@ mirrors = []
 publish = ""
 
 [scripts]
-smoke = '"$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter'
-smoke-examples = '"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter'
+smoke = '"$KUJO_BIN" run examples/module_exports_smoke.kujo'
+smoke-examples = '"$KUJO_BIN" run examples/examples_smoke_runner.kujo'
 test = '"$KUJO_BIN" test'
 test-contracts = '"$KUJO_BIN" test-run tests/runner_result_event_contract_tests.kujo -v'
 test-examples = '"$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v'

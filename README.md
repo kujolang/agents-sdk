@@ -32,7 +32,7 @@ credentials.
 From an Agents SDK source checkout with its dependencies installed:
 
 ```bash
-kujo run examples/examples_smoke_runner.kujo --interpreter
+kujo run examples/examples_smoke_runner.kujo
 ```
 
 The runner checks seven offline examples: a basic agent, tools, approval denial,
@@ -129,10 +129,10 @@ From the source checkout, run the same offline and context gates used by CI:
 
 ```bash
 export KUJO_BIN=/path/to/kujo
-"$KUJO_BIN" run examples/module_exports_smoke.kujo --interpreter
+"$KUJO_BIN" run examples/module_exports_smoke.kujo
 bash scripts/ci_no_network_enforcement.sh
 bash scripts/verify_context.sh
-"$KUJO_BIN" run scripts/context_token_ratchet.kujo --interpreter -- --check
+"$KUJO_BIN" run scripts/context_token_ratchet.kujo -- --check
 ```
 
 The offline gate runs every contract file and expected-output fixture with

@@ -34,7 +34,7 @@ Prioritize copyable examples over tests: examples should model the most token-ef
 ```bash
 export KUJO_BIN=kujo
 "$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
-"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+"$KUJO_BIN" run examples/examples_smoke_runner.kujo
 ```
 
 ## Notes
@@ -46,6 +46,6 @@ export KUJO_BIN=kujo
 
 ## Context observation and verified dispatch
 
-`kujo run examples/context_agent.kujo --interpreter` demonstrates an offline
+`kujo run examples/context_agent.kujo` demonstrates an offline
 metadata-only ledger, an empty executable tool scope, and a verifier receipt.
 This additive example requires Kujo 1.6.0 and is verified by the context CI gate.

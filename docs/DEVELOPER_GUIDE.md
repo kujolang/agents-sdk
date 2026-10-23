@@ -10,7 +10,7 @@ Commands:
 
 ```bash
 export KUJO_BIN=kujo
-"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+"$KUJO_BIN" run examples/examples_smoke_runner.kujo
 bash scripts/ci_no_network_enforcement.sh
 ```
 
@@ -188,7 +188,7 @@ remain denied. Fixture execution uses Kujo's separate snapshot runner.
 ```bash
 "$KUJO_BIN" test-run tests/run_basic_runner_tests.kujo -v
 "$KUJO_BIN" test-run tests/example_smoke_tests.kujo -v
-"$KUJO_BIN" run examples/examples_smoke_runner.kujo --interpreter
+"$KUJO_BIN" run examples/examples_smoke_runner.kujo
 bash scripts/ci_no_network_enforcement.sh
 ```
 
@@ -208,7 +208,7 @@ provenance remain unchanged. Returned records are detached from stored values.
 For a repeatable local pagination benchmark:
 
 ```bash
-"$KUJO_BIN" run scripts/benchmark_memory_page.kujo --interpreter
+"$KUJO_BIN" run scripts/benchmark_memory_page.kujo
 ```
 
 The receipt includes elapsed query time and an exact result hash. Compare with

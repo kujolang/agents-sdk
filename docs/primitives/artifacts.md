@@ -51,6 +51,6 @@ and `total_count`. `offset` and `limit` select the returned page; `limit: 0` kee
 the existing unlimited-page behavior. Only records in that page are rebuilt for
 return. File-backed lists use the same process-local index and pagination rules.
 
-Run `"$KUJO_BIN" run scripts/benchmark_artifact_page.kujo --interpreter` for a
+Run `"$KUJO_BIN" run scripts/benchmark_artifact_page.kujo` for a
 repeatable local list workload. The receipt includes query time and a result hash;
 timing is diagnostic, not a CI threshold.

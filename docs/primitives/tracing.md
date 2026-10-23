@@ -29,6 +29,6 @@ Tracing records lifecycle events for observability and diagnostics.
 - Preserve deterministic event ordering and sequence fields.
 
 For a repeatable local pagination workload, run
-`"$KUJO_BIN" run scripts/benchmark_trace_page.kujo --interpreter`. Its fixed input
+`"$KUJO_BIN" run scripts/benchmark_trace_page.kujo`. Its fixed input
 timestamps keep the result hash deterministic. Timing is diagnostic, not a CI
 threshold.
