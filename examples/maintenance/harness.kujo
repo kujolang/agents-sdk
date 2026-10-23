@@ -1,0 +1,92 @@
+from src.agents.ai.adapter import create_ai_sdk_adapter
+from examples.maintenance.fixtures import create_fixture_metadata
+from examples.maintenance.helpers import dict_get_or, normalize_string, normalize_dict
+
+func create_maintenance_model_adapter_impl() {
+	fixture := create_fixture_metadata()
+	project_path := normalize_string(dict_get_or(fixture, "project_path", ""), "")
+
+	cleanup_steps := [
+		{
+			"action": "review",
+			"target": "src/config.json",
+			"reason": "Contains token field requiring redaction before sharing."
+		},
+		{
+			"action": "review",
+			"target": "src/auth.json",
+			"reason": "Contains secret and authorization fields requiring redaction."
+		},
+		{
+			"action": "archive",
+			"target": "tmp/cache.dat",
+			"reason": "Stale cache file candidate for archival."
+		},
+		{
+			"action": "archive",
+			"target": "tmp/stale-build.log",
+			"reason": "Old build log candidate for archival."
+		}
+	]
+
+	plan_summary := "Proposed cleanup: review 2 config files for sensitive fields, archive 2 stale temporary files. No files will be deleted by this agent."
+
+	output_text := "Maintenance audit complete. Inspected " + to_string(5) + " fixture files. "
+	output_text = output_text + "Proposed cleanup plan with " + to_string(4) + " steps. "
+	output_text = output_text + "Sensitive fields (token, secret, authorization) were redacted from tool output. "
+	output_text = output_text + "The cleanup plan artifact has been written after approval. "
+	output_text = output_text + "No files were deleted or modified. Destructive execution requires a separate operator-controlled path."
+
+	tool_calls := [
+		{
+			"name": "list_project_files",
+			"input": {
+				"project_path": project_path,
+				"include_metadata": true
+			}
+		},
+		{
+			"name": "write_cleanup_plan",
+			"input": {
+				"project_path": project_path,
+				"plan_title": "Cleanup Plan for sample-project",
+				"cleanup_steps": cleanup_steps,
+				"summary": plan_summary
+			}
+		}
+	]
+
+	chat_completion_fn := func(client, messages, request_options) {
+		return {
+			"ok": true,
+			"provider": "mock-provider",
+			"model": "mock-model",
+			"request_id": "maintenance-mock-1",
+			"status_code": 200,
+			"output_text": output_text,
+			"tool_calls": tool_calls,
+			"usage": {
+				"input_tokens": 25,
+				"output_tokens": 15,
+				"total_tokens": 40,
+				"cost_cents": 0
+			},
+			"emitted_events": [
+				{
+					"event": "done"
+				}
+			]
+		}
+	}
+
+	return create_ai_sdk_adapter({
+		"adapter_name": "maintenance-no-network-adapter",
+		"chat_completion_fn": chat_completion_fn,
+		"metadata": {
+			"fixture": "maintenance_no_network",
+			"requires_network": false
+		}
+	})
+}
+
+export create_maintenance_model_adapter := create_maintenance_model_adapter_impl

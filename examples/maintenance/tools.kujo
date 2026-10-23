@@ -1,0 +1,194 @@
+from src.agents.tools.registry import create_tool_registry, register_tool
+from examples.maintenance.fixtures import create_fixture_metadata, list_fixture_files
+from examples.maintenance.helpers import dict_get_or, normalize_string, normalize_dict, normalize_array, normalize_non_negative_int
+
+func create_list_project_files_tool_impl(fixture_metadata) {
+	captured_fixture := fixture_metadata
+
+	handler := func(input_payload, context) {
+		input_map := normalize_dict(input_payload)
+		project_path := normalize_string(dict_get_or(input_map, "project_path", ""), "")
+		include_metadata := dict_get_or(input_map, "include_metadata", true)
+
+		listing := list_fixture_files(captured_fixture, project_path)
+		if dict_get_or(listing, "ok", false) == false {
+			return {
+				"ok": false,
+				"error": dict_get_or(listing, "error", {})
+			}
+		}
+
+		output := {
+			"project_path": dict_get_or(listing, "project_path", project_path),
+			"file_count": dict_get_or(listing, "file_count", 0),
+			"files": dict_get_or(listing, "files", [])
+		}
+
+		if include_metadata {
+			output["inspection_note"] := "Read-only inspection completed. No files were modified or deleted."
+		}
+
+		return {
+			"ok": true,
+			"output": output
+		}
+	}
+
+	return {
+		"id": "tool.list_project_files",
+		"name": "list_project_files",
+		"description": "Read-only inspection of project fixture metadata. Lists files with paths, sizes, and modification dates. Never modifies or deletes files.",
+		"input_schema": {
+			"type": "object",
+			"required": ["project_path"],
+			"properties": {
+				"project_path": {
+					"type": "string",
+					"description": "Project path to inspect."
+				},
+				"include_metadata": {
+					"type": "bool",
+					"description": "Whether to include inspection metadata in the output."
+				}
+			},
+			"allow_unknown_fields": false
+		},
+		"output_schema": {
+			"type": "object",
+			"properties": {
+				"project_path": {"type": "string"},
+				"file_count": {"type": "int"},
+				"files": {"type": "array"}
+			}
+		},
+		"permissions": ["read"],
+		"risk": "low",
+		"timeout_ms": 5000,
+		"handler": handler,
+		"metadata": {
+			"category": "inspection",
+			"destructive": false
+		}
+	}
+}
+
+func create_write_cleanup_plan_tool_impl() {
+	handler := func(input_payload, context) {
+		input_map := normalize_dict(input_payload)
+		project_path := normalize_string(dict_get_or(input_map, "project_path", ""), "")
+		plan_title := normalize_string(dict_get_or(input_map, "plan_title", ""), "")
+		cleanup_steps := normalize_array(dict_get_or(input_map, "cleanup_steps", []))
+		summary := normalize_string(dict_get_or(input_map, "summary", ""), "")
+
+		if plan_title == "" {
+			return {
+				"ok": false,
+				"error": {
+					"kind": "invalid_plan",
+					"message": "plan_title is required and must not be empty."
+				}
+			}
+		}
+
+		plan_artifact := {
+			"artifact_kind": "json",
+			"title": plan_title,
+			"content": to_json({
+				"project_path": project_path,
+				"plan_title": plan_title,
+				"summary": summary,
+				"cleanup_steps": cleanup_steps,
+				"note": "Proposal only. Destructive execution requires a separate operator-controlled path."
+			}),
+			"media_type": "application/json",
+			"metadata": {
+				"plan_type": "cleanup_proposal",
+				"project_path": project_path,
+				"destructive": false
+			}
+		}
+
+		return {
+			"ok": true,
+			"output": {
+				"plan_title": plan_title,
+				"project_path": project_path,
+				"step_count": len(cleanup_steps),
+				"summary": summary,
+				"written": true,
+				"destructive": false
+			},
+			"artifacts": [plan_artifact]
+		}
+	}
+
+	return {
+		"id": "tool.write_cleanup_plan",
+		"name": "write_cleanup_plan",
+		"description": "Writes a cleanup plan artifact after policy approval. Proposes work only. Never deletes or modifies project files.",
+		"input_schema": {
+			"type": "object",
+			"required": ["project_path", "plan_title", "cleanup_steps"],
+			"properties": {
+				"project_path": {
+					"type": "string",
+					"description": "Project path the plan targets."
+				},
+				"plan_title": {
+					"type": "string",
+					"description": "Title for the cleanup plan."
+				},
+				"cleanup_steps": {
+					"type": "array",
+					"description": "Ordered list of cleanup step objects with action and target fields."
+				},
+				"summary": {
+					"type": "string",
+					"description": "Short summary of the cleanup plan."
+				}
+			},
+			"allow_unknown_fields": false
+		},
+		"output_schema": {
+			"type": "object",
+			"properties": {
+				"plan_title": {"type": "string"},
+				"project_path": {"type": "string"},
+				"step_count": {"type": "int"},
+				"written": {"type": "bool"}
+			}
+		},
+		"permissions": ["write"],
+		"risk": "medium",
+		"timeout_ms": 10000,
+		"handler": handler,
+		"metadata": {
+			"category": "planning",
+			"destructive": false,
+			"requires_approval": true
+		}
+	}
+}
+
+func create_maintenance_tool_registry_impl(fixture_metadata) {
+	registry := create_tool_registry({
+		"metadata": {
+			"scope": "maintenance_agent",
+			"project": "maintenance-agent"
+		}
+	})
+
+	list_tool := create_list_project_files_tool_impl(fixture_metadata)
+	register_list := register_tool(registry, list_tool)
+	if dict_get_or(register_list, "ok", false) == false {
+		return register_list
+	}
+
+	write_tool := create_write_cleanup_plan_tool_impl()
+	register_write := register_tool(dict_get_or(register_list, "registry", registry), write_tool)
+	return register_write
+}
+
+export create_list_project_files_tool := create_list_project_files_tool_impl
+export create_write_cleanup_plan_tool := create_write_cleanup_plan_tool_impl
+export create_maintenance_tool_registry := create_maintenance_tool_registry_impl

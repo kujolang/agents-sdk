@@ -1,0 +1,84 @@
+from examples.maintenance.helpers import dict_get_or, normalize_string, normalize_dict, normalize_array, normalize_bool, normalize_non_negative_int, clone_value
+
+func create_fixture_metadata_impl() {
+	return {
+		"project_path": "fixtures/sample-project",
+		"files": [
+			{
+				"path": "src/config.json",
+				"size": 1024,
+				"token": "ghp_abc123secrettoken",
+				"last_modified": "2024-01-15"
+			},
+			{
+				"path": "src/auth.json",
+				"size": 512,
+				"secret": "super-secret-value",
+				"authorization": "Bearer xyz789",
+				"last_modified": "2024-01-10"
+			},
+			{
+				"path": "src/utils.kujo",
+				"size": 2048,
+				"last_modified": "2024-01-20"
+			},
+			{
+				"path": "tmp/cache.dat",
+				"size": 4096,
+				"last_modified": "2024-01-05"
+			},
+			{
+				"path": "tmp/stale-build.log",
+				"size": 8192,
+				"last_modified": "2023-12-01"
+			}
+		]
+	}
+}
+
+func list_fixture_files_impl(fixture_metadata, project_path) {
+	metadata := normalize_dict(fixture_metadata)
+	requested_path := normalize_string(project_path, "")
+	stored_path := normalize_string(dict_get_or(metadata, "project_path", ""), "")
+	if requested_path != "" && stored_path != "" && requested_path != stored_path {
+		return {
+			"ok": false,
+			"error": {
+				"kind": "path_mismatch",
+				"message": "Requested project_path does not match fixture project_path.",
+				"details": {
+					"requested": requested_path,
+					"stored": stored_path
+				}
+			}
+		}
+	}
+
+	files := normalize_array(dict_get_or(metadata, "files", []))
+	summaries := []
+	index := 0
+	total := len(files)
+	while index < total {
+		file_entry := normalize_dict(files[index])
+		summary := {
+			"path": normalize_string(dict_get_or(file_entry, "path", ""), ""),
+			"size": normalize_non_negative_int(dict_get_or(file_entry, "size", 0), 0),
+			"token": dict_get_or(file_entry, "token", ""),
+			"secret": dict_get_or(file_entry, "secret", ""),
+			"authorization": dict_get_or(file_entry, "authorization", ""),
+			"last_modified": normalize_string(dict_get_or(file_entry, "last_modified", ""), "")
+		}
+		summaries = push(summaries, summary)
+		index = index + 1
+	}
+
+	return {
+		"ok": true,
+		"project_path": stored_path,
+		"file_count": len(summaries),
+		"files": summaries
+	}
+}
+
+export create_fixture_metadata := create_fixture_metadata_impl
+export list_fixture_files := list_fixture_files_impl

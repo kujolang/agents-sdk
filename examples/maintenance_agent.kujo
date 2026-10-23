@@ -1,0 +1,111 @@
+from src.agents.artifacts.store import artifact_store_list
+from src.agents.core_types import create_agent, create_agent_run_request
+from src.agents.runner import create_agent_runner, run_agent
+from examples.maintenance.fixtures import create_fixture_metadata
+from examples.maintenance.tools import create_maintenance_tool_registry
+from examples.maintenance.sanitizer import create_maintenance_sanitizer
+from examples.maintenance.stores import create_project_scoped_memory_store, create_maintenance_artifact_store, create_maintenance_session_store, reset_maintenance_stores
+from examples.maintenance.harness import create_maintenance_model_adapter
+from examples.maintenance.helpers import dict_get_or, normalize_string, normalize_dict
+
+func create_maintenance_agent_impl() {
+	return create_agent({
+		"id": "maintenance-agent",
+		"name": "Maintenance Agent",
+		"description": "Offline-first agent that inspects project fixture metadata, proposes a cleanup plan, and writes a plan artifact only after policy approval. Never deletes files.",
+		"instructions": "You are a maintenance audit agent. Use list_project_files to inspect project fixture metadata. Use write_cleanup_plan to propose a cleanup plan artifact. You must never delete or modify project files. Destructive execution is handled by a separate operator-controlled path.",
+		"role": "assistant",
+		"tools": ["list_project_files", "write_cleanup_plan"],
+		"policy": {
+			"approval": {
+				"mode": "write_tool"
+			}
+		},
+		"max_iterations": 8,
+		"metadata": {
+			"scope": "maintenance_agent",
+			"offline": true
+		}
+	})
+}
+
+func create_maintenance_runner_impl() {
+	adapter := create_maintenance_model_adapter()
+	return create_agent_runner({
+		"ai_adapter": adapter,
+		"metadata": {
+			"scope": "maintenance_agent",
+			"offline": true
+		}
+	})
+}
+
+func run_maintenance_agent_impl(options) {
+	options_map := normalize_dict(options)
+	reset_maintenance_stores()
+
+	fixture := create_fixture_metadata()
+	registry_result := create_maintenance_tool_registry(fixture)
+	if dict_get_or(registry_result, "ok", false) == false {
+		return {
+			"ok": false,
+			"error": dict_get_or(registry_result, "error", {}),
+			"requires_network": false
+		}
+	}
+
+	agent := create_maintenance_agent_impl()
+	runner := create_maintenance_runner_impl()
+
+	artifact_store := create_maintenance_artifact_store()
+	session_store := create_maintenance_session_store()
+	memory_store := create_project_scoped_memory_store({
+		"project_id": "maintenance-project"
+	})
+
+	sanitizer := create_maintenance_sanitizer()
+
+	provider_kind := normalize_string(dict_get_or(options_map, "approval_provider_kind", "auto"), "auto")
+
+	run_id := normalize_string(dict_get_or(options_map, "run_id", "run-maintenance"), "run-maintenance")
+	session_id := normalize_string(dict_get_or(options_map, "session_id", "session-maintenance"), "session-maintenance")
+
+	run_request := create_agent_run_request("Audit the project fixtures and propose a cleanup plan.", {
+		"run_id": run_id,
+		"session_id": session_id
+	})
+
+	run_options := {
+		"tool_registry": dict_get_or(registry_result, "registry", {}),
+		"approval_policy": {
+			"mode": "write_tool",
+			"write_permissions": ["write", "delete", "update", "admin"]
+		},
+		"approval_provider": {
+			"kind": provider_kind
+		},
+		"tool_output_sanitizer": sanitizer,
+		"artifact_store": artifact_store,
+		"session_store": session_store,
+		"memory_store": memory_store
+	}
+
+	budget_policy := dict_get_or(options_map, "budget_policy", null)
+	if type(budget_policy) == "dict" {
+		run_options["budget_policy"] := budget_policy
+	}
+
+	result := run_agent(runner, agent, run_request, run_options)
+
+	return {
+		"ok": true,
+		"requires_network": false,
+		"run_id": run_id,
+		"session_id": session_id,
+		"result": result,
+		"approval_provider_kind": provider_kind,
+		"stored_artifacts": artifact_store_list(artifact_store, {})
+	}
+}
+
+export run_maintenance_agent := run_maintenance_agent_impl

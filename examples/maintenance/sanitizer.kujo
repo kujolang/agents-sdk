@@ -1,0 +1,31 @@
+from src.agents.security.approval import create_redaction_policy, redact_tool_io
+from examples.maintenance.helpers import dict_get_or, normalize_string, normalize_dict, normalize_bool
+
+func create_maintenance_sanitizer_impl() {
+	policy := create_redaction_policy({
+		"masked_keys": ["token", "secret", "authorization"],
+		"blocked_value_terms": ["Bearer "],
+		"replacement": "[REDACTED]",
+		"mask_tool_io": true
+	})
+
+	sanitizer_fn := func(raw_output) {
+		redaction_result := redact_tool_io(raw_output, policy)
+		redacted := normalize_bool(dict_get_or(redaction_result, "redacted", false), false)
+		redacted_count := dict_get_or(redaction_result, "redacted_fields_count", 0)
+
+		return {
+			"ok": true,
+			"output": dict_get_or(redaction_result, "tool_io", raw_output),
+			"metadata": {
+				"sanitizer_applied": true,
+				"redacted": redacted,
+				"redacted_fields_count": redacted_count
+			}
+		}
+	}
+
+	return sanitizer_fn
+}
+
+export create_maintenance_sanitizer := create_maintenance_sanitizer_impl

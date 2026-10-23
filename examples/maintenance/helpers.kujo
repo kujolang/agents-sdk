@@ -1,0 +1,74 @@
+func dict_get_or_impl(obj, key, default_value) {
+	if type(obj) != "dict" {
+		return default_value
+	}
+	if has_key(obj, key) {
+		return obj[key]
+	}
+	return default_value
+}
+
+func normalize_string_impl(value, fallback) {
+	if type(value) == "string" {
+		trimmed := trim(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func normalize_dict_impl(value) {
+	if type(value) == "dict" {
+		return value
+	}
+	return {}
+}
+
+func normalize_array_impl(value) {
+	if type(value) == "array" {
+		return value
+	}
+	return []
+}
+
+func normalize_bool_impl(value, fallback) {
+	if type(value) == "bool" {
+		return value
+	}
+	return fallback
+}
+
+func normalize_non_negative_int_impl(value, fallback) {
+	if type(value) == "int" {
+		if value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func clone_value_impl(value) {
+	return value
+}
+
+func key_in_dict_impl(obj, expected_key) {
+	if type(obj) != "dict" {
+		return false
+	}
+	for key in keys(obj) {
+		if key == expected_key {
+			return true
+		}
+	}
+	return false
+}
+
+export dict_get_or := dict_get_or_impl
+export normalize_string := normalize_string_impl
+export normalize_dict := normalize_dict_impl
+export normalize_array := normalize_array_impl
+export normalize_bool := normalize_bool_impl
+export normalize_non_negative_int := normalize_non_negative_int_impl
+export clone_value := clone_value_impl
+export key_in_dict := key_in_dict_impl
