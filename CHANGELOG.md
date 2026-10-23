@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add an offline maintenance example covering approval, sanitization, isolated stores, cleanup-plan artifacts, and lifecycle budgets.
+
 ## 1.1.3 — 2026-10-13
 
 - Harden approval authority, handoffs, runtime limits, and state recovery.
