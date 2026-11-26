@@ -73,3 +73,8 @@ The controlled Ability example maps actual SDK tool lifecycle callbacks to exist
 Receipt failure remains an observation, not proof of no business commit. Dispatch
 review and replay remain authoritative outside telemetry; private receipts and
 assurance configuration are not projected.
+
+The adapter hashes record and batch identifiers that exceed Watchdog's
+identifier length limit. Ambiguous composite operation identifiers use a digest
+of their components. Start and completion records for the same operation share
+the resulting record and span IDs.
