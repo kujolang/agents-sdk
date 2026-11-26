@@ -300,32 +300,31 @@ func with_retry_attempt_options(request_options, attempt, max_attempts) {
 	return options
 }
 
-func execute_model_with_retry_attempt(ai_adapter, messages, request_options, attempt, max_attempts) {
-	current_attempt := attempt
+func execute_model_with_retry_policy(ai_adapter, messages, request_options, retry_policy, check_retry) {
+	max_attempts := normalize_non_negative_int(dict_get_or(retry_policy, "max_model_retries", 0), 0) + 1
+	current_attempt := 1
 	retry_usage := create_budget_usage({})
+	model_result := null
+	retry_boundary := null
 	while true {
 		attempt_options := with_retry_attempt_options(request_options, current_attempt, max_attempts)
-		model_result := call_chat(ai_adapter, messages, attempt_options)
+		model_result = call_chat(ai_adapter, messages, attempt_options)
 		retry_usage = increment_budget_usage(retry_usage, build_model_budget_delta(model_result, 1))
 
 		if dict_get_or(model_result, "ok", false) || current_attempt >= max_attempts || is_retryable_model_result(model_result) == false {
-			return {
-				"model_result": model_result,
-				"model_attempts": current_attempt,
-				"model_retries_used": current_attempt - 1,
-				"budget_delta": dict_get_or(retry_usage, "counters", {})
-			}
+			break
 		}
-
+		retry_boundary = check_retry(retry_usage["counters"])
+		if retry_boundary != null { break }
 		current_attempt = current_attempt + 1
 	}
-}
-
-func execute_model_with_retry_policy(ai_adapter, messages, request_options, retry_policy) {
-	max_model_retries := normalize_non_negative_int(dict_get_or(retry_policy, "max_model_retries", 0), 0)
-	max_attempts := max_model_retries + 1
-
-	return execute_model_with_retry_attempt(ai_adapter, messages, request_options, 1, max_attempts)
+	return {
+		"model_result": model_result,
+		"model_attempts": current_attempt,
+		"model_retries_used": current_attempt - 1,
+		"budget_delta": retry_usage["counters"],
+		"retry_boundary": retry_boundary
+	}
 }
 
 func resolve_stream_enabled(options_map_input, run_request_input, agent_map_input) {
@@ -2140,7 +2139,28 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 		stream_events = normalize_array(dict_get_or(model_execution, "stream_events", []))
 		runtime_services = dict_get_or(model_execution, "runtime_services", runtime_services)
 	} else {
-		model_execution = execute_model_with_retry_policy(ai_adapter, messages, request_options, retry_policy)
+		limits := budget_policy["budget"]["limits"]
+		enforce_retry_budget := budget_policy["mode"] == "enforce" && (
+			limits["max_model_calls"] > 0 || limits["max_input_tokens"] > 0 || limits["max_output_tokens"] > 0 ||
+			limits["max_total_tokens"] > 0 || limits["max_cost_microunits"] > 0 || limits["max_elapsed_ms"] > 0
+		)
+		check_retry := func(attempt_usage) {
+			elapsed := pre_model_elapsed_ms
+			if timeout_ms > 0 || (enforce_retry_budget && limits["max_elapsed_ms"] > 0) {
+				elapsed = current_elapsed_ms(timeout_started_ms, runtime_services)
+			}
+			if evaluate_timeout_boundary("before_model_retry", timeout_ms, elapsed)["exceeded"] {
+				return {"elapsed_ms": elapsed}
+			}
+			if enforce_retry_budget {
+				usage := increment_budget_usage(budget_usage, attempt_usage)
+				projected := with_elapsed_budget_usage(increment_budget_usage(usage, {"model_calls": 1}), elapsed)
+				evaluation := evaluate_budget_limits(budget_policy, projected, {"metadata": {"stage": "before_model_retry", "projected": true}})
+				if !budget_check_passed(evaluation) { return {"elapsed_ms": elapsed, "budget_evaluation": evaluation} }
+			}
+			return null
+		}
+		model_execution = execute_model_with_retry_policy(ai_adapter, messages, request_options, retry_policy, check_retry)
 	}
 	model_result := dict_get_or(model_execution, "model_result", {
 		"ok": false,
@@ -2192,7 +2212,10 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 			"events_count": len(stream_events)
 		}
 	}
+	retry_boundary := dict_get_or(model_execution, "retry_boundary", null)
 	post_model_elapsed_ms := current_elapsed_ms(timeout_started_ms, runtime_services)
+	retry_elapsed_ms := dict_get_or(retry_boundary, "elapsed_ms", 0)
+	if retry_elapsed_ms > post_model_elapsed_ms { post_model_elapsed_ms = retry_elapsed_ms }
 	post_model_timeout := evaluate_timeout_boundary("after_model", timeout_ms, post_model_elapsed_ms)
 	timeout_checks = push(timeout_checks, post_model_timeout)
 	budget_usage = with_elapsed_budget_usage(budget_usage, post_model_elapsed_ms)
@@ -2227,6 +2250,7 @@ func run_agent_impl(runner, agent, run_request_input, options) {
 			"stage": "after_model"
 		}
 	})
+	post_model_budget = dict_get_or(retry_boundary, "budget_evaluation", post_model_budget)
 	budget_checks = append_budget_check_result(budget_checks, "after_model", post_model_budget)
 	budget_updated_after_model := create_agent_event("budget_updated", {
 		"stage": "after_model",

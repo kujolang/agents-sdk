@@ -52,10 +52,11 @@
   in the host/provider layer rather than relying on the runner to convert cents.
 - Tool-call/step budgets are checked against the next tool before invocation.
   Timeouts remain cooperative boundary checks, not preemption of callbacks.
-  Non-stream model retries stop at success, a non-retryable failure, or the
-  configured retry ceiling. Retry execution does not consume an additional call
-  frame per attempt. Transport callbacks must enforce per-attempt deadlines and
-  cancellation themselves; choose a small retry ceiling for deployed runs.
+  Non-stream model retries stop at success, a non-retryable failure, the
+  retry ceiling, the runner timeout, or an enforced budget. Before retrying,
+  the runner checks actual usage and whether the next model call would exceed
+  the call limit. The result reports only attempted calls. Transport callbacks
+  still own deadlines and cancellation during each attempt.
 
 ## Session and Memory Hardening
 

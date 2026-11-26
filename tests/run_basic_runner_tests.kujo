@@ -1504,3 +1504,48 @@ test "runner accounts reported tokens from a failed stream response" {
 	assert_equal(usage_result["metadata"]["budget"]["usage"]["counters"]["total_tokens"], 7)
 	assert_equal(usage_result["metadata"]["budget"]["usage"]["counters"]["model_calls"], 1)
 }
+
+test "model retries observe projected call limits and actual token usage" {
+    retrying := func(client, messages, request_options) {
+        return {"ok": false, "status_code": 504, "error": {"code": "timeout", "retryable": true}, "usage": {"total_tokens": 7}}
+    }
+    runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": retrying})})
+    agent := create_agent({"id": "retry-boundary", "name": "Retry boundary"})
+    request := create_agent_run_request("retry", {})
+    for limits in [{"max_model_calls": 1}, {"max_total_tokens": 5}] {
+        for mode in ["enforce", "observe"] {
+            result := run_agent(runner, agent, request, {"retry_policy": {"max_model_retries": 2}, "budget_policy": {"mode": mode, "budget": {"limits": limits}}})
+            budget := result["metadata"]["budget"]
+            calls := budget["usage"]["counters"]["model_calls"]
+            tokens := budget["usage"]["counters"]["total_tokens"]
+            if mode == "enforce" {
+                assert_equal(result["status"], "budget_exceeded")
+                assert_equal(calls, 1)
+                assert_equal(tokens, 7)
+                assert_equal(result["metadata"]["retry_counters"]["model_retries_used"], 0)
+                assert_equal(budget["last_evaluation"]["metadata"]["stage"], "before_model_retry")
+            } else {
+                assert_equal(result["status"], "failed")
+                assert_equal(calls, 3)
+                assert_equal(tokens, 21)
+            }
+        }
+    }
+}
+
+test "retryable model failure does not dispatch after the runner timeout" {
+    key := "agents-sdk-retry-timeout-clock"
+    shared_set(key, 0)
+    retrying := func(client, messages, request_options) {
+        shared_set(key, 250)
+        return {"ok": false, "status_code": 504, "error": {"code": "timeout", "retryable": true}}
+    }
+    services := create_runtime_services({"now_ms_fn": func() { return shared_get(key) }})
+    runner := create_agent_runner({"ai_adapter": create_ai_sdk_adapter({"chat_completion_fn": retrying})})
+    agent := create_agent({"id": "retry-timeout", "name": "Retry timeout"})
+    request := create_agent_run_request("retry", {"runtime_services": services})
+    result := run_agent(runner, agent, request, {"retry_policy": {"max_model_retries": 2}, "timeout_ms": 100})
+    assert_equal(result["status"], "timeout")
+    assert_equal(result["metadata"]["retry_counters"]["model_attempts"], 1)
+    assert_equal(result["metadata"]["timeout"]["last_check"]["elapsed_ms"], 250)
+}
