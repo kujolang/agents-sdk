@@ -66,3 +66,18 @@ test "RAG document normalization preserves code indentation and final newlines" 
  assert_equal(result["documents"][0]["content"], "    return value\n")
  assert_equal(result["context"]["documents"][1]["content"], "\tpass\r\n")
 }
+
+test "RAG distinguishes transport, HTTP, invalid body, and service errors" {
+ cases := [
+  [{"status_code": 0}, "transport_error"],
+  [{"status_code": 503, "body": "unavailable"}, "http_error"],
+  [{"status_code": 200, "body": "unexpected payload"}, "invalid_response"],
+  [{"status_code": 200, "body": {"ok": "true"}}, "invalid_response"],
+  [{"status_code": 200, "body": {"ok": false}}, "service_error"]
+ ]
+ for item in cases {
+  provider := create_kujo_rag_provider({"transport": func(request, options) { return item[0] }})
+  result := retrieval_provider_retrieve(provider, {}, {})
+  assert_equal(result["error"]["kind"], item[1])
+ }
+}
