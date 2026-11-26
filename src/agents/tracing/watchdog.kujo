@@ -6,9 +6,13 @@ func wd_get(value, key, fallback_value) {
 	return fallback_value
 }
 
-func wd_text(value, max_len) {
+func wd_full_text(value) {
 	if type(value) == "null" { return "" }
-	text := trim(to_string(value))
+	return trim(to_string(value))
+}
+
+func wd_text(value, max_len) {
+	text := wd_full_text(value)
 	if len(text) <= max_len { return text }
 	return substring(text, 0, max_len)
 }
@@ -22,8 +26,9 @@ func wd_timestamp(value) {
 }
 
 func wd_id(value, length) {
-	text := to_lower(wd_text(value, 512))
-	if len(text) == length {
+	identity := wd_full_text(value)
+	if len(identity) == length {
+		text := to_lower(identity)
 		valid := true
 		all_zero := true
 		i := 0
@@ -34,7 +39,7 @@ func wd_id(value, length) {
 		}
 		if valid && all_zero == false { return text }
 	}
-	return substring(sha256("agents-sdk:" + wd_text(value, 512)), 0, length)
+	return substring(sha256("agents-sdk:" + identity), 0, length)
 }
 
 func wd_event_kind(event) { return wd_text(wd_get(event, "event_kind", wd_get(event, "kind", "unknown")), 80) }
@@ -67,21 +72,37 @@ func wd_status(event_kind) {
 	return "unset"
 }
 
+func wd_child_operation_key(kind, run_id, child_id) {
+	if contains(run_id, ":") || contains(child_id, ":") {
+		return kind + "-sha256:" + sha256(to_json([run_id, child_id]))
+	}
+	return kind + ":" + run_id + ":" + child_id
+}
+
 func wd_operation_key(event, event_kind) {
 	payload := wd_get(event, "payload", {})
-	run_id := wd_text(wd_get(event, "run_id", ""), 160)
-	step_id := wd_text(wd_get(event, "step_id", wd_get(payload, "step_id", "")), 160)
+	run_id := wd_full_text(wd_get(event, "run_id", ""))
+	step_id := wd_full_text(wd_get(event, "step_id", wd_get(payload, "step_id", "")))
 	if starts_with(event_kind, "run_") { return "run:" + run_id }
-	if starts_with(event_kind, "model_request_") { return "model:" + run_id + ":" + step_id }
+	if starts_with(event_kind, "model_request_") { return wd_child_operation_key("model", run_id, step_id) }
 	if starts_with(event_kind, "tool_call_") {
-		tool_call_id := wd_text(wd_get(payload, "tool_call_id", step_id), 160)
-		return "tool:" + run_id + ":" + tool_call_id
+		tool_call_id := wd_full_text(wd_get(payload, "tool_call_id", step_id))
+		return wd_child_operation_key("tool", run_id, tool_call_id)
 	}
-	if starts_with(event_kind, "handoff_") {
-		request_id := wd_text(wd_get(payload, "request_id", step_id), 160)
-		return "handoff:" + run_id + ":" + request_id
-	}
-	return "event:" + wd_text(wd_get(event, "event_id", event_kind + ":" + to_string(wd_get(event, "sequence", 0))), 160)
+	request_id := wd_full_text(wd_get(payload, "request_id", step_id))
+	return wd_child_operation_key("handoff", run_id, request_id)
+}
+
+func wd_record_id(kind, identity) {
+	id := "agents-sdk:" + kind + ":" + identity
+	if byte_length(id) <= 160 { return id }
+	return "agents-sdk:" + kind + "-sha256:" + sha256(identity)
+}
+
+func wd_bounded_batch_id(value, limit) {
+	id := wd_full_text(value)
+	if byte_length(id) <= limit { return id }
+	return "sha256:" + sha256(id)
 }
 
 func wd_reference(ref_type, ref_id) {
@@ -176,22 +197,22 @@ func wd_error(event, status) {
 
 func watchdog_record_impl(event) {
 	if type(event) != "dict" { return {"ok": false, "error": "event must be an object", "record": null} }
-	trace_source := wd_text(wd_get(event, "trace_id", wd_get(event, "run_id", "")), 160)
+	trace_source := wd_full_text(wd_get(event, "trace_id", wd_get(event, "run_id", "")))
 	if trace_source == "" { return {"ok": false, "error": "trace_id or run_id is required", "record": null} }
 	event_kind := wd_event_kind(event)
-	event_id := wd_text(wd_get(event, "event_id", trace_source + ":" + event_kind + ":" + to_string(wd_get(event, "sequence", 0))), 160)
-	operation_key := wd_operation_key(event, event_kind)
+	event_id := wd_full_text(wd_get(event, "event_id", trace_source + ":" + event_kind + ":" + to_string(wd_get(event, "sequence", 0))))
 	is_timed := wd_is_timed_operation(event_kind)
 	record_type := "event"
 	span_id := null
 	parent_span_id := null
-	record_id := "agents-sdk:event:" + event_id
+	record_id := wd_record_id("event", event_id)
 	if is_timed {
 		record_type = "span"
+		operation_key := wd_operation_key(event, event_kind)
 		span_id = wd_id(operation_key, 16)
-		record_id = "agents-sdk:span:" + wd_text(operation_key, 140)
+		record_id = wd_record_id("span", operation_key)
 		if starts_with(event_kind, "run_") == false {
-			run_id := wd_text(wd_get(event, "run_id", ""), 160)
+			run_id := wd_full_text(wd_get(event, "run_id", ""))
 			if run_id != "" { parent_span_id = wd_id("run:" + run_id, 16) }
 		}
 	}
@@ -213,7 +234,7 @@ func watchdog_record_impl(event) {
 		"kind": wd_operation_kind(event_kind),
 		"name": "agents-sdk." + event_kind,
 		"status": status,
-		"source": {"producer": "kujo-agents-sdk", "adapter_id": "kujo-agents-sdk.native", "adapter_version": "watchdog.ingestion-adapter.v1", "original_schema": "agents-sdk.AgentEvent", "source_event_id": event_id},
+		"source": {"producer": "kujo-agents-sdk", "adapter_id": "kujo-agents-sdk.native", "adapter_version": "watchdog.ingestion-adapter.v1", "original_schema": "agents-sdk.AgentEvent", "source_event_id": wd_text(event_id, 160)},
 		"references": wd_references(event),
 		"attributes": wd_scalar_attributes(event),
 		"usage": wd_usage(event),
@@ -227,7 +248,8 @@ func watchdog_record_impl(event) {
 
 func watchdog_batch_impl(events, batch_id, producer_version) {
 	if type(events) != "array" || len(events) == 0 || len(events) > 100 { return {"ok": false, "error": "events must contain 1-100 items", "batch": null} }
-	if wd_text(batch_id, 160) == "" { return {"ok": false, "error": "batch_id is required", "batch": null} }
+	normalized_batch_id := wd_bounded_batch_id(batch_id, 160)
+	if normalized_batch_id == "" { return {"ok": false, "error": "batch_id is required", "batch": null} }
 	records := []
 	for event in events {
 		mapped := watchdog_record_impl(event)
@@ -236,7 +258,7 @@ func watchdog_batch_impl(events, batch_id, producer_version) {
 	}
 	return {"ok": true, "error": "", "batch": {
 		"schema_version": "watchdog.telemetry.v2",
-		"batch_id": wd_text(batch_id, 160),
+		"batch_id": normalized_batch_id,
 		"sent_at": records[len(records) - 1]["observed_at"],
 		"producer": {"name": "kujo-agents-sdk", "version": wd_text(producer_version, 40), "adapter_id": "kujo-agents-sdk.native", "adapter_version": "watchdog.ingestion-adapter.v1", "original_schema": "agents-sdk.TraceEvent"},
 		"records": records
@@ -248,13 +270,15 @@ func watchdog_batches_from_run_result_impl(run_result, batch_id, producer_versio
 	metadata := wd_get(run_result, "metadata", {})
 	events := wd_get(metadata, "events", wd_get(run_result, "events", []))
 	if type(events) != "array" || len(events) == 0 { return {"ok": false, "error": "run_result contains no lifecycle events", "batches": []} }
+	base_id := wd_bounded_batch_id(batch_id, 140)
+	if base_id == "" { return {"ok": false, "error": "batch_id is required", "batches": []} }
 	batches := []
 	chunk := []
 	chunk_index := 1
 	for event in events {
 		chunk = push(chunk, event)
 		if len(chunk) == 100 {
-			mapped := watchdog_batch_impl(chunk, wd_text(batch_id, 150) + ":" + to_string(chunk_index), producer_version)
+			mapped := watchdog_batch_impl(chunk, base_id + ":" + to_string(chunk_index), producer_version)
 			if mapped["ok"] == false { return {"ok": false, "error": mapped["error"], "batches": []} }
 			batches = push(batches, mapped["batch"])
 			chunk = []
@@ -262,7 +286,7 @@ func watchdog_batches_from_run_result_impl(run_result, batch_id, producer_versio
 		}
 	}
 	if len(chunk) > 0 {
-		mapped := watchdog_batch_impl(chunk, wd_text(batch_id, 150) + ":" + to_string(chunk_index), producer_version)
+		mapped := watchdog_batch_impl(chunk, base_id + ":" + to_string(chunk_index), producer_version)
 		if mapped["ok"] == false { return {"ok": false, "error": mapped["error"], "batches": []} }
 		batches = push(batches, mapped["batch"])
 	}

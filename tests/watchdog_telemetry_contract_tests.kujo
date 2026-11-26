@@ -80,3 +80,36 @@ test "Watchdog adapter chunks run results and delivery fails open" {
 	assert_equal(delivery["failed"], 0)
 	assert_equal(delivery["fail_open"], true)
 }
+
+test "Watchdog bounds long identity fields without losing distinct lifecycle records" {
+    common := repeat("x", 540)
+    run_a := common + "a"
+    run_b := common + "b"
+    start := watchdog_telemetry_record({"event_kind": "model_request_started", "run_id": run_a, "step_id": "model"})["record"]
+    complete := watchdog_telemetry_record({"event_kind": "model_request_completed", "run_id": run_a, "step_id": "model"})["record"]
+    other := watchdog_telemetry_record({"event_kind": "model_request_started", "run_id": run_b, "step_id": "model"})["record"]
+    assert_equal(start["record_id"], complete["record_id"])
+    assert_equal(start["span_id"], complete["span_id"])
+    assert_true(start["record_id"] != other["record_id"])
+    assert_true(start["span_id"] != other["span_id"])
+    assert_true(start["trace_id"] != other["trace_id"])
+    assert_true(byte_length(start["record_id"]) <= 160)
+
+    event := {"event_kind": "budget_updated", "run_id": "run", "event_id": common + "first"}
+    first := watchdog_telemetry_record(event)["record"]
+    event["event_id"] = common + "second"
+    second := watchdog_telemetry_record(event)["record"]
+    assert_true(first["record_id"] != second["record_id"])
+    assert_true(byte_length(first["record_id"]) <= 160)
+
+    left := watchdog_telemetry_record({"event_kind": "model_request_started", "run_id": "a:b", "step_id": "c"})["record"]
+    right := watchdog_telemetry_record({"event_kind": "model_request_started", "run_id": "a", "step_id": "b:c"})["record"]
+    assert_true(left["record_id"] != right["record_id"])
+
+    result := {"metadata": {"events": [event]}}
+    batch_a := watchdog_telemetry_batches_from_run_result(result, common + "first", "1")["batches"][0]
+    batch_b := watchdog_telemetry_batches_from_run_result(result, common + "second", "1")["batches"][0]
+    assert_true(batch_a["batch_id"] != batch_b["batch_id"])
+    assert_true(byte_length(batch_a["batch_id"]) <= 160)
+    assert_equal(watchdog_telemetry_batches_from_run_result(result, "", "1")["ok"], false)
+}
